@@ -1,0 +1,4 @@
+# User-installed third-party plugins are not part of the repo
+*.js
+*.mjs
+*.cjs

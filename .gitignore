@@ -1,0 +1,8 @@
+.references/
+node_modules/
+dist/
+data/
+osc.yaml
+*.local.yaml
+.env
+.DS_Store

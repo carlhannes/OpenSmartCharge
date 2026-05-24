@@ -1,0 +1,67 @@
+# OpenSmartCharge — example configuration
+# Copy to osc.yaml and edit for your setup.
+# osc.yaml is in .gitignore — it won't be committed.
+
+site:
+  name: "My Home"
+  # port: 8080        # HTTP server port (default: 8080)
+
+# MQTT broker connection.
+# Required for the mqtt-circuit balancer and for Home Assistant integration.
+# Run "docker compose up" to start a local Mosquitto instance.
+mqtt:
+  host: localhost
+  port: 1883
+  # user: ""
+  # password: ""
+  topicPrefix: osc          # all OSC topics will be under osc/...
+  homeAssistantDiscovery: true   # auto-create HA entities via MQTT discovery
+
+# Day-ahead tariff sources.
+# Each gets a name so loadpoints can reference it.
+tariffs:
+  - name: home
+    type: elering            # Elering API — no API key required, covers SE1-SE4
+    zone: SE3                # SE1 | SE2 | SE3 | SE4
+
+# Electrical circuits / load balancers.
+# One per main fuse group in your home.
+balancers:
+  - name: house-main
+    type: mqtt-circuit
+    mainBreakerA: 25         # main fuse in amps (per phase)
+    phases: 3
+    meterTopicPrefix: house  # reads house/i1_a, house/i2_a, house/i3_a from MQTT
+                             # (published by pulse_bridge.py or any DSMR bridge)
+    safeStaticCurrentA: 10   # current to use when meter feed is stale
+    meterStaleAfterSec: 60   # seconds before meter data is considered stale
+    intervalSec: 15          # control loop interval
+
+# Vehicles (optional — enables SoC-aware departure planning)
+vehicles:
+  - name: enyaq
+    type: skoda
+    # vin: "TMBXXXXXXXXXXXXXXX"    # your VIN
+    # credentials:
+    #   user: "me@example.com"
+    #   password: "secret"
+
+# OCPP chargers.
+# Any OCPP 1.6J charger configured to connect to ws://<your-host>:8080/ocpp
+chargers:
+  - name: garage
+    type: ocpp16
+    stationId: MYCHARGER01   # must match the chargepoint identifier in your charger's settings
+
+# Loadpoints: the control unit that connects a charger to a circuit + pricing + vehicle.
+# One loadpoint per charger. Multiple loadpoints can share a balancer.
+loadpoints:
+  - name: garage-loadpoint
+    charger: garage
+    vehicle: enyaq           # optional — remove this line to disable SoC integration
+    tariff: home
+    balancer: house-main
+    defaultMode: smart       # disabled | smart | fast
+    targetSoc: 80            # default charge target (%)
+    # targetTime: "07:00"    # daily departure time (HH:MM, local time)
+                             # smart mode will plan cheap-slot charging to hit targetSoc by this time
