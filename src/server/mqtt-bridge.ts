@@ -1,0 +1,127 @@
+import mqtt from 'mqtt'
+import type { Logger } from 'pino'
+import type { EventBus } from '../core/events.js'
+import type { LoadpointState } from '../core/loadpoint.js'
+import type { HealthMap } from '../core/health.js'
+import type { ChargeMode } from '../core/config.js'
+import { publishHaDiscovery } from './ha-discovery.js'
+
+interface MqttConfig {
+  host: string
+  port: number
+  user?: string
+  password?: string
+  topicPrefix: string
+  homeAssistantDiscovery: boolean
+}
+
+export interface MqttBridgeDeps {
+  events: EventBus
+  loadpoints: Map<string, LoadpointState>
+  health: HealthMap
+  onModeChange(name: string, mode: ChargeMode): Promise<void>
+  onTargetChange(name: string, soc?: number, time?: string): Promise<void>
+}
+
+export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: Logger): void {
+  const client = mqtt.connect({
+    host: config.host,
+    port: config.port,
+    username: config.user,
+    password: config.password,
+    clientId: `osc-bridge-${Math.random().toString(16).slice(2, 8)}`,
+    clean: true,
+  })
+
+  const prefix = config.topicPrefix
+
+  client.on('connect', () => {
+    log.info({ host: config.host, port: config.port }, 'MQTT bridge connected')
+
+    // Publish initial state
+    for (const state of deps.loadpoints.values()) {
+      publishState(client, prefix, state)
+    }
+
+    // Subscribe to command topics
+    const cmdTopics = [...deps.loadpoints.keys()].flatMap((name) => [
+      `${prefix}/loadpoints/${name}/cmd/mode`,
+      `${prefix}/loadpoints/${name}/cmd/target`,
+    ])
+    if (cmdTopics.length > 0) {
+      client.subscribe(cmdTopics, (err) => {
+        if (err) log.warn({ err }, 'MQTT subscribe failed')
+      })
+    }
+
+    // Publish health
+    for (const [module, entry] of deps.health) {
+      client.publish(`${prefix}/health/${module}`, entry.health, { retain: true })
+    }
+
+    if (config.homeAssistantDiscovery) {
+      publishHaDiscovery(client, [...deps.loadpoints.keys()], prefix)
+    }
+  })
+
+  client.on('error', (err) => {
+    log.warn({ err }, 'MQTT bridge error')
+  })
+
+  client.on('message', (topic, payload) => {
+    const str = payload.toString().trim()
+    const parts = topic.split('/')
+    // Expected: <prefix>/loadpoints/<name>/cmd/<command>
+    const cmdIdx = parts.indexOf('cmd')
+    if (cmdIdx < 0) return
+    const name = parts[cmdIdx - 1]
+    const command = parts[cmdIdx + 1]
+
+    if (command === 'mode') {
+      if (str !== 'smart' && str !== 'fast' && str !== 'disabled') {
+        log.warn({ topic, str }, 'invalid mode command')
+        return
+      }
+      deps.onModeChange(name, str as ChargeMode).catch((err) =>
+        log.warn({ err }, 'MQTT mode change error'),
+      )
+    } else if (command === 'target') {
+      try {
+        const body = JSON.parse(str) as { soc?: number; time?: string }
+        deps.onTargetChange(name, body.soc, body.time).catch((err) =>
+          log.warn({ err }, 'MQTT target change error'),
+        )
+      } catch {
+        log.warn({ topic, str }, 'invalid target JSON')
+      }
+    }
+  })
+
+  // Mirror internal events to MQTT
+  deps.events.on('loadpoint.state', (payload) => {
+    const p = payload as { name: string }
+    const state = deps.loadpoints.get(p.name)
+    if (state) publishState(client, prefix, state)
+  })
+
+  deps.events.on('loadpoint.mode', (payload) => {
+    const p = payload as { name: string; mode: string }
+    client.publish(`${prefix}/loadpoints/${p.name}/mode`, p.mode, { retain: true })
+    const state = deps.loadpoints.get(p.name)
+    if (state) publishState(client, prefix, state)
+  })
+
+  deps.events.on('loadpoint.target', (payload) => {
+    const p = payload as { name: string }
+    const state = deps.loadpoints.get(p.name)
+    if (state) publishState(client, prefix, state)
+  })
+}
+
+function publishState(client: mqtt.MqttClient, prefix: string, state: LoadpointState): void {
+  const lpPrefix = `${prefix}/loadpoints/${state.name}`
+  client.publish(`${lpPrefix}/mode`, state.mode, { retain: true })
+  client.publish(`${lpPrefix}/current_a`, String(state.currentA), { retain: true })
+  client.publish(`${lpPrefix}/energy_kwh`, String(state.sessionEnergyKWh), { retain: true })
+  client.publish(`${lpPrefix}/state`, JSON.stringify(state), { retain: true })
+}

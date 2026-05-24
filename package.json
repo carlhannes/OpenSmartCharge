@@ -14,6 +14,7 @@
   "dependencies": {
     "express": "^5.1.0",
     "mqtt": "^5.10.1",
+    "ocpp-rpc": "^2.2.1",
     "pino": "^9.6.0",
     "yaml": "^2.7.1",
     "zod": "^3.24.4"

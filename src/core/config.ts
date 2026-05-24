@@ -25,14 +25,16 @@ const loadpointConfigSchema = z.object({
   name: z.string(),
   charger: z.string(),
   vehicle: z.string().optional(),
-  tariff: z.string(),
-  balancer: z.string(),
+  tariff: z.string().optional(),
+  balancer: z.string().optional(),
   defaultMode: chargeModeSchema.default('smart'),
   targetSoc: z.number().min(0).max(100).optional(),
   targetTime: z
     .string()
     .regex(/^\d{2}:\d{2}$/, 'targetTime must be HH:MM')
     .optional(),
+  /** Auto-start a transaction when a vehicle connects (default: true) */
+  autoStart: z.boolean().default(true),
 })
 
 const mqttConfigSchema = z.object({

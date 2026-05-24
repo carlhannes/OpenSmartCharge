@@ -10,6 +10,10 @@ export interface LoadpointState {
   charging: boolean
   currentA: number
   sessionEnergyKWh: number
+  /** Config-derived ceiling, not persisted */
+  maxCurrentA: number
+  /** Whether to auto-start a transaction on plug-in */
+  autoStart: boolean
 }
 
 interface DbRow {
@@ -19,15 +23,21 @@ interface DbRow {
   target_time: string | null
 }
 
+export interface LoadpointInit {
+  name: string
+  maxCurrentA?: number
+  autoStart?: boolean
+}
+
 export function loadLoadpointStates(
   db: DatabaseSync,
-  names: string[],
+  inits: LoadpointInit[],
 ): Map<string, LoadpointState> {
   const insert = db.prepare(`INSERT OR IGNORE INTO loadpoint_state (name, mode) VALUES (?, 'smart')`)
   const read = db.prepare(`SELECT * FROM loadpoint_state WHERE name = ?`)
 
   const states = new Map<string, LoadpointState>()
-  for (const name of names) {
+  for (const { name, maxCurrentA = 16, autoStart = true } of inits) {
     insert.run(name)
     const row = read.get(name) as unknown as DbRow
     states.set(name, {
@@ -39,6 +49,8 @@ export function loadLoadpointStates(
       charging: false,
       currentA: 0,
       sessionEnergyKWh: 0,
+      maxCurrentA,
+      autoStart,
     })
   }
   return states

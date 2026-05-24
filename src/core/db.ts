@@ -47,5 +47,23 @@ function runMigrations(db: DatabaseSync): void {
       is_charging          INTEGER,
       fetched_at           TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS meter_values (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      transaction_id INTEGER NOT NULL,
+      measured_at    TEXT NOT NULL,
+      energy_kwh     REAL,
+      power_w        REAL,
+      current_a      REAL,
+      voltage_v      REAL,
+      soc            REAL,
+      raw            TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS ocpp_tx_counter (
+      id         INTEGER PRIMARY KEY CHECK (id = 1),
+      next_value INTEGER NOT NULL DEFAULT 1
+    );
+    INSERT OR IGNORE INTO ocpp_tx_counter (id, next_value) VALUES (1, 1);
   `)
 }
