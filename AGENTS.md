@@ -161,7 +161,7 @@ npm run format        # Prettier
 npm run build         # compile to dist/
 ```
 
-Requires Node.js >= 20.
+Requires Node.js >= 22.5 (uses `node:sqlite` built-in).
 
 To test with a real MQTT broker:
 ```bash

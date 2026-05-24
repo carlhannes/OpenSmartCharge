@@ -9,20 +9,26 @@ services:
       - mosquitto-log:/mosquitto/log
     restart: unless-stopped
 
-  # opensmartcharge:          # uncomment once M1 is complete
-  #   build: .
-  #   ports:
-  #     - "8080:8080"
-  #   volumes:
-  #     - ./osc.yaml:/app/osc.yaml:ro
-  #     - osc-data:/app/data
-  #   depends_on:
-  #     - mosquitto
-  #   restart: unless-stopped
-  #   environment:
-  #     - NODE_ENV=production
+  opensmartcharge:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./osc.yaml:/app/osc.yaml:ro
+      - osc-data:/app/data
+    depends_on:
+      - mosquitto
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   mosquitto-data:
   mosquitto-log:
-  # osc-data:
+  osc-data:

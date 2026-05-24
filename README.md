@@ -19,7 +19,7 @@ If you want something that handles solar, batteries, heat pumps, and 300 EV mode
 
 ## Quickstart
 
-**Requirements:** Docker, an OCPP 1.6J charger on your LAN, a Mosquitto-compatible MQTT broker.
+**Requirements:** Docker, an OCPP 1.6J charger on your LAN, a Mosquitto-compatible MQTT broker. Running on a Raspberry Pi? See [docs/raspberry-pi.md](docs/raspberry-pi.md) for NTP clock-sync setup — clock accuracy matters for tariff slot bucketing.
 
 ```bash
 # Clone and configure

@@ -30,7 +30,7 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 - [x] Loadpoint state machine (`src/core/loadpoint.ts` fully wired) — mode persists across restarts
 - [x] REST API (`/api/loadpoints*`, `/api/health`, `/events`)
 - [x] MQTT publisher + cmd/* subscriber + Home Assistant MQTT discovery
-- [ ] `docker-compose.yml` updated with OSC service
+- [x] `docker-compose.yml` updated with OSC service
 
 **Verification:**
 1. Connect a simulated OCPP charger → appears in REST response and UI.
@@ -146,11 +146,11 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 ## Milestone 6 — Polish
 
-- [ ] Full module authoring guide (`docs/modules.md`) with worked example
-- [ ] OSC added to `docker-compose.yml`
-- [ ] SQLite backup/restore helper script
-- [ ] Smoke test suite (boot, connect simulated charger, verify REST + MQTT outputs)
-- [ ] Docs for NTP setup on Pi (clock accuracy matters for tariff slot bucketing)
+- [x] Full module authoring guide (`docs/modules.md`) with worked example
+- [x] OSC added to `docker-compose.yml`
+- [x] SQLite backup/restore helper script
+- [x] Smoke test suite (boot, connect simulated charger, verify REST + MQTT outputs)
+- [x] Docs for NTP setup on Pi (clock accuracy matters for tariff slot bucketing)
 
 ---
 
