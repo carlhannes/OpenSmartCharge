@@ -9,6 +9,7 @@ import type { ChargeMode } from '../core/config.js'
 import type { Tariff } from '../sdk/tariff.js'
 import type { MeterReader } from '../sdk/meter-reader.js'
 import type { Balancer } from '../sdk/balancer.js'
+import type { Vehicle } from '../sdk/vehicle.js'
 
 export interface ApiDeps {
   db: DatabaseSync
@@ -19,6 +20,7 @@ export interface ApiDeps {
   tariffs: Map<string, Tariff>
   meterReaders: Map<string, MeterReader>
   balancers: Map<string, Balancer>
+  vehicles: Map<string, Vehicle>
   lastTickByBalancer: Map<string, { allocations: Record<string, number>; freeAmps: number }>
   onModeChange(name: string, mode: ChargeMode): Promise<void>
   onTargetChange(name: string, soc?: number, time?: string): Promise<void>
@@ -124,6 +126,33 @@ export function createApiRouter(deps: ApiDeps): Router {
       lastAllocations: last?.allocations ?? null,
       freeAmps: last?.freeAmps ?? null,
     })
+  })
+
+  // GET /api/vehicles/:name
+  router.get('/vehicles/:name', (req: Request, res: Response) => {
+    const vehicle = deps.vehicles.get(String(req.params.name))
+    if (!vehicle) {
+      res.status(404).json({ error: 'vehicle not found' })
+      return
+    }
+    vehicle
+      .getData()
+      .then((data) =>
+        res.json({
+          name: String(req.params.name),
+          health: vehicle.health(),
+          data,
+          capacityKWh: vehicle.getCachedCapacity() ?? null,
+        }),
+      )
+      .catch(() =>
+        res.json({
+          name: String(req.params.name),
+          health: vehicle.health(),
+          data: null,
+          capacityKWh: vehicle.getCachedCapacity() ?? null,
+        }),
+      )
   })
 
   // GET /api/health

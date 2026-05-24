@@ -65,5 +65,10 @@ function runMigrations(db: DatabaseSync): void {
       next_value INTEGER NOT NULL DEFAULT 1
     );
     INSERT OR IGNORE INTO ocpp_tx_counter (id, next_value) VALUES (1, 1);
+
+    CREATE TABLE IF NOT EXISTS module_kv (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `)
 }

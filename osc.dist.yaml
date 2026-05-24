@@ -39,14 +39,17 @@ balancers:
     meterStaleAfterSec: 60   # seconds before meter data is considered stale
     intervalSec: 15          # control loop interval
 
-# Vehicles (optional — enables SoC-aware departure planning)
+# Vehicles (optional — enables SoC-aware departure planning).
+# osc.yaml is gitignored — credentials stay on-device and are never logged.
+# Recommended: chmod 600 osc.yaml
 vehicles:
   - name: enyaq
     type: skoda
-    # vin: "TMBXXXXXXXXXXXXXXX"    # your VIN
-    # credentials:
-    #   user: "me@example.com"
-    #   password: "secret"
+    username: you@example.com    # MySkoda account email  (sensitive)
+    password: "your-password"    # MySkoda account password (sensitive)
+    vin: TMBABCDEF12345678       # 17-char VIN (uppercase)
+    # pollIntervalSec: 900       # poll interval; minimum 300 s (default: 900)
+    # staleAfterSec: 7200        # health → degraded if no successful poll for this long
 
 # Meter readers (optional — feeds the mqtt-circuit balancer with live
 # household current data so it can size charger output below the main fuse).

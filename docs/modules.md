@@ -152,6 +152,8 @@ Lifecycle sets `shouldChargeNow=false` for smart-mode loadpoints in expensive ta
 ```ts
 interface Vehicle {
   readonly id: string
+  start(): Promise<void>
+  stop(): Promise<void>
   health(): ModuleHealth
   getData(): Promise<VehicleData>
   getCachedCapacity(): number | undefined  // always fast (from SQLite cache)
@@ -166,9 +168,9 @@ interface VehicleData {
 }
 ```
 
-**Cache battery capacity aggressively.** It's stable per VIN. Once you've read it, return it forever from `getCachedCapacity()` — it enables SoC estimation when the API is unreachable.
+Lifecycle calls `vehicle.start()` once at boot; the module owns its own poll timer. Cache battery capacity to SQLite via `ctx.db` — it's stable per VIN and enables SoC estimation when the API is unreachable.
 
-`getData()` should return cached data when the API is down. Set `health()` to `'degraded'` in that case and return `{ ...lastCached, fetchedAt: lastFetchTime }`. Never return `undefined` or throw when the API is temporarily unavailable.
+**Cache battery capacity aggressively.** Once you've read it, return it forever from `getCachedCapacity()`. `getData()` should return cached data when the API is down — set `health()` to `'degraded'` in that case. Never throw when the API is temporarily unavailable.
 
 ### `MeterReader` (`src/sdk/meter-reader.ts`)
 

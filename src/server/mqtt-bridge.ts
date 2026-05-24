@@ -6,6 +6,7 @@ import type { HealthMap } from '../core/health.js'
 import type { ChargeMode } from '../core/config.js'
 import type { Tariff } from '../sdk/tariff.js'
 import type { Balancer } from '../sdk/balancer.js'
+import type { Vehicle } from '../sdk/vehicle.js'
 import { publishHaDiscovery } from './ha-discovery.js'
 
 interface MqttConfig {
@@ -22,6 +23,7 @@ export interface MqttBridgeDeps {
   loadpoints: Map<string, LoadpointState>
   tariffs: Map<string, Tariff>
   balancers: Map<string, Balancer>
+  vehicles: Map<string, Vehicle>
   health: HealthMap
   onModeChange(name: string, mode: ChargeMode): Promise<void>
   onTargetChange(name: string, soc?: number, time?: string): Promise<void>
@@ -66,6 +68,11 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
     // Publish initial balancer health
     for (const [name, balancer] of deps.balancers) {
       client.publish(`${prefix}/balancer/${name}/health`, balancer.health(), { retain: true })
+    }
+
+    // Publish initial vehicle health
+    for (const [name, vehicle] of deps.vehicles) {
+      client.publish(`${prefix}/vehicles/${name}/health`, vehicle.health(), { retain: true })
     }
 
     if (config.homeAssistantDiscovery) {
@@ -123,6 +130,15 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
     const p = payload as { name: string }
     const tariff = deps.tariffs.get(p.name)
     if (tariff) void publishOneTariffNow(client, prefix, p.name, tariff)
+  })
+
+  // Publish vehicle SoC + health whenever a poll succeeds
+  deps.events.on('vehicle.poll', (payload) => {
+    const p = payload as { name: string; soc: number }
+    const vehicle = deps.vehicles.get(p.name)
+    if (!vehicle) return
+    client.publish(`${prefix}/vehicles/${p.name}/soc`, String(p.soc), { retain: true })
+    client.publish(`${prefix}/vehicles/${p.name}/health`, vehicle.health(), { retain: true })
   })
 
   // Mirror internal events to MQTT

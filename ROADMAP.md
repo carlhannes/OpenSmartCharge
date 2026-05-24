@@ -109,19 +109,26 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 ---
 
-## Milestone 4 — Vehicle: Skoda (next up)
+## Milestone 4 — Vehicle: Skoda (shipped)
 
 **Goal:** Read SoC and battery capacity from the MySkoda API; feed the planner for departure-time charging.
 
-- [ ] `src/modules/vehicle-skoda/` — MySkoda OAuth, token refresh
-- [ ] Periodic SoC poll (default 15 min), respects API rate limits
-- [ ] Cache every field (SoC, capacity, VIN) to SQLite with timestamp
-- [ ] When API down: return `{ value, ageSec }` — never throw, never return undefined
-- [ ] Exposes capacity so `core/estimator.ts` can compute estimated SoC from session kWh
+- [x] `src/modules/vehicle-skoda/` — VW Group ID OAuth2+PKCE, HTML-form login, token refresh
+- [x] Periodic SoC poll (default 15 min, 5 min floor), respects API rate limits
+- [x] Cache SoC/capacity/range to SQLite (`vehicle_cache` table); warm on restart
+- [x] Refresh token cached to `module_kv` table — no full login on restart
+- [x] When API down: return last cached data; health → `degraded`; never throw
+- [x] Exposes capacity so `core/estimator.ts` computes estimated SoC from session kWh
+- [x] Real SoC-based `requiredKWh` in smart-mode planner (replaces 40%-duty-cycle heuristic)
+- [x] `LoadpointSnapshot.estimatedSoc` populated in lifecycle
+- [x] `GET /api/vehicles/:name` diagnostics endpoint
+- [x] `osc/vehicles/<name>/soc` + `/health` MQTT (retained)
+- [x] 3-strike auth lockout (protects MySkoda account from temp-locks)
+- [x] Credentials never logged (masked in all debug output)
 
 ---
 
-## Milestone 5 — Web UI
+## Milestone 5 — Web UI (next up)
 
 **Goal:** Full control UI served by the backend (React 19 + Vite).
 

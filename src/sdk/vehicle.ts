@@ -10,6 +10,8 @@ export interface VehicleData {
 
 export interface Vehicle {
   readonly id: string
+  start(): Promise<void>
+  stop(): Promise<void>
   health(): ModuleHealth
   getData(): Promise<VehicleData>
   getCachedCapacity(): number | undefined

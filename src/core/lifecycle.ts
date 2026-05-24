@@ -3,6 +3,7 @@ import '../modules/charger-ocpp16/index.js'
 import '../modules/tariff-elering/index.js'
 import '../modules/meter-tibber-pulse/index.js'
 import '../modules/balancer-mqtt-circuit/index.js'
+import '../modules/vehicle-skoda/index.js'
 
 import { loadConfig } from './config.js'
 import { openDb } from './db.js'
@@ -16,6 +17,7 @@ import {
   getTariffModule,
   getMeterReaderModule,
   getBalancerModule,
+  getVehicleModule,
 } from '../sdk/registry-api.js'
 import { getOcppServer } from '../modules/charger-ocpp16/index.js'
 import { startServer } from '../server/index.js'
@@ -25,8 +27,10 @@ import type { Charger } from '../sdk/charger.js'
 import type { Tariff } from '../sdk/tariff.js'
 import type { MeterReader } from '../sdk/meter-reader.js'
 import type { Balancer, LoadpointSnapshot } from '../sdk/balancer.js'
+import type { Vehicle } from '../sdk/vehicle.js'
 import type { LoadpointState } from './loadpoint.js'
 import type { ChargeMode } from './config.js'
+import { estimateSoc } from './estimator.js'
 
 const CONFIG_PATH = process.env.OSC_CONFIG ?? './osc.yaml'
 const DATA_DIR = process.env.OSC_DATA_DIR ?? './data'
@@ -123,6 +127,21 @@ async function main() {
     if (r) updateHealth(health, p.name, r.health())
   })
 
+  // Instantiate vehicle modules
+  const vehicles = new Map<string, Vehicle>()
+  for (const vCfg of config.vehicles) {
+    const mod = getVehicleModule(vCfg.type)
+    if (!mod) {
+      log.warn({ type: vCfg.type, name: vCfg.name }, 'no module registered for vehicle type')
+      continue
+    }
+    const vehicle = mod.create(vCfg, ctx)
+    await vehicle.start()
+    vehicles.set(vCfg.name, vehicle)
+    updateHealth(health, vCfg.name, vehicle.health())
+    log.info({ vehicle: vCfg.name, type: vCfg.type }, 'vehicle module created')
+  }
+
   // Instantiate balancer modules
   const balancers = new Map<string, Balancer>()
   for (const balancerCfg of config.balancers) {
@@ -210,7 +229,28 @@ async function main() {
 
   // Build a LoadpointSnapshot from live state.
   // shouldChargeNow is pre-computed by the tariff gate for smart-mode loadpoints.
-  function buildSnapshot(state: LoadpointState, shouldChargeNow?: boolean, pricesAvailable = false): LoadpointSnapshot {
+  async function buildSnapshot(
+    state: LoadpointState,
+    lpCfgVehicle: string | undefined,
+    shouldChargeNow?: boolean,
+    pricesAvailable = false,
+  ): Promise<LoadpointSnapshot> {
+    let estimatedSocVal: number | undefined
+    if (lpCfgVehicle) {
+      const v = vehicles.get(lpCfgVehicle)
+      if (v) {
+        const capacity = v.getCachedCapacity()
+        let lastSoc: number | undefined
+        try {
+          lastSoc = (await v.getData()).soc
+        } catch {
+          // getData throws when no data yet — estimatedSoc stays undefined
+        }
+        if (lastSoc !== undefined) {
+          estimatedSocVal = estimateSoc(lastSoc, state.sessionEnergyKWh, capacity)
+        }
+      }
+    }
     return {
       id: state.name,
       mode: state.mode,
@@ -218,6 +258,7 @@ async function main() {
       charging: state.charging,
       currentA: state.currentA,
       sessionEnergyKWh: state.sessionEnergyKWh,
+      estimatedSoc: estimatedSocVal,
       targetSoc: state.targetSoc,
       targetTime: state.targetTime ? parseTargetTime(state.targetTime) : undefined,
       maxCurrentA: state.maxCurrentA,
@@ -248,9 +289,31 @@ async function main() {
     }
     if (!priceSlots || priceSlots.length === 0) return true
 
-    // Heuristic requiredKWh: assume 40% duty cycle on maxCurrentA (refined in M4 with real SoC)
-    const chargeRateKW = (state.maxCurrentA * 3 * 230) / 1000
-    const requiredKWh = Math.max(1, hoursUntilTarget * chargeRateKW * 0.4)
+    // Use real SoC if a vehicle is wired and data is available; fall back to duty-cycle heuristic
+    let requiredKWh: number
+    const lpCfgV = config.loadpoints.find((l) => l.name === lpName)?.vehicle
+    const vehicle = lpCfgV ? vehicles.get(lpCfgV) : undefined
+    const capacity = vehicle?.getCachedCapacity()
+    let currentSoc: number | undefined
+    if (vehicle && capacity) {
+      try {
+        currentSoc = (await vehicle.getData()).soc
+      } catch {
+        // no data yet
+      }
+    }
+    if (currentSoc !== undefined && capacity && state.targetSoc) {
+      const remaining = Math.max(0, state.targetSoc - currentSoc)
+      requiredKWh = Math.max(0.1, (remaining / 100) * capacity / 0.92)
+      ctx.log.debug({ lpName, currentSoc, targetSoc: state.targetSoc, capacity, requiredKWh }, 'skoda SoC-based requiredKWh')
+    } else {
+      // Fallback: 40%-duty-cycle heuristic when vehicle API unavailable
+      const chargeRateKW = (state.maxCurrentA * 3 * 230) / 1000
+      requiredKWh = Math.max(1, hoursUntilTarget * chargeRateKW * 0.4)
+    }
+
+    // Already at target SoC — no need to charge
+    if (requiredKWh <= 0) return false
 
     const planned = plan({ requiredKWh, targetTime, maxCurrentA: state.maxCurrentA, phases: 3, priceSlots })
     const currentSlot = planned.find((s) => s.start <= now && s.end > now)
@@ -271,7 +334,7 @@ async function main() {
         const should = state.mode === 'smart' ? await computeShouldChargeNow(lpCfg.name) : undefined
         const tariff = lpCfg.tariff ? tariffs.get(lpCfg.tariff) : undefined
         const pricesAvailable = !!tariff && tariff.health() !== 'unavailable'
-        return buildSnapshot(state, should, pricesAvailable)
+        return buildSnapshot(state, lpCfg.vehicle, should, pricesAvailable)
       }),
     )
 
@@ -313,6 +376,7 @@ async function main() {
     tariffs,
     meterReaders,
     balancers,
+    vehicles,
     lastTickByBalancer,
     onModeChange: handleModeChange,
     onTargetChange: handleTargetChange,
@@ -347,6 +411,7 @@ async function main() {
       loadpoints: loadpointStates,
       tariffs,
       balancers,
+      vehicles,
       health,
       onModeChange: handleModeChange,
       onTargetChange: handleTargetChange,
@@ -373,6 +438,7 @@ async function main() {
     httpServer.close()
     if (ocppServer) void ocppServer.close()
     for (const b of balancers.values()) void b.stop()
+    for (const v of vehicles.values()) void v.stop()
     for (const t of tariffs.values()) void t.stop()
     for (const r of meterReaders.values()) void r.stop()
     db.close()

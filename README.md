@@ -98,6 +98,16 @@ All degraded states are surfaced on the UI and on MQTT (`osc/health/<module>`).
 
 Copy `osc.dist.yaml` to `osc.yaml` and edit. Full reference: [docs/config.md](docs/config.md).
 
+### Credentials
+
+`osc.yaml` is listed in `.gitignore` — **never commit it**. It may contain your MySkoda email and password in plain text.
+
+```bash
+chmod 600 osc.yaml   # restrict read access to your user only
+```
+
+Credentials are never logged. OSC redacts tokens in all debug output. If you are deploying on a shared machine, consider using a secrets manager or environment-variable injection (see [docs/config.md](docs/config.md)).
+
 ## REST API
 
 | Method | Path | Description |
@@ -106,6 +116,9 @@ Copy `osc.dist.yaml` to `osc.yaml` and edit. Full reference: [docs/config.md](do
 | `POST` | `/api/loadpoints/:name/mode` | Set charge mode (`disabled`/`smart`/`fast`) |
 | `POST` | `/api/loadpoints/:name/target` | Set target SoC and/or departure time |
 | `GET` | `/api/tariffs/:name/prices` | Fetch price slots (`?from=&to=`) |
+| `GET` | `/api/meters/:name` | Meter reader latest snapshot + health |
+| `GET` | `/api/balancers/:name` | Balancer allocations + health |
+| `GET` | `/api/vehicles/:name` | Vehicle SoC, capacity, health |
 | `GET` | `/api/health` | Module health map |
 | `GET` | `/events` | SSE stream of all state changes |
 
