@@ -2,13 +2,13 @@ import type { Request, Response, Router } from 'express'
 import { Router as createRouter } from 'express'
 import type { DatabaseSync } from 'node:sqlite'
 import type { LoadpointState } from '../core/loadpoint.js'
-import { setLoadpointMode, setLoadpointTarget } from '../core/loadpoint.js'
 import type { EventBus } from '../core/events.js'
 import { getHealthSummary } from '../core/health.js'
 import type { HealthMap } from '../core/health.js'
 import type { ChargeMode } from '../core/config.js'
 import type { Tariff } from '../sdk/tariff.js'
 import type { MeterReader } from '../sdk/meter-reader.js'
+import type { Balancer } from '../sdk/balancer.js'
 
 export interface ApiDeps {
   db: DatabaseSync
@@ -18,6 +18,10 @@ export interface ApiDeps {
   chargers: Map<string, { setCurrentLimit(a: number): Promise<void> }>
   tariffs: Map<string, Tariff>
   meterReaders: Map<string, MeterReader>
+  balancers: Map<string, Balancer>
+  lastTickByBalancer: Map<string, { allocations: Record<string, number>; freeAmps: number }>
+  onModeChange(name: string, mode: ChargeMode): Promise<void>
+  onTargetChange(name: string, soc?: number, time?: string): Promise<void>
 }
 
 export function createApiRouter(deps: ApiDeps): Router {
@@ -40,8 +44,8 @@ export function createApiRouter(deps: ApiDeps): Router {
 
   // POST /api/loadpoints/:name/mode
   router.post('/loadpoints/:name/mode', async (req: Request, res: Response) => {
-    const state = deps.loadpoints.get(String(req.params.name))
-    if (!state) {
+    const name = String(req.params.name)
+    if (!deps.loadpoints.has(name)) {
       res.status(404).json({ error: 'loadpoint not found' })
       return
     }
@@ -52,22 +56,14 @@ export function createApiRouter(deps: ApiDeps): Router {
       return
     }
 
-    state.mode = mode as ChargeMode
-    setLoadpointMode(deps.db, state.name, mode)
-    deps.events.emit('loadpoint.mode', { name: state.name, mode })
-
-    const charger = deps.chargers.get(state.name)
-    if (charger) {
-      await applyModeToCharger(mode, charger, state)
-    }
-
-    res.json(state)
+    await deps.onModeChange(name, mode as ChargeMode)
+    res.json(deps.loadpoints.get(name))
   })
 
   // POST /api/loadpoints/:name/target
-  router.post('/loadpoints/:name/target', (req: Request, res: Response) => {
-    const state = deps.loadpoints.get(String(req.params.name))
-    if (!state) {
+  router.post('/loadpoints/:name/target', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    if (!deps.loadpoints.has(name)) {
       res.status(404).json({ error: 'loadpoint not found' })
       return
     }
@@ -85,12 +81,8 @@ export function createApiRouter(deps: ApiDeps): Router {
       return
     }
 
-    state.targetSoc = soc
-    state.targetTime = time
-    setLoadpointTarget(deps.db, state.name, soc, time)
-    deps.events.emit('loadpoint.target', { name: state.name, targetSoc: soc, targetTime: time })
-
-    res.json(state)
+    await deps.onTargetChange(name, soc, time)
+    res.json(deps.loadpoints.get(name))
   })
 
   // GET /api/tariffs/:name/prices?from=<ISO>&to=<ISO>
@@ -118,6 +110,22 @@ export function createApiRouter(deps: ApiDeps): Router {
     res.json({ latest: reader.latest(), health: reader.health() })
   })
 
+  // GET /api/balancers/:name
+  router.get('/balancers/:name', (req: Request, res: Response) => {
+    const balancer = deps.balancers.get(String(req.params.name))
+    if (!balancer) {
+      res.status(404).json({ error: 'balancer not found' })
+      return
+    }
+    const last = deps.lastTickByBalancer.get(String(req.params.name))
+    res.json({
+      name: String(req.params.name),
+      health: balancer.health(),
+      lastAllocations: last?.allocations ?? null,
+      freeAmps: last?.freeAmps ?? null,
+    })
+  })
+
   // GET /api/health
   router.get('/health', (_req: Request, res: Response) => {
     res.json(getHealthSummary(deps.health))
@@ -142,15 +150,3 @@ export function createApiRouter(deps: ApiDeps): Router {
   return router
 }
 
-async function applyModeToCharger(
-  mode: ChargeMode,
-  charger: { setCurrentLimit(a: number): Promise<void> },
-  state: LoadpointState,
-): Promise<void> {
-  if (mode === 'disabled') {
-    await charger.setCurrentLimit(0)
-  } else {
-    // smart behaves like fast in M1 (no balancer yet) — charge at max
-    await charger.setCurrentLimit(state.maxCurrentA ?? 16)
-  }
-}

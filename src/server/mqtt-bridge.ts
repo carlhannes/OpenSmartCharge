@@ -5,6 +5,7 @@ import type { LoadpointState } from '../core/loadpoint.js'
 import type { HealthMap } from '../core/health.js'
 import type { ChargeMode } from '../core/config.js'
 import type { Tariff } from '../sdk/tariff.js'
+import type { Balancer } from '../sdk/balancer.js'
 import { publishHaDiscovery } from './ha-discovery.js'
 
 interface MqttConfig {
@@ -20,6 +21,7 @@ export interface MqttBridgeDeps {
   events: EventBus
   loadpoints: Map<string, LoadpointState>
   tariffs: Map<string, Tariff>
+  balancers: Map<string, Balancer>
   health: HealthMap
   onModeChange(name: string, mode: ChargeMode): Promise<void>
   onTargetChange(name: string, soc?: number, time?: string): Promise<void>
@@ -56,9 +58,14 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
       })
     }
 
-    // Publish health
+    // Publish health (all modules including balancers)
     for (const [module, entry] of deps.health) {
       client.publish(`${prefix}/health/${module}`, entry.health, { retain: true })
+    }
+
+    // Publish initial balancer health
+    for (const [name, balancer] of deps.balancers) {
+      client.publish(`${prefix}/balancer/${name}/health`, balancer.health(), { retain: true })
     }
 
     if (config.homeAssistantDiscovery) {
@@ -101,6 +108,14 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
         log.warn({ topic, str }, 'invalid target JSON')
       }
     }
+  })
+
+  // Mirror balancer tick results to MQTT
+  deps.events.on('balancer.tick', (payload) => {
+    const p = payload as { name: string; allocations: Record<string, number>; freeAmps: number; health: string }
+    client.publish(`${prefix}/balancer/${p.name}/health`, p.health, { retain: true })
+    client.publish(`${prefix}/balancer/${p.name}/free_amps`, String(p.freeAmps), { retain: true })
+    client.publish(`${prefix}/balancer/${p.name}/allocations`, JSON.stringify(p.allocations), { retain: true })
   })
 
   // Re-publish current tariff price whenever new data lands

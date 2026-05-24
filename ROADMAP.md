@@ -83,17 +83,18 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 ---
 
-## Milestone 3 — Balancer: MQTT-circuit (next up)
+## Milestone 3 — Balancer: MQTT-circuit (shipped)
 
 **Goal:** Dynamic load balancing from live household meter data, with a well-defined degradation path for meter failures.
 
-- [ ] `src/modules/balancer-mqtt-circuit/` — subscribes to `{prefix}/i1_a`, `i2_a`, `i3_a`
-- [ ] `meterReader: <name>` link path — balancer reads from in-process MeterReader by preference, falls back to `meterTopicPrefix` MQTT subscription when not set (backwards compatible)
-- [ ] Control loop (default 15 s): `freeAmps = mainBreakerA − max(phaseCurrents) + chargerCurrents`
-- [ ] Distributes `freeAmps` across active loadpoints respecting modes
-- [ ] Smart mode: respects tariff windows (no charging in expensive hours unless needed for departure target)
-- [ ] Meter staleness: after `meterStaleAfterSec`, switch to `safeStaticCurrentA` per loadpoint; health → `degraded`
-- [ ] Publishes allocation state to `osc/balancer/<name>/...`
+- [x] `src/modules/balancer-mqtt-circuit/` — in-process MeterReader path (preferred); MQTT topic fallback (`{prefix}/i1_a`, `i2_a`, `i3_a`) when no `meterReader:` is set
+- [x] `meterReader: <name>` link path — balancer reads from in-process MeterReader by preference, falls back to `meterTopicPrefix` MQTT subscription when not set (backwards compatible)
+- [x] Control loop (default 15 s): `freeAmps = mainBreakerA − max(phaseCurrents) + chargerCurrents`
+- [x] Distributes `freeAmps` across active loadpoints — `fast` loadpoints get priority; `smart` get equal split of remaining headroom; `disabled` get 0
+- [x] Smart mode: respects tariff windows (no charging in expensive hours); `shouldChargeNow` computed per loadpoint via `planner.plan()` in lifecycle
+- [x] Meter staleness: after `meterStaleAfterSec`, switch to `safeStaticCurrentA` per loadpoint; health → `degraded`
+- [x] Publishes allocation state to `osc/balancer/<name>/...` (health, free_amps, allocations)
+- [x] `GET /api/balancers/:name` REST endpoint — live allocations + health + freeAmps
 
 **Verification (degradation matrix):**
 
@@ -108,7 +109,7 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 ---
 
-## Milestone 4 — Vehicle: Skoda
+## Milestone 4 — Vehicle: Skoda (next up)
 
 **Goal:** Read SoC and battery capacity from the MySkoda API; feed the planner for departure-time charging.
 
