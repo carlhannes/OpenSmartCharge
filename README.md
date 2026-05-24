@@ -118,6 +118,21 @@ chmod 600 osc.yaml   # restrict read access to your user only
 
 Credentials are never logged. OSC redacts tokens in all debug output. If you are deploying on a shared machine, consider using a secrets manager or environment-variable injection (see [docs/config.md](docs/config.md)).
 
+### Backup & restore
+
+OSC stores all state in a single SQLite file (`data/osc.db`). Back it up while OSC is running:
+
+```bash
+npm run backup                         # → backups/osc-<timestamp>.db
+npm run backup -- --out ~/my-backup.db # custom output path
+```
+
+Restore (OSC must be stopped first):
+
+```bash
+npm run restore -- --in backups/osc-2025-06-01T12-00-00.db
+```
+
 ## REST API
 
 | Method | Path | Description |
