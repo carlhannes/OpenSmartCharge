@@ -8,6 +8,10 @@ export interface LoadpointSnapshot {
   connected: boolean
   charging: boolean
   currentA: number
+  /** Last amps value successfully sent to the charger via SetChargingProfile. Used by the allocator's
+   *  credit-back calculation so that a car still ramping up to a newly commanded level is not
+   *  under-credited, which would cause oscillation during the 5–30 s ramp period. */
+  commandedA?: number
   sessionEnergyKWh: number
   estimatedSoc?: number
   targetSoc?: number
@@ -26,6 +30,9 @@ export interface BalancerInput {
 
 export interface BalancerOutput {
   allocations: Map<string, number>
+  /** House headroom after charger credit-back, as computed from live phase currents. Populated
+   *  by the balancer module so the lifecycle doesn't have to recompute it from partial data. */
+  freeAmps?: number
 }
 
 export interface Balancer {

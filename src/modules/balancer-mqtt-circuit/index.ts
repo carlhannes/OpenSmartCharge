@@ -87,14 +87,14 @@ const mod: BalancerModule = {
         const phases = latest
           ? { i1: latest.i1A ?? 0, i2: latest.i2A ?? 0, i3: latest.i3A ?? 0 }
           : null
-        const allocations = allocate({
+        const { allocations, freeAmps } = allocate({
           loadpoints: input.loadpoints,
           mainBreakerA: cfg.mainBreakerA,
           phaseCurrentsA: phases,
           meterStale: stale,
           safeStaticCurrentA: cfg.safeStaticCurrentA,
         })
-        return { allocations }
+        return { allocations, freeAmps }
       },
     }
   },

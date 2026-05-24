@@ -238,6 +238,10 @@ async function main() {
     events.emit('loadpoint.target', { name, targetSoc: soc, targetTime: time })
   }
 
+  // Last amps value successfully sent to each charger. Keyed by loadpoint name (= LoadpointSnapshot.id).
+  // Used to give the allocator an accurate credit-back during the car's ramp-up period.
+  const lastCommandedA = new Map<string, number>()
+
   // Build a LoadpointSnapshot from live state.
   // shouldChargeNow is pre-computed by the tariff gate for smart-mode loadpoints.
   async function buildSnapshot(
@@ -268,6 +272,7 @@ async function main() {
       connected: state.connected,
       charging: state.charging,
       currentA: state.currentA,
+      commandedA: lastCommandedA.get(state.name),
       sessionEnergyKWh: state.sessionEnergyKWh,
       estimatedSoc: estimatedSocVal,
       targetSoc: state.targetSoc,
@@ -353,13 +358,14 @@ async function main() {
 
     for (const [lpId, amps] of out.allocations) {
       const charger = chargerLimitMap.get(lpId)
-      if (charger) await charger.setCurrentLimit(amps).catch(() => {})
+      if (charger) {
+        await charger.setCurrentLimit(amps).catch(() => {})
+        lastCommandedA.set(lpId, amps)
+      }
     }
 
     const allocRecord = Object.fromEntries(out.allocations)
-    const maxPhase = Math.max(...snaps.map((s) => s.currentA), 0)
-    const balancerCfg = config.balancers.find((b) => b.name === balancerName)
-    const freeAmps = Math.max(0, (balancerCfg?.mainBreakerA ?? 0) - maxPhase)
+    const freeAmps = out.freeAmps ?? 0
     lastTickByBalancer.set(balancerName, { allocations: allocRecord, freeAmps })
 
     events.emit('balancer.tick', {
