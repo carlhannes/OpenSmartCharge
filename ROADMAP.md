@@ -128,17 +128,19 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 ---
 
-## Milestone 5 — Web UI (next up)
+## Milestone 5 — Web UI (shipped)
 
 **Goal:** Full control UI served by the backend (React 19 + Vite).
 
-- [ ] `src/ui/` — Vite-bundled React app, served as static files by the backend in production
-- [ ] Live loadpoint cards (SSE) with mode selector
-- [ ] Day-ahead price chart per tariff zone
-- [ ] Balancer allocation view per circuit
-- [ ] Transaction history from SQLite
-- [ ] Module health panel
-- [ ] Send OCPP commands (RemoteStart/Stop, SetChargingProfile manual override)
+- [x] `src/ui/` — Vite-bundled React app, served as static files by the backend in production
+- [x] Live loadpoint cards (SSE) with mode selector, SoC/time target editor
+- [x] Day-ahead price chart per tariff zone (Recharts BarChart, current slot highlighted)
+- [x] Balancer allocation view per circuit (freeAmps + per-loadpoint bar chart)
+- [x] Transaction history from SQLite with click-to-expand session energy/power chart
+- [x] Module health panel with color-coded status; Nav health badge
+- [x] Send OCPP commands (RemoteStart/Stop, SetChargingProfile one-shot manual override)
+- [x] `npm run dev:all` — single command starts backend + Vite HMR with prefixed logs
+- [x] Playwright smoke tests for all 6 pages
 
 ---
 

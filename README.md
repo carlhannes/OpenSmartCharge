@@ -33,13 +33,23 @@ docker compose up mosquitto -d
 
 # Run OSC (development)
 npm install
-npm run dev
+npm run dev:all   # starts backend (port 8080) + Vite HMR (port 5173) with prefixed logs
 
-# Or run the full stack with Docker (after M1 is complete)
+# Or run backend and UI dev server separately:
+# npm run dev      # backend only (tsx watch, auto-restarts on .ts changes)
+# npm run dev:ui   # Vite HMR only, proxies /api + /events to :8080
+
+# Production build + run:
+npm run build     # tsc + vite build → dist/
+npm start         # serves backend + bundled UI on port 8080
+
+# Docker (full stack with MQTT broker):
 # docker compose up
 ```
 
-Point your OCPP charger at `ws://<your-host>:8080/ocpp` and it should appear in the OSC UI at `http://localhost:8080`.
+Point your OCPP charger at `ws://<your-host>:8080/ocpp`. The UI is at `http://localhost:5173` in dev or `http://localhost:8080` in production.
+
+**Before opening a PR:** run `npm run build && npm start` and verify the production UI matches what you see in dev.
 
 ## Architecture
 
