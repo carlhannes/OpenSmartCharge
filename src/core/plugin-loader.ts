@@ -7,10 +7,11 @@ import {
   registerTariff,
   registerBalancer,
   registerVehicle,
+  registerMeterReader,
 } from '../sdk/registry-api.js'
 
 // Passed to each plugin's default export so plugins don't need to resolve OSC's location
-const pluginApi = { registerCharger, registerTariff, registerBalancer, registerVehicle }
+const pluginApi = { registerCharger, registerTariff, registerBalancer, registerVehicle, registerMeterReader }
 
 export async function loadPlugins(dir: string, log: Logger): Promise<void> {
   let files: string[]

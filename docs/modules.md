@@ -1,46 +1,72 @@
 # Writing a module
 
-OpenSmartCharge's four feature categories — chargers, tariffs, balancers, and vehicles — are each defined by a TypeScript interface in `src/sdk/`. You can add a new module for any of them without touching the OSC core.
+OSC has five module types defined as TypeScript interfaces in `src/sdk/`. The canonical references for "how to write one" are the shipped first-party modules in `src/modules/*/` — copy the structure, replace the domain logic.
 
-## Quickstart
+## First-party vs plugin
 
-1. Create `plugins/my-module.js` (compiled JS — see note on TypeScript below)
-2. In the file, import the registration function and call it:
+The `{ type, create(cfg, ctx) { … } }` registration block is byte-for-byte identical in both. Only the wrapper differs:
 
-```js
-// plugins/my-tariff.js  (CommonJS or ESM — OSC loads both)
-import { registerTariff } from 'opensmartcharge/sdk'   // peer dep
+**First-party** (code in this repo, under `src/modules/`):
+
+```ts
+import { registerTariff } from '../../sdk/registry-api.js'
 
 registerTariff({
   type: 'my-tariff',
-  create(cfg, ctx) {
-    return {
-      id: cfg.name,
-      health: () => 'ok',
-      async prices(from, to) {
-        // fetch price slots from wherever
-        return [{ start: from, end: to, pricePerKWh: 0.12, currency: 'SEK' }]
-      }
-    }
-  }
+  create(cfg, ctx) { … }
 })
 ```
 
-3. Add the module to your config:
+`src/core/lifecycle.ts` side-effect-imports the module, which triggers registration. See `src/modules/tariff-elering/index.ts` for a complete example.
+
+**Plugin** (drop a `.js` file in `./plugins/`):
+
+```js
+export default function(api) {
+  api.registerTariff({
+    type: 'my-tariff',
+    create(cfg, ctx) { … }
+  })
+}
+```
+
+`src/core/plugin-loader.ts` scans `plugins/` on boot and calls each file's default export with an `api` object containing all five `registerXxx` functions. `opensmartcharge/sdk` is **not** a published npm package — plugins receive the API via this parameter, not from an import path.
+
+## Quickstart
+
+A complete working plugin:
+
+```js
+// plugins/my-tariff.js
+export default function(api) {
+  api.registerTariff({
+    type: 'my-tariff',
+    create(cfg, ctx) {
+      return {
+        id: cfg.name,
+        start: async () => {},
+        stop:  async () => {},
+        health: () => 'ok',
+        async prices(from, to) {
+          return [{ start: from, end: to, pricePerKWh: 0.12, currency: 'SEK' }]
+        },
+      }
+    },
+  })
+}
+```
+
+Then in `osc.yaml`:
 
 ```yaml
 tariffs:
-  - name: my-prices
+  - name: mine
     type: my-tariff
 ```
 
-4. Start OSC — it scans `./plugins/*.js` on startup and your module is loaded automatically.
+Start OSC — it scans `./plugins/*.js` at startup and loads your module automatically.
 
-## TypeScript
-
-Write in TypeScript, compile to JS before dropping into `plugins/`. The `opensmartcharge/sdk` package exports `.d.ts` types for all interfaces so your editor can check your module.
-
-## The four interfaces
+## The five interfaces
 
 ### `Charger` (`src/sdk/charger.ts`)
 
@@ -59,26 +85,32 @@ interface Charger {
 
 `onStatus` is the push channel: your module calls `cb` whenever the charger status changes (connected/disconnected, charging/idle, meter values). The callback receives a `ChargerStatus` snapshot.
 
+Reference: `src/modules/charger-ocpp16/`
+
 ### `Tariff` (`src/sdk/tariff.ts`)
 
 ```ts
 interface Tariff {
   readonly id: string
+  start(): Promise<void>
+  stop(): Promise<void>
   health(): ModuleHealth
   prices(from: Date, to: Date): Promise<TariffSlot[]>
 }
 
 interface TariffSlot {
   start: Date         // UTC, inclusive
-  end: Date           // UTC, exclusive (start + 15 min)
+  end: Date           // UTC, exclusive
   pricePerKWh: number // in currency below
-  currency: string    // e.g. 'SEK'
+  currency: string    // e.g. 'EUR'
 }
 ```
 
-**Important:** return 15-minute slots. If your API returns hourly prices, expand them: one hour → four slots with identical prices. This is how the planner works internally.
+Return slots at whatever resolution your data source provides (hourly is fine — Elering uses hourly). The planner ranges over slots, not fixed buckets, so resolution is transparent.
 
 Return an empty array for time ranges where you have no data. The system falls back gracefully.
+
+Reference: `src/modules/tariff-elering/`
 
 ### `Balancer` (`src/sdk/balancer.ts`)
 
@@ -99,9 +131,9 @@ interface BalancerOutput {
 }
 ```
 
-`tick` is called every `intervalSec` seconds. It must always return a valid `allocations` map — never throw. If your meter data is stale or unavailable, return a safe fallback current (not zero, unless the loadpoint mode is `disabled`).
+`tick` is called every `intervalSec` seconds. It must always return a valid `allocations` map — never throw. If meter data is stale or unavailable, return a safe fallback current (not zero, unless the loadpoint mode is `disabled`).
 
-The `LoadpointSnapshot` in the input includes `mode`, `connected`, `charging`, `estimatedSoc`, `targetSoc`, `targetTime`, and `pricesAvailable`. Use them to decide who gets how many amps.
+The `LoadpointSnapshot` includes `mode`, `connected`, `charging`, `estimatedSoc`, `targetSoc`, `targetTime`, and `pricesAvailable`. Use them to decide who gets how many amps.
 
 ### `Vehicle` (`src/sdk/vehicle.ts`)
 
@@ -126,21 +158,54 @@ interface VehicleData {
 
 `getData()` should return cached data when the API is down. Set `health()` to `'degraded'` in that case and return `{ ...lastCached, fetchedAt: lastFetchTime }`. Never return `undefined` or throw when the API is temporarily unavailable.
 
-## `ModuleCtx`
-
-Every factory receives a `ModuleCtx`:
+### `MeterReader` (`src/sdk/meter-reader.ts`)
 
 ```ts
-interface ModuleCtx {
-  db: DatabaseSync  // node:sqlite (Node.js v22.5+ built-in) — use it if your module needs persistence
-  events: EventBus  // internal event bus — for publishing or subscribing to state changes
-  log: Logger       // pino child logger — already scoped to your module name
+interface MeterSnapshot {
+  powerW?: number  // instantaneous total active power, watts (positive = importing from grid)
+  i1A?: number     // per-phase currents, amps
+  i2A?: number
+  i3A?: number
+  timestamp: Date
+}
+
+interface MeterReader {
+  readonly id: string
+  start(): Promise<void>
+  stop(): Promise<void>
+  health(): ModuleHealth
+  latest(): MeterSnapshot | null  // null = no frame received yet
+  onSnapshot(cb: (s: MeterSnapshot) => void): () => void  // returns unsubscribe
 }
 ```
 
-Use `ctx.log.info(...)`, `ctx.log.warn(...)`, etc. Don't use `console.log`.
+`latest()` returning `null` means the reader has never seen a frame (report `'unavailable'`). A non-null snapshot that is older than `staleAfterSec` means the feed has stopped (report `'degraded'` but keep returning the last value).
 
-Use `ctx.db` to cache data (e.g., vehicle SoC history, price lookups). The OSC core handles migrations for its own tables; your module should create its own tables if needed, with a `CREATE TABLE IF NOT EXISTS` in its `start()` method.
+`onSnapshot` is the push channel used by the balancer for in-process data flow — no MQTT round-trip needed.
+
+Reference: `src/modules/meter-tibber-pulse/`
+
+## `ModuleCtx`
+
+Every `create(cfg, ctx)` factory receives a `ModuleCtx`:
+
+```ts
+interface ModuleCtx {
+  db: DatabaseSync     // node:sqlite (Node 22.5+ built-in) — persistence
+  events: EventEmitter // internal pub/sub
+  log: Logger          // pino child, pre-scoped to your module name
+  fetch: typeof globalThis.fetch  // drop-in fetch() with 0–120 s anti-thundering-herd jitter
+  mqtt?: { host: string; port: number; user?: string; password?: string }
+}
+```
+
+**`ctx.fetch` vs global `fetch`** — use `ctx.fetch` for all scheduled/periodic outbound HTTP calls (tariff fetches, vehicle polls). It adds a random 0–120 s jitter so multiple OSC instances on the same network don't slam upstream APIs at the same millisecond. For a fetch that must happen immediately at startup, use the global `fetch` directly. See `src/modules/tariff-elering/index.ts` for the pattern.
+
+**`ctx.mqtt`** — opt-in. The OSC bridge's own MQTT client (publishing `osc/…` topics) is private to the bridge; modules that need MQTT open their own connection with these params. Fail loudly in `create()` if you need MQTT and `ctx.mqtt` is `undefined` — that's a configuration error, not a degradation scenario. See `src/modules/meter-tibber-pulse/index.ts` for an example.
+
+**`ctx.db`** — your tables, your `CREATE TABLE IF NOT EXISTS` in `start()`. Don't collide with OSC core table names: `loadpoint_state`, `transactions`, `meter_values`, `tariff_slots`, `vehicle_cache`.
+
+Use `ctx.log.info(...)`, `ctx.log.warn(...)`, etc. Don't use `console.log`.
 
 ## Module health
 
@@ -154,13 +219,20 @@ Return one of three values from `health()`:
 
 Health is polled every 30 seconds and published to `osc/health/<module>` on MQTT and `GET /api/health` on REST. The system never stops based on module health — it just communicates the state.
 
-## Registration functions (from `src/sdk/index.ts`)
+## Registration functions
+
+Passed to plugins via the `api` parameter; called directly by first-party modules:
 
 ```ts
-registerCharger(module: ChargerModule): void
-registerTariff(module: TariffModule): void
-registerBalancer(module: BalancerModule): void
-registerVehicle(module: VehicleModule): void
+api.registerCharger(module: ChargerModule): void
+api.registerTariff(module: TariffModule): void
+api.registerBalancer(module: BalancerModule): void
+api.registerVehicle(module: VehicleModule): void
+api.registerMeterReader(module: MeterReaderModule): void
 ```
 
-Call the appropriate one at module import time. The type string you pass (`type: 'my-tariff'`) must match the `type:` field in `osc.yaml`.
+The `type` string you pass (`type: 'my-tariff'`) must match the `type:` field in `osc.yaml`.
+
+## TypeScript
+
+If you write a plugin in TypeScript, compile to JS before dropping into `plugins/`. You can copy the interface types from `src/sdk/*.ts` directly into your plugin source — they have no runtime dependency on OSC, only on `pino`, `node:sqlite`, and `node:events` types you can re-declare yourself.

@@ -9,7 +9,8 @@
     "start": "node dist/core/lifecycle.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "format": "prettier --write src"
+    "format": "prettier --write src",
+    "sim:pulse": "node scripts/sim-pulse.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",

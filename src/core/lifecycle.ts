@@ -1,6 +1,7 @@
 // First-party module imports — explicit so the dependency graph is clear
 import '../modules/charger-ocpp16/index.js'
 import '../modules/tariff-elering/index.js'
+import '../modules/meter-tibber-pulse/index.js'
 
 import { loadConfig } from './config.js'
 import { openDb } from './db.js'
@@ -9,12 +10,13 @@ import { loadPlugins } from './plugin-loader.js'
 import { loadLoadpointStates, setLoadpointMode, setLoadpointTarget } from './loadpoint.js'
 import { createEventBus } from './events.js'
 import { createHealthMap, updateHealth } from './health.js'
-import { getChargerModule, getTariffModule } from '../sdk/registry-api.js'
+import { getChargerModule, getTariffModule, getMeterReaderModule } from '../sdk/registry-api.js'
 import { getOcppServer } from '../modules/charger-ocpp16/index.js'
 import { startServer } from '../server/index.js'
 import { startMqttBridge } from '../server/mqtt-bridge.js'
 import type { Charger } from '../sdk/charger.js'
 import type { Tariff } from '../sdk/tariff.js'
+import type { MeterReader } from '../sdk/meter-reader.js'
 import type { ChargeMode } from './config.js'
 
 const CONFIG_PATH = process.env.OSC_CONFIG ?? './osc.yaml'
@@ -46,7 +48,15 @@ async function main() {
   }
 
   // Build charger lookup map by charger name
-  const ctx = { db, events, log, fetch: jitterFetch }
+  const ctx = {
+    db,
+    events,
+    log,
+    fetch: jitterFetch,
+    mqtt: config.mqtt
+      ? { host: config.mqtt.host, port: config.mqtt.port, user: config.mqtt.user, password: config.mqtt.password }
+      : undefined,
+  }
   const chargers = new Map<string, Charger>()
 
   for (const chargerCfg of config.chargers) {
@@ -81,6 +91,27 @@ async function main() {
     const p = payload as { name: string }
     const t = tariffs.get(p.name)
     if (t) updateHealth(health, p.name, t.health())
+  })
+
+  // Instantiate meter reader modules
+  const meterReaders = new Map<string, MeterReader>()
+  for (const meterCfg of config.meterReaders) {
+    const mod = getMeterReaderModule(meterCfg.type)
+    if (!mod) {
+      log.warn({ type: meterCfg.type, name: meterCfg.name }, 'no module registered for meter reader type')
+      continue
+    }
+    const reader = mod.create(meterCfg, ctx)
+    await reader.start()
+    meterReaders.set(meterCfg.name, reader)
+    updateHealth(health, meterCfg.name, reader.health())
+    log.info({ meter: meterCfg.name, type: meterCfg.type }, 'meter reader module created')
+  }
+
+  events.on('meter.snapshot', (payload) => {
+    const p = payload as { name: string }
+    const r = meterReaders.get(p.name)
+    if (r) updateHealth(health, p.name, r.health())
   })
 
   // Determine maxA per loadpoint from the charger config
@@ -158,6 +189,7 @@ async function main() {
     loadpoints: loadpointStates,
     chargers: chargerLimitMap,
     tariffs,
+    meterReaders,
   })
   log.info({ port: config.site.port }, 'HTTP server listening')
 
@@ -208,6 +240,7 @@ async function main() {
     httpServer.close()
     if (ocppServer) void ocppServer.close()
     for (const t of tariffs.values()) void t.stop()
+    for (const r of meterReaders.values()) void r.stop()
     db.close()
     process.exit(0)
   }

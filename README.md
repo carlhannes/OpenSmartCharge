@@ -10,7 +10,7 @@ If you want something that handles solar, batteries, heat pumps, and 300 EV mode
 
 - **OCPP 1.6J server** — any charger speaking OCPP 1.6J connects to it directly on your LAN
 - **Day-ahead pricing** — Elering API covers SE1–SE4 (Swedish Nordpool zones) with no API key required. 15-minute slot resolution.
-- **Household load balancing** — reads live per-phase currents from your Tibber Pulse (via [pulse_bridge.py](pulse_bridge.py)) or any DSMR/OBIS meter bridged to MQTT, distributes the available headroom between chargers
+- **Household load balancing** — reads live per-phase currents from your Tibber Pulse natively (no Python sidecar required) or any DSMR/OBIS meter bridged to MQTT, distributes the available headroom between chargers
 - **Vehicle SoC** — reads state-of-charge from Skoda/VW vehicles; plans charging to hit your target by departure time
 - **Charge modes per charger** — `disabled` / `smart` / `fast`, changeable via UI, REST, or MQTT
 - **Home Assistant ready** — MQTT auto-discovery; OSC appears in HA automatically with selects and sensors per charger

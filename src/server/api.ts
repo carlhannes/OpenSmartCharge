@@ -8,6 +8,7 @@ import { getHealthSummary } from '../core/health.js'
 import type { HealthMap } from '../core/health.js'
 import type { ChargeMode } from '../core/config.js'
 import type { Tariff } from '../sdk/tariff.js'
+import type { MeterReader } from '../sdk/meter-reader.js'
 
 export interface ApiDeps {
   db: DatabaseSync
@@ -16,6 +17,7 @@ export interface ApiDeps {
   loadpoints: Map<string, LoadpointState>
   chargers: Map<string, { setCurrentLimit(a: number): Promise<void> }>
   tariffs: Map<string, Tariff>
+  meterReaders: Map<string, MeterReader>
 }
 
 export function createApiRouter(deps: ApiDeps): Router {
@@ -104,6 +106,16 @@ export function createApiRouter(deps: ApiDeps): Router {
       .prices(from, to)
       .then((slots) => res.json(slots))
       .catch(() => res.status(502).json({ error: 'failed to retrieve prices' }))
+  })
+
+  // GET /api/meters/:name
+  router.get('/meters/:name', (req: Request, res: Response) => {
+    const reader = deps.meterReaders.get(String(req.params.name))
+    if (!reader) {
+      res.status(404).json({ error: 'meter not found' })
+      return
+    }
+    res.json({ latest: reader.latest(), health: reader.health() })
   })
 
   // GET /api/health

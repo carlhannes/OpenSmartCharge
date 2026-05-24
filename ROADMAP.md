@@ -59,21 +59,21 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 ---
 
-## Milestone 2.5 — MeterReader: Tibber Pulse (TypeScript port) (next up)
+## Milestone 2.5 — MeterReader: Tibber Pulse (TypeScript port) (shipped)
 
 **Goal:** Remove the Python `pulse_bridge.py` sidecar. Read the Tibber Pulse MQTT stream natively in OSC and expose it through a new `MeterReader` SDK module type — so future readers (P1IB, Shelly 3EM, …) are just another swappable module.
 
-- [ ] `src/sdk/meter-reader.ts` — new `MeterReader` / `MeterReaderModule` interface + `MeterSnapshot` type
-- [ ] `registerMeterReader` / `getMeterReaderModule` in `src/sdk/registry-api.ts`
-- [ ] `src/modules/meter-tibber-pulse/` — direct TypeScript port of `pulse_bridge.py`
+- [x] `src/sdk/meter-reader.ts` — new `MeterReader` / `MeterReaderModule` interface + `MeterSnapshot` type
+- [x] `registerMeterReader` / `getMeterReaderModule` in `src/sdk/registry-api.ts`
+- [x] `src/modules/meter-tibber-pulse/` — direct TypeScript port of `pulse_bridge.py`
   - DSMR/OBIS regex parsers (1-0:1.7.0, 31/51/71.7.0)
   - Periodic `batching_disable true` to keep Pulse un-batched
   - In-process `latest()` + `onSnapshot()` API; no MQTT re-publish by default
-- [ ] `meterReaders[]` config section; optional `republishPrefix` for MQTT fan-out
-- [ ] Optional `meterReader: <name>` field on `balancers[]` — in-process path preferred over raw MQTT topics
-- [ ] `scripts/sim-pulse.mjs` — replays a recorded DSMR frame for testing without real hardware
-- [ ] `GET /api/meters/:name` REST endpoint — latest snapshot + health
-- [ ] README updated: native Pulse support, sidecar no longer required
+- [x] `meterReaders[]` config section; optional `republishPrefix` for MQTT fan-out
+- [x] Optional `meterReader: <name>` field on `balancers[]` — in-process path preferred over raw MQTT topics
+- [x] `scripts/sim-pulse.mjs` — replays a recorded DSMR frame for testing without real hardware
+- [x] `GET /api/meters/:name` REST endpoint — latest snapshot + health
+- [x] README updated: native Pulse support, sidecar no longer required
 
 **Verification:**
 1. Real Tibber Pulse on LAN → `GET /api/meters/house-pulse` returns fresh `powerW` + `i{1,2,3}A`.
@@ -83,7 +83,7 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 ---
 
-## Milestone 3 — Balancer: MQTT-circuit
+## Milestone 3 — Balancer: MQTT-circuit (next up)
 
 **Goal:** Dynamic load balancing from live household meter data, with a well-defined degradation path for meter failures.
 

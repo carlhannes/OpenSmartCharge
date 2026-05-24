@@ -18,8 +18,8 @@
 ┌──────────────▼───────────────────────────────────────────────┐
 │  Modules  (first-party in src/modules/, third-party in plugins/)
 │                                                               │
-│  Charger       Tariff          Balancer       Vehicle         │
-│  ocpp16        elering         mqtt-circuit   skoda           │
+│  Charger    Tariff      Balancer       Vehicle    MeterReader │
+│  ocpp16     elering     mqtt-circuit   skoda      tibber-pulse│
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -29,7 +29,7 @@
 2. **Loadpoints created** — one per `loadpoints[]` entry, mode restored from SQLite
 3. **Tariff module** — fetches day-ahead prices from Elering, stores in SQLite; exposes `prices(from, to)`
 4. **Balancer tick** (every `intervalSec`):
-   a. Reads live per-phase currents from MQTT (`house/i1_a`, `i2_a`, `i3_a`)
+   a. Reads live per-phase currents from a `MeterReader` module (in-process `latest()` snapshot) or, if no MeterReader is configured, subscribes to `house/i1_a`, `i2_a`, `i3_a` MQTT topics directly
    b. Calls `planner.schedule(loadpoint, priceSlots, estimatedSoc)` for each active smart-mode loadpoint
    c. Computes headroom: `mainBreakerA − max(housePhaseCurrents) + sum(chargerCurrents)`
    d. Distributes headroom across loadpoints per planner output
@@ -76,13 +76,15 @@ Modules **must not** import from `src/core/` directly. They receive everything t
 
 ```ts
 interface ModuleCtx {
-  db: DatabaseSync  // node:sqlite (Node.js built-in)
-  events: EventBus  // internal event bus
-  log: Logger       // pino child logger scoped to this module
+  db: DatabaseSync
+  events: EventEmitter
+  log: Logger
+  fetch: typeof globalThis.fetch  // jittered (0–120 s)
+  mqtt?: { host: string; port: number; user?: string; password?: string }
 }
 ```
 
-This boundary means a third-party module (a `.js` file in `plugins/`) has the same access as a first-party module — and the same constraints.
+First-party modules in `src/modules/*` use the same `ModuleCtx` as third-party plugins — same access, same constraints. The only difference is the registration wrapper (see [docs/modules.md](modules.md)).
 
 ## OCPP connection model
 

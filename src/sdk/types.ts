@@ -18,4 +18,11 @@ export interface ModuleCtx {
    * fetches where you need an immediate response, use the global `fetch`.
    */
   fetch: typeof globalThis.fetch
+  /**
+   * MQTT broker connection parameters. Populated when `mqtt:` is configured
+   * in osc.yaml. Modules that need MQTT should open their own client using
+   * these params — the OSC bridge's client is reserved for OSC's own topics.
+   * Undefined when MQTT is not configured.
+   */
+  mqtt?: { host: string; port: number; user?: string; password?: string }
 }

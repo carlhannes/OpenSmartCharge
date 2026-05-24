@@ -48,6 +48,17 @@ vehicles:
     #   user: "me@example.com"
     #   password: "secret"
 
+# Meter readers (optional — feeds the mqtt-circuit balancer with live
+# household current data so it can size charger output below the main fuse).
+# Requires mqtt: to be configured above.
+# meterReaders:
+#   - name: house-pulse
+#     type: tibber-pulse
+#     subTopic: pulse              # MQTT topic where Pulse publishes DSMR frames (default: pulse)
+#     republishPrefix: house       # optional: re-publish to house/{power_w,i1_a,i2_a,i3_a}
+#                                  # for Home Assistant / Node-RED dashboards (mirrors pulse_bridge.py)
+#     staleAfterSec: 60            # health → degraded after this many seconds without a frame
+
 # OCPP chargers.
 # Any OCPP 1.6J charger configured to connect to ws://<your-host>:8080/ocpp
 chargers:

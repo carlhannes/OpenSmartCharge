@@ -84,6 +84,31 @@ vehicles:
 
 Credentials are stored in `osc.yaml` which is gitignored. Keep it out of version control.
 
+### `meterReaders[]`
+
+Optional. Provides live household current and power data to the load balancer. Requires `mqtt:` to be configured.
+
+```yaml
+meterReaders:
+  - name: house-pulse
+    type: tibber-pulse
+    subTopic: pulse        # MQTT topic where Pulse publishes DSMR frames (default: pulse)
+    republishPrefix: house # optional: republish to <prefix>/{power_w,i1_a,i2_a,i3_a}
+    staleAfterSec: 60      # seconds before health → degraded if no frame received (default: 60)
+```
+
+**Built-in types:** `tibber-pulse`
+
+**tibber-pulse specifics:**
+
+- Subscribes to the Tibber Pulse DSMR/OBIS MQTT stream. Parses active power (`1-0:1.7.0`) and per-phase current (`1-0:31.7.0`, `1-0:51.7.0`, `1-0:71.7.0`).
+- Sends `batching_disable true` to the Pulse control topics (`pctrl`, `pulse/subscribe`) on connect and every 300 s to keep data flowing unbatched.
+- Requires `mqtt:` configured in `osc.yaml` — the module opens its own connection to the same broker using the same credentials.
+- `republishPrefix: house` reproduces the exact MQTT topic layout of the Python `pulse_bridge.py` sidecar (`house/power_w`, `house/i1_a`, …) for Home Assistant or Node-RED dashboards. Remove this field to disable the sidecar behaviour — the balancer reads meter data in-process instead.
+- Health: `ok` while frames arrive within `staleAfterSec`; `degraded` if stale (last known values still returned); `unavailable` until the first frame after boot.
+
+The `meterReader: <name>` field on `balancers[]` (M3) links a balancer to a meter reader by name for in-process data flow — no MQTT round-trip.
+
 ### `chargers[]`
 
 OCPP charger registrations. The charger must be configured to connect to `ws://<host>:<port>/ocpp`.

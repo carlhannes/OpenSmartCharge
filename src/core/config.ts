@@ -15,6 +15,7 @@ const balancerConfigSchema = z
     mainBreakerA: z.number(),
     phases: z.number().int().min(1).max(3).default(3),
     meterTopicPrefix: z.string().default('house'),
+    meterReader: z.string().optional(),
     safeStaticCurrentA: z.number().default(10),
     meterStaleAfterSec: z.number().default(60),
     intervalSec: z.number().default(15),
@@ -58,6 +59,7 @@ const configSchema = z.object({
   balancers: z.array(balancerConfigSchema).default([]),
   vehicles: z.array(namedModuleSchema).default([]),
   chargers: z.array(namedModuleSchema).default([]),
+  meterReaders: z.array(namedModuleSchema).default([]),
   loadpoints: z.array(loadpointConfigSchema).default([]),
 })
 
