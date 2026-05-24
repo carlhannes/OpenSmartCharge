@@ -5,18 +5,20 @@ import type { LoadpointState } from '../core/loadpoint.js'
 import type { EventBus } from '../core/events.js'
 import { getHealthSummary } from '../core/health.js'
 import type { HealthMap } from '../core/health.js'
-import type { ChargeMode } from '../core/config.js'
+import type { ChargeMode, Config } from '../core/config.js'
 import type { Tariff } from '../sdk/tariff.js'
 import type { MeterReader } from '../sdk/meter-reader.js'
 import type { Balancer } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
+import type { Charger } from '../sdk/charger.js'
 
 export interface ApiDeps {
   db: DatabaseSync
   events: EventBus
   health: HealthMap
   loadpoints: Map<string, LoadpointState>
-  chargers: Map<string, { setCurrentLimit(a: number): Promise<void> }>
+  chargers: Map<string, Charger>
+  config: Config
   tariffs: Map<string, Tariff>
   meterReaders: Map<string, MeterReader>
   balancers: Map<string, Balancer>
@@ -160,6 +162,84 @@ export function createApiRouter(deps: ApiDeps): Router {
     res.json(getHealthSummary(deps.health))
   })
 
+  // POST /api/loadpoints/:name/start
+  router.post('/loadpoints/:name/start', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    const charger = deps.chargers.get(name)
+    if (!charger) { res.status(404).json({ error: 'loadpoint not found' }); return }
+    if (!charger.remoteStart) { res.status(400).json({ error: 'charger does not support remote start' }); return }
+    await charger.remoteStart()
+    res.json(deps.loadpoints.get(name) ?? {})
+  })
+
+  // POST /api/loadpoints/:name/stop
+  router.post('/loadpoints/:name/stop', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    const charger = deps.chargers.get(name)
+    if (!charger) { res.status(404).json({ error: 'loadpoint not found' }); return }
+    if (!charger.remoteStop) { res.status(400).json({ error: 'charger does not support remote stop' }); return }
+    await charger.remoteStop()
+    res.json(deps.loadpoints.get(name) ?? {})
+  })
+
+  // POST /api/loadpoints/:name/profile  body { amps: number }
+  router.post('/loadpoints/:name/profile', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    const charger = deps.chargers.get(name)
+    if (!charger) { res.status(404).json({ error: 'loadpoint not found' }); return }
+    if (!charger.setOneShotProfile) { res.status(400).json({ error: 'charger does not support one-shot profile' }); return }
+    const body = req.body as { amps?: unknown }
+    const amps = typeof body.amps === 'number' ? body.amps : undefined
+    if (amps === undefined || amps < 0) { res.status(400).json({ error: 'amps must be a non-negative number' }); return }
+    await charger.setOneShotProfile(amps)
+    res.json(deps.loadpoints.get(name) ?? {})
+  })
+
+  // GET /api/site
+  router.get('/site', (_req: Request, res: Response) => {
+    const c = deps.config
+    res.json({
+      site: c.site,
+      loadpoints: c.loadpoints.map((lp) => ({
+        name: lp.name,
+        charger: lp.charger,
+        balancer: lp.balancer,
+        tariff: lp.tariff,
+        vehicle: lp.vehicle,
+        maxCurrentA: (c.chargers.find((ch) => ch.name === lp.charger) as { maxA?: number } | undefined)?.maxA ?? 16,
+        autoStart: lp.autoStart,
+        targetSoc: lp.targetSoc,
+        targetTime: lp.targetTime,
+      })),
+      chargers: c.chargers.map((ch) => ({
+        name: ch.name,
+        type: ch.type,
+        stationId: (ch as { stationId?: string }).stationId,
+        maxA: (ch as { maxA?: number }).maxA ?? 16,
+      })),
+      balancers: c.balancers.map((b) => ({
+        name: b.name,
+        type: b.type,
+        mainBreakerA: b.mainBreakerA,
+        phases: b.phases,
+      })),
+      tariffs: c.tariffs.map((t) => ({
+        name: t.name,
+        type: t.type,
+        zone: (t as { zone?: string }).zone,
+      })),
+      vehicles: c.vehicles.map((v) => ({
+        name: v.name,
+        type: v.type,
+        vin: (v as { vin?: string }).vin,
+      })),
+      meterReaders: c.meterReaders.map((m) => ({
+        name: m.name,
+        type: m.type,
+      })),
+    })
+  })
+
   // GET /api/transactions
   router.get('/transactions', (req: Request, res: Response) => {
     const loadpoint = req.query.loadpoint as string | undefined
@@ -174,6 +254,20 @@ export function createApiRouter(deps: ApiDeps): Router {
       : deps.db.prepare(`SELECT * FROM transactions ORDER BY id DESC LIMIT ?`).all(limit)
 
     res.json(rows)
+  })
+
+  // GET /api/transactions/:id
+  router.get('/transactions/:id', (req: Request, res: Response) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: 'id must be a positive integer' }); return }
+    const tx = deps.db.prepare('SELECT * FROM transactions WHERE id = ?').get(id)
+    if (!tx) { res.status(404).json({ error: 'transaction not found' }); return }
+    const samples = deps.db
+      .prepare(
+        'SELECT measured_at, energy_kwh, power_w, current_a, soc FROM meter_values WHERE transaction_id = ? ORDER BY measured_at ASC',
+      )
+      .all(id)
+    res.json({ transaction: tx, samples })
   })
 
   return router

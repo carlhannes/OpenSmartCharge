@@ -398,7 +398,8 @@ async function main() {
   }
 
   // HTTP server (REST + SSE)
-  const chargerLimitMap = new Map<string, { setCurrentLimit(a: number): Promise<void> }>()
+  // chargerLimitMap is keyed by loadpoint name so REST routes can look up by loadpoint
+  const chargerLimitMap = new Map<string, Charger>()
   for (const lpCfg of config.loadpoints) {
     const charger = chargers.get(lpCfg.charger)
     if (charger) chargerLimitMap.set(lpCfg.name, charger)
@@ -410,6 +411,7 @@ async function main() {
     health,
     loadpoints: loadpointStates,
     chargers: chargerLimitMap,
+    config,
     tariffs,
     meterReaders,
     balancers,

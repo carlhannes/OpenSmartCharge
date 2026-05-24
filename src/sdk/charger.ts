@@ -24,6 +24,9 @@ export interface Charger {
   start(): Promise<void>
   stop(): Promise<void>
   setCurrentLimit(amps: number): Promise<void>
+  remoteStart?(idTag?: string): Promise<void>
+  remoteStop?(): Promise<void>
+  setOneShotProfile?(amps: number): Promise<void>
   health(): ModuleHealth
   onStatus(cb: (status: ChargerStatus) => void): () => void
 }

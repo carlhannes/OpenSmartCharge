@@ -28,7 +28,7 @@ import {
   insertMeterValues,
   latestEnergyKwh,
 } from './persistence.js'
-import { setCurrentLimit, remoteStart } from './commands.js'
+import { setCurrentLimit, remoteStart, remoteStop as cmdRemoteStop } from './commands.js'
 
 type StatusCallback = (status: ChargerStatus) => void
 
@@ -109,6 +109,19 @@ export class OcppServer {
 
   getHealth(): ModuleHealth {
     return this.health
+  }
+
+  async remoteStart(stationId: string, idTag = 'osc-manual'): Promise<void> {
+    const state = this.stations.get(stationId)
+    if (!state) throw new Error(`station ${stationId} not connected`)
+    await remoteStart(state.client, idTag, state.connectorId)
+  }
+
+  async remoteStop(stationId: string): Promise<void> {
+    const state = this.stations.get(stationId)
+    if (!state) throw new Error(`station ${stationId} not connected`)
+    if (!state.activeTransactionId) throw new Error(`no active transaction on ${stationId}`)
+    await cmdRemoteStop(state.client, state.activeTransactionId)
   }
 
   async close(): Promise<void> {

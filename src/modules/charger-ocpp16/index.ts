@@ -58,6 +58,19 @@ registerCharger({
         await debouncedSet(limit)
       },
 
+      async remoteStart(idTag?: string) {
+        await sharedServer!.remoteStart(stationId, idTag)
+      },
+
+      async remoteStop() {
+        await sharedServer!.remoteStop(stationId)
+      },
+
+      async setOneShotProfile(amps: number) {
+        const limit = Math.max(0, Math.min(amps, maxA))
+        await sharedServer!.setLimit(stationId, limit)
+      },
+
       health(): ModuleHealth {
         return sharedServer?.getHealth() ?? 'unavailable'
       },
