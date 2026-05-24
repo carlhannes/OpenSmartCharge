@@ -1,0 +1,28 @@
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.table th {
+  text-align: left;
+  padding: 8px;
+  color: var(--color-muted);
+  font-weight: 500;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.row td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--color-border);
+  cursor: pointer;
+}
+
+.row:hover td { background: var(--color-surface); }
+.expanded td { background: var(--color-surface); }
+
+.detailCell {
+  padding: 16px 8px !important;
+  cursor: default !important;
+  background: var(--color-surface);
+}

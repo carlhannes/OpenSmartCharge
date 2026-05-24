@@ -12,6 +12,7 @@ export default defineConfig({
     outDir: path.resolve(__dirname, '../../dist/ui'),
     emptyOutDir: true,
     sourcemap: true,
+    chunkSizeWarningLimit: 800, // recharts adds ~600 kB; acceptable for a self-hosted LAN tool
   },
   resolve: {
     alias: {
