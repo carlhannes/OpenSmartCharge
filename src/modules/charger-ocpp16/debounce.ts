@@ -18,7 +18,7 @@ export function createDebouncedSetter(opts: {
 }): (value: number) => Promise<void> {
   const { minIntervalMs, now, schedule, write } = opts
   let lastWritten: number | undefined
-  let lastWriteAt = 0
+  let lastWriteAt = Number.NEGATIVE_INFINITY // NEGATIVE_INFINITY ensures the first call always writes immediately
   let pendingValue: number | undefined
   let pendingScheduled = false
 

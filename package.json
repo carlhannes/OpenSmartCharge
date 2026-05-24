@@ -4,10 +4,15 @@
   "description": "Lean, modular OCPP smart charging system",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/core/lifecycle.ts",
-    "build": "tsc",
+    "dev": "tsx watch src/core/lifecycle.ts",
+    "dev:ui": "vite --config src/ui/vite.config.ts --host",
+    "dev:all": "concurrently -n api,ui -c blue,magenta \"npm:dev\" \"npm:dev:ui\"",
+    "build": "tsc && vite build --config src/ui/vite.config.ts",
+    "build:server": "tsc",
+    "build:ui": "vite build --config src/ui/vite.config.ts",
+    "preview:ui": "vite preview --config src/ui/vite.config.ts",
     "start": "node dist/core/lifecycle.js",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p src/ui/tsconfig.json",
     "lint": "eslint src",
     "format": "prettier --write src",
     "sim:pulse": "node scripts/sim-pulse.mjs",
@@ -19,6 +24,10 @@
     "mqtt": "^5.10.1",
     "ocpp-rpc": "^2.2.1",
     "pino": "^9.6.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-router-dom": "^7.15.1",
+    "recharts": "^3.8.1",
     "yaml": "^2.7.1",
     "zod": "^3.24.4"
   },
@@ -26,10 +35,15 @@
     "@eslint/js": "^9.27.0",
     "@types/express": "^5.0.2",
     "@types/node": "^22.15.21",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "concurrently": "^9.2.1",
     "prettier": "^3.5.3",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
-    "typescript-eslint": "^8.32.1"
+    "typescript-eslint": "^8.32.1",
+    "vite": "^8.0.14"
   },
   "engines": {
     "node": ">=22.5"
