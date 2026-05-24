@@ -86,9 +86,12 @@ chargers:
   - name: garage
     type: ocpp16
     stationId: MYCHARGER01   # must match the chargepoint identifier configured in the charger
+    maxA: 16                 # optional, default 16 — maximum current this charger may deliver
 ```
 
 **Built-in types:** `ocpp16`
+
+`maxA` is the ceiling used by the loadpoint when issuing `SetChargingProfile`. The balancer (M3) may set a lower value based on circuit headroom, but it will never exceed `maxA`.
 
 ### `loadpoints[]`
 
@@ -99,9 +102,14 @@ loadpoints:
   - name: garage-loadpoint
     charger: garage           # must match a name in chargers[]
     vehicle: enyaq            # optional — must match a name in vehicles[]
-    tariff: home              # must match a name in tariffs[]
-    balancer: house-main      # must match a name in balancers[]
+    tariff: home              # optional — must match a name in tariffs[]
+    balancer: house-main      # optional — must match a name in balancers[]
     defaultMode: smart        # disabled | smart | fast
+    autoStart: true           # optional, default true — send RemoteStartTransaction when a
+                              # vehicle plugs in (Preparing status). Set false to require
+                              # app/RFID start on the charger itself.
+                              # On by default because many cheap OCPP chargers won't initiate
+                              # a transaction without it.
     targetSoc: 80             # default charge target (%)
     targetTime: "07:00"       # daily departure time (HH:MM, local time)
                               # if omitted, smart mode charges as cheaply as possible

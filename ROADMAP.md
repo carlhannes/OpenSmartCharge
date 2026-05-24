@@ -2,7 +2,7 @@
 
 Each milestone is independently shippable — M0 gives you docs and a typed skeleton; M1 gives you a working OCPP server; M2 adds pricing; and so on. You do not need all milestones for a useful system.
 
-## Milestone 0 — Foundation (current)
+## Milestone 0 — Foundation (shipped)
 
 **Goal:** Document the architecture, establish module contracts, wire up the project skeleton so every future milestone drops cleanly into the right slot.
 
@@ -19,17 +19,17 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 ---
 
-## Milestone 1 — Charger: OCPP 1.6J + control surface
+## Milestone 1 — Charger: OCPP 1.6J + control surface (shipped)
 
 **Goal:** A real OCPP 1.6J server that accepts charger connections, manages loadpoint state, and exposes the full control surface (REST + SSE + MQTT).
 
-- [ ] `src/modules/charger-ocpp16/` — WebSocket server using `ocpp-rpc`
-- [ ] Handlers: BootNotification, Heartbeat, Authorize (stubbed), StatusNotification, MeterValues, StartTransaction, StopTransaction, DataTransfer
-- [ ] Outbound: RemoteStart/Stop, Reset, SetChargingProfile (TxDefaultProfile/Absolute)
-- [ ] Transaction + meter value persistence to SQLite
-- [ ] Loadpoint state machine (`src/core/loadpoint.ts` fully wired) — mode persists across restarts
-- [ ] REST API (`/api/loadpoints*`, `/api/health`, `/events`)
-- [ ] MQTT publisher + cmd/* subscriber + Home Assistant MQTT discovery
+- [x] `src/modules/charger-ocpp16/` — WebSocket server using `ocpp-rpc`
+- [x] Handlers: BootNotification, Heartbeat, Authorize (stubbed), StatusNotification, MeterValues, StartTransaction, StopTransaction, DataTransfer
+- [x] Outbound: RemoteStart/Stop, Reset, SetChargingProfile (TxDefaultProfile/Absolute)
+- [x] Transaction + meter value persistence to SQLite
+- [x] Loadpoint state machine (`src/core/loadpoint.ts` fully wired) — mode persists across restarts
+- [x] REST API (`/api/loadpoints*`, `/api/health`, `/events`)
+- [x] MQTT publisher + cmd/* subscriber + Home Assistant MQTT discovery
 - [ ] `docker-compose.yml` updated with OSC service
 
 **Verification:**
@@ -41,7 +41,7 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 ---
 
-## Milestone 2 — Tariff: Elering (SE1–SE4)
+## Milestone 2 — Tariff: Elering (SE1–SE4) (next up)
 
 **Goal:** Fetch and cache day-ahead prices from the Elering API, expose them to the planner and UI.
 
@@ -59,11 +59,36 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 ---
 
+## Milestone 2.5 — MeterReader: Tibber Pulse (TypeScript port)
+
+**Goal:** Remove the Python `pulse_bridge.py` sidecar. Read the Tibber Pulse MQTT stream natively in OSC and expose it through a new `MeterReader` SDK module type — so future readers (P1IB, Shelly 3EM, …) are just another swappable module.
+
+- [ ] `src/sdk/meter-reader.ts` — new `MeterReader` / `MeterReaderModule` interface + `MeterSnapshot` type
+- [ ] `registerMeterReader` / `getMeterReaderModule` in `src/sdk/registry-api.ts`
+- [ ] `src/modules/meter-tibber-pulse/` — direct TypeScript port of `pulse_bridge.py`
+  - DSMR/OBIS regex parsers (1-0:1.7.0, 31/51/71.7.0)
+  - Periodic `batching_disable true` to keep Pulse un-batched
+  - In-process `latest()` + `onSnapshot()` API; no MQTT re-publish by default
+- [ ] `meterReaders[]` config section; optional `republishPrefix` for MQTT fan-out
+- [ ] Optional `meterReader: <name>` field on `balancers[]` — in-process path preferred over raw MQTT topics
+- [ ] `scripts/sim-pulse.mjs` — replays a recorded DSMR frame for testing without real hardware
+- [ ] `GET /api/meters/:name` REST endpoint — latest snapshot + health
+- [ ] README updated: native Pulse support, sidecar no longer required
+
+**Verification:**
+1. Real Tibber Pulse on LAN → `GET /api/meters/house-pulse` returns fresh `powerW` + `i{1,2,3}A`.
+2. Kill the Pulse → health flips to `degraded` after `staleAfterSec`; `latest()` keeps returning last value with `timestamp`.
+3. `republishPrefix: house` set → `mosquitto_sub -t 'house/#' -v` shows the same topics `pulse_bridge.py` used to publish.
+4. M3 balancer wired to `meterReader: house-pulse` → headroom computed from in-process snapshots.
+
+---
+
 ## Milestone 3 — Balancer: MQTT-circuit
 
 **Goal:** Dynamic load balancing from live household meter data, with a well-defined degradation path for meter failures.
 
 - [ ] `src/modules/balancer-mqtt-circuit/` — subscribes to `{prefix}/i1_a`, `i2_a`, `i3_a`
+- [ ] `meterReader: <name>` link path — balancer reads from in-process MeterReader by preference, falls back to `meterTopicPrefix` MQTT subscription when not set (backwards compatible)
 - [ ] Control loop (default 15 s): `freeAmps = mainBreakerA − max(phaseCurrents) + chargerCurrents`
 - [ ] Distributes `freeAmps` across active loadpoints respecting modes
 - [ ] Smart mode: respects tariff windows (no charging in expensive hours unless needed for departure target)
