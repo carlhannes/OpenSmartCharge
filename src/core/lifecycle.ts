@@ -338,43 +338,63 @@ async function main() {
 
   // Tick function for a specific balancer — called on the interval and on mode changes.
   const lastTickByBalancer = new Map<string, { allocations: Record<string, number>; freeAmps: number }>()
+  const tickSlots = new Map<string, { running: boolean; rerun: boolean }>()
 
   async function runBalancerTick(balancerName: string): Promise<void> {
-    const balancer = balancers.get(balancerName)
-    if (!balancer) return
+    // Concurrency guard: if a tick is already running for this balancer, mark a rerun and
+    // return. The in-flight tick will re-invoke on completion so the latest state is applied.
+    const slot = tickSlots.get(balancerName) ?? { running: false, rerun: false }
+    if (slot.running) {
+      slot.rerun = true
+      tickSlots.set(balancerName, slot)
+      return
+    }
+    slot.running = true
+    tickSlots.set(balancerName, slot)
 
-    const lpCfgs = config.loadpoints.filter((l) => l.balancer === balancerName)
-    const snaps = await Promise.all(
-      lpCfgs.map(async (lpCfg) => {
-        const state = loadpointStates.get(lpCfg.name)!
-        const should = state.mode === 'smart' ? await computeShouldChargeNow(lpCfg.name) : undefined
-        const tariff = lpCfg.tariff ? tariffs.get(lpCfg.tariff) : undefined
-        const pricesAvailable = !!tariff && tariff.health() !== 'unavailable'
-        return buildSnapshot(state, lpCfg.vehicle, should, pricesAvailable)
-      }),
-    )
+    try {
+      const balancer = balancers.get(balancerName)
+      if (!balancer) return
 
-    const out = await balancer.tick({ loadpoints: snaps, timestamp: new Date() })
+      const lpCfgs = config.loadpoints.filter((l) => l.balancer === balancerName)
+      const snaps = await Promise.all(
+        lpCfgs.map(async (lpCfg) => {
+          const state = loadpointStates.get(lpCfg.name)!
+          const should = state.mode === 'smart' ? await computeShouldChargeNow(lpCfg.name) : undefined
+          const tariff = lpCfg.tariff ? tariffs.get(lpCfg.tariff) : undefined
+          const pricesAvailable = !!tariff && tariff.health() !== 'unavailable'
+          return buildSnapshot(state, lpCfg.vehicle, should, pricesAvailable)
+        }),
+      )
 
-    for (const [lpId, amps] of out.allocations) {
-      const charger = chargerLimitMap.get(lpId)
-      if (charger) {
-        await charger.setCurrentLimit(amps).catch(() => {})
-        lastCommandedA.set(lpId, amps)
+      const out = await balancer.tick({ loadpoints: snaps, timestamp: new Date() })
+
+      for (const [lpId, amps] of out.allocations) {
+        const charger = chargerLimitMap.get(lpId)
+        if (charger) {
+          await charger.setCurrentLimit(amps).catch(() => {})
+          lastCommandedA.set(lpId, amps)
+        }
+      }
+
+      const allocRecord = Object.fromEntries(out.allocations)
+      const freeAmps = out.freeAmps ?? 0
+      lastTickByBalancer.set(balancerName, { allocations: allocRecord, freeAmps })
+
+      events.emit('balancer.tick', {
+        name: balancerName,
+        allocations: allocRecord,
+        freeAmps,
+        health: balancer.health(),
+      })
+      updateHealth(health, balancerName, balancer.health())
+    } finally {
+      slot.running = false
+      if (slot.rerun) {
+        slot.rerun = false
+        void runBalancerTick(balancerName)
       }
     }
-
-    const allocRecord = Object.fromEntries(out.allocations)
-    const freeAmps = out.freeAmps ?? 0
-    lastTickByBalancer.set(balancerName, { allocations: allocRecord, freeAmps })
-
-    events.emit('balancer.tick', {
-      name: balancerName,
-      allocations: allocRecord,
-      freeAmps,
-      health: balancer.health(),
-    })
-    updateHealth(health, balancerName, balancer.health())
   }
 
   // HTTP server (REST + SSE)

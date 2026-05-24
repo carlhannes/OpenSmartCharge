@@ -1,6 +1,7 @@
 import type { LoadpointSnapshot } from '../../sdk/balancer.js'
 
-const OCPP_MIN_A = 6 // per-loadpoint minimum below which we round to 0
+const OCPP_MIN_A = 6  // per-loadpoint minimum below which we round to 0
+const HYSTERESIS_A = 1 // dead-band: ignore allocation changes within ±1A of last commanded value
 
 export function allocate(input: {
   loadpoints: LoadpointSnapshot[]
@@ -62,7 +63,11 @@ export function allocate(input: {
   for (const lp of fast) {
     const give = Math.min(lp.maxCurrentA, remaining)
     // IEC 61851 §A.4.1.1: minimum pilot signal current is 6 A; round sub-minimum to 0.
-    const final = give < OCPP_MIN_A ? 0 : give
+    // Apply hysteresis before the floor: if the candidate is within ±HYSTERESIS_A of the last
+    // commanded value, keep the existing value to avoid micro-oscillation on small load wobble.
+    const prev = lp.commandedA
+    const stable = prev !== undefined && Math.abs(give - prev) <= HYSTERESIS_A ? prev : give
+    const final = stable < OCPP_MIN_A ? 0 : stable
     result.set(lp.id, final)
     remaining -= final
   }
@@ -72,7 +77,9 @@ export function allocate(input: {
     const share = Math.floor(remaining / smart.length)
     for (const lp of smart) {
       const give = Math.min(share, lp.maxCurrentA)
-      result.set(lp.id, give < OCPP_MIN_A ? 0 : give)
+      const prev = lp.commandedA
+      const stable = prev !== undefined && Math.abs(give - prev) <= HYSTERESIS_A ? prev : give
+      result.set(lp.id, stable < OCPP_MIN_A ? 0 : stable)
     }
   }
 

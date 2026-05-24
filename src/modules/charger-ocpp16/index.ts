@@ -2,6 +2,7 @@ import { registerCharger } from '../../sdk/registry-api.js'
 import type { Charger, ChargerStatus } from '../../sdk/charger.js'
 import type { ModuleHealth } from '../../sdk/types.js'
 import { OcppServer } from './server.js'
+import { createDebouncedSetter } from './debounce.js'
 
 // Singleton OCPP server shared across all ocpp16 charger instances.
 // The server is created on first module load; subsequent charger factories
@@ -21,6 +22,7 @@ registerCharger({
       stationId: string
       maxA?: number
       autoStart?: boolean
+      minWriteIntervalSec?: number
     }
 
     const stationId = config.stationId
@@ -32,6 +34,13 @@ registerCharger({
     }
 
     sharedServer.registerStation(stationId, config.autoStart ?? true)
+
+    const debouncedSet = createDebouncedSetter({
+      minIntervalMs: (config.minWriteIntervalSec ?? 10) * 1000,
+      now: Date.now.bind(Date),
+      schedule: (fn, delay) => setTimeout(fn, delay),
+      write: (amps) => sharedServer!.setLimit(stationId, amps),
+    })
 
     const charger: Charger = {
       get id() { return stationId },
@@ -46,7 +55,7 @@ registerCharger({
 
       async setCurrentLimit(amps: number) {
         const limit = Math.max(0, Math.min(amps, maxA))
-        await sharedServer!.setLimit(stationId, limit)
+        await debouncedSet(limit)
       },
 
       health(): ModuleHealth {
