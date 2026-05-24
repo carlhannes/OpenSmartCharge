@@ -32,23 +32,54 @@ export default function(api) {
 
 `src/core/plugin-loader.ts` scans `plugins/` on boot and calls each file's default export with an `api` object containing all five `registerXxx` functions. `opensmartcharge/sdk` is **not** a published npm package — plugins receive the API via this parameter, not from an import path.
 
-## Quickstart
+## Worked example: writing a tariff-static plugin
 
-A complete working plugin:
+This walks through a complete plugin from an empty folder to a working tariff module. It returns a configurable flat rate for every slot — no HTTP, no database, no scheduling. That makes it the smallest possible thing that satisfies the `Tariff` interface and shows every pattern you need for a real plugin.
+
+### 1. Create the plugin file
+
+```
+plugins/
+  tariff-static.js     ← one file, drop it here
+```
+
+### 2. Write the plugin
 
 ```js
-// plugins/my-tariff.js
+// plugins/tariff-static.js
 export default function(api) {
   api.registerTariff({
-    type: 'my-tariff',
+    type: 'static',
+
     create(cfg, ctx) {
+      // Each module validates its own config. `cfg` is typed as `unknown` —
+      // the core config loader passes your osc.yaml fields through unchanged.
+      const { name, pricePerKWh, currency = 'SEK' } = cfg
+      if (!name || typeof pricePerKWh !== 'number') {
+        throw new Error('tariff-static: config must have name and pricePerKWh (number)')
+      }
+
       return {
-        id: cfg.name,
-        start: async () => {},
-        stop:  async () => {},
-        health: () => 'ok',
+        get id() { return name },
+
+        async start() {
+          ctx.log.info({ name, pricePerKWh }, 'tariff-static ready')
+        },
+
+        async stop() {},
+
+        health() { return 'ok' },
+
         async prices(from, to) {
-          return [{ start: from, end: to, pricePerKWh: 0.12, currency: 'SEK' }]
+          // Generate 15-minute slots covering [from, to)
+          const slots = []
+          const cursor = new Date(Math.ceil(from.getTime() / (15 * 60_000)) * (15 * 60_000))
+          while (cursor < to) {
+            const slotEnd = new Date(cursor.getTime() + 15 * 60_000)
+            slots.push({ start: new Date(cursor), end: slotEnd, pricePerKWh, currency })
+            cursor.setTime(slotEnd.getTime())
+          }
+          return slots
         },
       }
     },
@@ -56,15 +87,85 @@ export default function(api) {
 }
 ```
 
-Then in `osc.yaml`:
+### 3. Wire it in `osc.yaml`
 
 ```yaml
 tariffs:
-  - name: mine
-    type: my-tariff
+  - name: flat-rate
+    type: static
+    pricePerKWh: 0.15   # EUR/kWh; passed through cfg as-is
+    # currency: EUR     # optional, defaults to SEK in the plugin above
 ```
 
-Start OSC — it scans `./plugins/*.js` at startup and loads your module automatically.
+The `type: static` must match the string you pass to `api.registerTariff({ type: 'static', … })`.
+
+### 4. Verify it loaded
+
+Start OSC (`npm run dev` or `npm start`) and check health:
+
+```bash
+curl -s http://localhost:8080/api/health | jq '."tariff-flat-rate"'
+# → "ok"
+```
+
+### 5. Use it
+
+```bash
+curl -s 'http://localhost:8080/api/tariffs/flat-rate/prices?from=2025-06-01T00:00:00Z&to=2025-06-01T02:00:00Z' | jq '.[0]'
+# → { "start": "2025-06-01T00:00:00.000Z", "end": "2025-06-01T00:15:00.000Z",
+#     "pricePerKWh": 0.15, "currency": "SEK" }
+```
+
+### Config validation pattern
+
+The core config schema in `src/core/config.ts` uses `.catchall(z.unknown())` for module arrays — every field beyond `name` and `type` passes through opaquely as `cfg: unknown`. Your module is responsible for validating what it needs. The canonical pattern (from `tariff-elering/index.ts:13-17`):
+
+```js
+const { name, zone } = cfg  // cast to expected shape
+if (!name || !zone) {
+  throw new Error('tariff-elering: config must have name and zone')
+}
+```
+
+Throw a descriptive `Error` from `create()` on bad config — OSC logs it and aborts startup cleanly. Don't silently default missing required fields.
+
+### Going further
+
+Once you need HTTP, scheduling, or persistence, `src/modules/tariff-elering/` is the reference:
+
+| Feature | File | Key pattern |
+|---|---|---|
+| Periodic fetch | `index.ts` | `setTimeout` + `clearTimeout` in `start`/`stop`; state captured by closure |
+| `ctx.fetch` jitter | `index.ts:57` | Use `ctx.fetch` for scheduled calls; `globalThis.fetch` for immediate startup calls |
+| SQLite persistence | `persistence.ts` | `ctx.db.prepare('INSERT OR REPLACE …').run(…)` in `start()`; `CREATE TABLE IF NOT EXISTS` once |
+| Time-zone-safe scheduling | `scheduler.ts` | DST-safe Stockholm-time math; returns `{ delayMs, reason }` |
+| Tri-state health | `index.ts` | `computeHealth()` — `'ok'` / `'degraded'` (stale cache) / `'unavailable'` (no data at all) |
+
+## Promoting a plugin to first-party
+
+When your plugin is ready to live in the OSC repo, the only changes are:
+
+1. Move `plugins/tariff-static.js` → `src/modules/tariff-static/index.ts` (rewrite in TS, change the API parameter to a direct import).
+2. Change the registration call:
+
+```ts
+// Before (plugin)
+export default function(api) {
+  api.registerTariff({ type: 'static', create(cfg, ctx) { … } })
+}
+
+// After (first-party)
+import { registerTariff } from '../../sdk/registry-api.js'
+registerTariff({ type: 'static', create(cfg, ctx) { … } })
+```
+
+3. Add one import line to `src/core/lifecycle.ts` (the side-effect import triggers registration):
+
+```ts
+import '../modules/tariff-static/index.js'
+```
+
+The `create(cfg, ctx)` factory itself is unchanged. See `src/core/lifecycle.ts:1-6` for the first-party import block.
 
 ## The five interfaces
 
