@@ -7,6 +7,7 @@ import type { EventBus } from '../core/events.js'
 import { getHealthSummary } from '../core/health.js'
 import type { HealthMap } from '../core/health.js'
 import type { ChargeMode } from '../core/config.js'
+import type { Tariff } from '../sdk/tariff.js'
 
 export interface ApiDeps {
   db: DatabaseSync
@@ -14,6 +15,7 @@ export interface ApiDeps {
   health: HealthMap
   loadpoints: Map<string, LoadpointState>
   chargers: Map<string, { setCurrentLimit(a: number): Promise<void> }>
+  tariffs: Map<string, Tariff>
 }
 
 export function createApiRouter(deps: ApiDeps): Router {
@@ -87,6 +89,21 @@ export function createApiRouter(deps: ApiDeps): Router {
     deps.events.emit('loadpoint.target', { name: state.name, targetSoc: soc, targetTime: time })
 
     res.json(state)
+  })
+
+  // GET /api/tariffs/:name/prices?from=<ISO>&to=<ISO>
+  router.get('/tariffs/:name/prices', (req: Request, res: Response) => {
+    const tariff = deps.tariffs.get(String(req.params.name))
+    if (!tariff) {
+      res.status(404).json({ error: 'tariff not found' })
+      return
+    }
+    const from = req.query.from ? new Date(String(req.query.from)) : new Date()
+    const to = req.query.to ? new Date(String(req.query.to)) : new Date(Date.now() + 48 * 3600_000)
+    tariff
+      .prices(from, to)
+      .then((slots) => res.json(slots))
+      .catch(() => res.status(502).json({ error: 'failed to retrieve prices' }))
   })
 
   // GET /api/health

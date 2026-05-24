@@ -9,6 +9,8 @@ export interface TariffSlot {
 
 export interface Tariff {
   readonly id: string
+  start(): Promise<void>
+  stop(): Promise<void>
   health(): ModuleHealth
   prices(from: Date, to: Date): Promise<TariffSlot[]>
 }

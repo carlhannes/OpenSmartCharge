@@ -4,6 +4,7 @@ import type { EventBus } from '../core/events.js'
 import type { LoadpointState } from '../core/loadpoint.js'
 import type { HealthMap } from '../core/health.js'
 import type { ChargeMode } from '../core/config.js'
+import type { Tariff } from '../sdk/tariff.js'
 import { publishHaDiscovery } from './ha-discovery.js'
 
 interface MqttConfig {
@@ -18,6 +19,7 @@ interface MqttConfig {
 export interface MqttBridgeDeps {
   events: EventBus
   loadpoints: Map<string, LoadpointState>
+  tariffs: Map<string, Tariff>
   health: HealthMap
   onModeChange(name: string, mode: ChargeMode): Promise<void>
   onTargetChange(name: string, soc?: number, time?: string): Promise<void>
@@ -62,6 +64,10 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
     if (config.homeAssistantDiscovery) {
       publishHaDiscovery(client, [...deps.loadpoints.keys()], prefix)
     }
+
+    // Publish current slot prices for all configured tariffs
+    void publishTariffNow(client, prefix, deps.tariffs)
+    scheduleHourlyTariffPublish(client, prefix, deps.tariffs)
   })
 
   client.on('error', (err) => {
@@ -97,6 +103,13 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
     }
   })
 
+  // Re-publish current tariff price whenever new data lands
+  deps.events.on('tariff.updated', (payload) => {
+    const p = payload as { name: string }
+    const tariff = deps.tariffs.get(p.name)
+    if (tariff) void publishOneTariffNow(client, prefix, p.name, tariff)
+  })
+
   // Mirror internal events to MQTT
   deps.events.on('loadpoint.state', (payload) => {
     const p = payload as { name: string }
@@ -124,4 +137,41 @@ function publishState(client: mqtt.MqttClient, prefix: string, state: LoadpointS
   client.publish(`${lpPrefix}/current_a`, String(state.currentA), { retain: true })
   client.publish(`${lpPrefix}/energy_kwh`, String(state.sessionEnergyKWh), { retain: true })
   client.publish(`${lpPrefix}/state`, JSON.stringify(state), { retain: true })
+}
+
+async function publishOneTariffNow(
+  client: mqtt.MqttClient,
+  prefix: string,
+  name: string,
+  tariff: Tariff,
+): Promise<void> {
+  const now = new Date()
+  const slots = await tariff.prices(now, new Date(now.getTime() + 3600_000))
+  const price = slots[0]?.pricePerKWh
+  if (price !== undefined) {
+    client.publish(`${prefix}/tariffs/${name}/now`, String(price), { retain: true })
+  }
+}
+
+async function publishTariffNow(
+  client: mqtt.MqttClient,
+  prefix: string,
+  tariffs: Map<string, Tariff>,
+): Promise<void> {
+  for (const [name, tariff] of tariffs) {
+    await publishOneTariffNow(client, prefix, name, tariff)
+  }
+}
+
+function scheduleHourlyTariffPublish(
+  client: mqtt.MqttClient,
+  prefix: string,
+  tariffs: Map<string, Tariff>,
+): void {
+  // Re-publish at the top of each hour as the "now" slot advances
+  const msUntilNextHour = 3600_000 - (Date.now() % 3600_000)
+  setTimeout(() => {
+    void publishTariffNow(client, prefix, tariffs)
+    setInterval(() => void publishTariffNow(client, prefix, tariffs), 3600_000)
+  }, msUntilNextHour)
 }

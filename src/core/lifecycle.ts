@@ -1,5 +1,6 @@
 // First-party module imports — explicit so the dependency graph is clear
 import '../modules/charger-ocpp16/index.js'
+import '../modules/tariff-elering/index.js'
 
 import { loadConfig } from './config.js'
 import { openDb } from './db.js'
@@ -8,11 +9,12 @@ import { loadPlugins } from './plugin-loader.js'
 import { loadLoadpointStates, setLoadpointMode, setLoadpointTarget } from './loadpoint.js'
 import { createEventBus } from './events.js'
 import { createHealthMap, updateHealth } from './health.js'
-import { getChargerModule } from '../sdk/registry-api.js'
+import { getChargerModule, getTariffModule } from '../sdk/registry-api.js'
 import { getOcppServer } from '../modules/charger-ocpp16/index.js'
 import { startServer } from '../server/index.js'
 import { startMqttBridge } from '../server/mqtt-bridge.js'
 import type { Charger } from '../sdk/charger.js'
+import type { Tariff } from '../sdk/tariff.js'
 import type { ChargeMode } from './config.js'
 
 const CONFIG_PATH = process.env.OSC_CONFIG ?? './osc.yaml'
@@ -34,8 +36,17 @@ async function main() {
 
   await loadPlugins(PLUGINS_DIR, log)
 
+  // ctx.fetch is a drop-in fetch() replacement with 0-120s random jitter.
+  // Modules use it for scheduled outbound HTTP calls to prevent all instances
+  // from hitting the same external endpoint at the same millisecond.
+  const jitterFetch: typeof globalThis.fetch = async (input, init) => {
+    const jitter = Math.floor(Math.random() * 120_000)
+    await new Promise<void>((resolve) => setTimeout(resolve, jitter))
+    return fetch(input, init)
+  }
+
   // Build charger lookup map by charger name
-  const ctx = { db, events, log }
+  const ctx = { db, events, log, fetch: jitterFetch }
   const chargers = new Map<string, Charger>()
 
   for (const chargerCfg of config.chargers) {
@@ -50,6 +61,27 @@ async function main() {
     updateHealth(health, chargerCfg.name, charger.health())
     log.info({ charger: chargerCfg.name, type: chargerCfg.type }, 'charger module created')
   }
+
+  // Instantiate tariff modules
+  const tariffs = new Map<string, Tariff>()
+  for (const tariffCfg of config.tariffs) {
+    const mod = getTariffModule(tariffCfg.type)
+    if (!mod) {
+      log.warn({ type: tariffCfg.type, name: tariffCfg.name }, 'no module registered for tariff type')
+      continue
+    }
+    const tariff = mod.create(tariffCfg, ctx)
+    await tariff.start()
+    tariffs.set(tariffCfg.name, tariff)
+    updateHealth(health, tariffCfg.name, tariff.health())
+    log.info({ tariff: tariffCfg.name, type: tariffCfg.type }, 'tariff module created')
+  }
+
+  events.on('tariff.updated', (payload) => {
+    const p = payload as { name: string }
+    const t = tariffs.get(p.name)
+    if (t) updateHealth(health, p.name, t.health())
+  })
 
   // Determine maxA per loadpoint from the charger config
   const loadpointInits = config.loadpoints.map((lp) => {
@@ -125,6 +157,7 @@ async function main() {
     health,
     loadpoints: loadpointStates,
     chargers: chargerLimitMap,
+    tariffs,
   })
   log.info({ port: config.site.port }, 'HTTP server listening')
 
@@ -160,6 +193,7 @@ async function main() {
     startMqttBridge(config.mqtt, {
       events,
       loadpoints: loadpointStates,
+      tariffs,
       health,
       onModeChange: handleModeChange,
       onTargetChange: handleTargetChange,
@@ -173,6 +207,7 @@ async function main() {
     log.info('shutting down gracefully')
     httpServer.close()
     if (ocppServer) void ocppServer.close()
+    for (const t of tariffs.values()) void t.stop()
     db.close()
     process.exit(0)
   }

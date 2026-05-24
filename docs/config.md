@@ -34,10 +34,17 @@ A list of tariff sources. Each gets a `name` used by loadpoints.
 tariffs:
   - name: home
     type: elering
-    zone: SE3   # SE1 | SE2 | SE3 | SE4
+    zone: SE3   # SE1 | SE2 | SE3 | SE4 (also EE | LV | LT | FI)
 ```
 
 **Built-in types:** `elering`
+
+**Elering specifics:**
+
+- Fetches from the [Elering Nordpool API](https://dashboard.elering.ee/api) — no API key required.
+- Prices are stored in **EUR/kWh** (Elering returns EUR/MWh; OSC divides by 1000). All zones are returned in one API call; OSC filters to your configured zone.
+- **Fetch schedule**: Nordpool publishes next-day prices around 13:00 CET. OSC waits until **13:15 Europe/Stockholm** before trying to fetch tomorrow's data. If the fetch fails, OSC retries at +30 min, then +1 h, +2 h, +4 h, … until midnight Stockholm, then gives up for the day and retries tomorrow at 13:15. Don't be alarmed if `health` is `degraded` between midnight and 13:15 — this is expected.
+- Scheduled fetches use `ctx.fetch` (0–120 s random jitter) so that multiple OSC instances on the same network don't all hit the Elering API at the same millisecond.
 
 ### `balancers[]`
 

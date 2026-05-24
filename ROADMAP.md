@@ -41,16 +41,16 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 ---
 
-## Milestone 2 — Tariff: Elering (SE1–SE4) (next up)
+## Milestone 2 — Tariff: Elering (SE1–SE4) (shipped)
 
 **Goal:** Fetch and cache day-ahead prices from the Elering API, expose them to the planner and UI.
 
-- [ ] `src/modules/tariff-elering/` — daily fetch, retry with exponential backoff
-- [ ] Hour → 15-minute slot expansion (4 slots per hour, same price within the hour)
-- [ ] SQLite cache keyed by `(zone, slotStart)` — survives restart and internet outages
-- [ ] Health: `ok` → `degraded` (serving yesterday's data) → `unavailable` (no data at all)
-- [ ] `GET /api/tariffs/:name/prices?from=&to=` endpoint
-- [ ] Planner wired to use tariff when available
+- [x] `src/modules/tariff-elering/` — smart daily fetch anchored to 13:15 Stockholm, exponential backoff on failure
+- [x] Hourly slot storage in SQLite keyed by `(zone, slot_start)` — survives restart and internet outages
+- [x] Health: `ok` → `degraded` (past publish window, no tomorrow data) → `unavailable` (no future slots cached)
+- [x] `GET /api/tariffs/:name/prices?from=&to=` endpoint — returns `TariffSlot[]` in EUR/kWh
+- [x] `osc/tariffs/<name>/now` MQTT (retained) — re-published on new data and at the top of each hour
+- [x] `ctx.fetch` in `ModuleCtx` — drop-in `fetch()` replacement with 0–120 s jitter for thundering-herd prevention
 
 **Verification:**
 1. Normal fetch: prices for today appear in `/api/tariffs/home/prices`.
@@ -59,7 +59,7 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 ---
 
-## Milestone 2.5 — MeterReader: Tibber Pulse (TypeScript port)
+## Milestone 2.5 — MeterReader: Tibber Pulse (TypeScript port) (next up)
 
 **Goal:** Remove the Python `pulse_bridge.py` sidecar. Read the Tibber Pulse MQTT stream natively in OSC and expose it through a new `MeterReader` SDK module type — so future readers (P1IB, Shelly 3EM, …) are just another swappable module.
 
