@@ -142,6 +142,17 @@ async function main() {
     log.info({ vehicle: vCfg.name, type: vCfg.type }, 'vehicle module created')
   }
 
+  // Warn about loadpoints that reference a vehicle name no module provided.
+  // Likely cause: typo in osc.yaml; falls back to duty-cycle planning silently.
+  for (const lpCfg of config.loadpoints) {
+    if (lpCfg.vehicle && !vehicles.has(lpCfg.vehicle)) {
+      log.warn(
+        { loadpoint: lpCfg.name, vehicle: lpCfg.vehicle },
+        'loadpoint references unknown vehicle — SoC integration disabled for this loadpoint',
+      )
+    }
+  }
+
   // Instantiate balancer modules
   const balancers = new Map<string, Balancer>()
   for (const balancerCfg of config.balancers) {
@@ -304,7 +315,7 @@ async function main() {
     }
     if (currentSoc !== undefined && capacity && state.targetSoc) {
       const remaining = Math.max(0, state.targetSoc - currentSoc)
-      requiredKWh = Math.max(0.1, (remaining / 100) * capacity / 0.92)
+      requiredKWh = (remaining / 100) * capacity / 0.92
       ctx.log.debug({ lpName, currentSoc, targetSoc: state.targetSoc, capacity, requiredKWh }, 'skoda SoC-based requiredKWh')
     } else {
       // Fallback: 40%-duty-cycle heuristic when vehicle API unavailable
