@@ -19,7 +19,9 @@
     "sim:charger": "node scripts/sim-charger.mjs",
     "backup": "node scripts/backup.mjs",
     "restore": "node scripts/restore.mjs",
-    "test": "node --import tsx/esm --test src/modules/balancer-mqtt-circuit/allocator.test.ts src/core/planner.test.ts src/modules/charger-ocpp16/debounce.test.ts"
+    "smoke": "node scripts/smoke.mjs",
+    "test": "node --import tsx/esm --test src/modules/balancer-mqtt-circuit/allocator.test.ts src/core/planner.test.ts src/modules/charger-ocpp16/debounce.test.ts",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "cheerio": "^1.0.0",

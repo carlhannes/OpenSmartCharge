@@ -49,7 +49,7 @@ npm start         # serves backend + bundled UI on port 8080
 
 Point your OCPP charger at `ws://<your-host>:8080/ocpp`. The UI is at `http://localhost:5173` in dev or `http://localhost:8080` in production.
 
-**Before opening a PR:** run `npm run build && npm start` and verify the production UI matches what you see in dev.
+**Before opening a PR:** run `npm run build && npm start` and verify the production UI matches what you see in dev. With a Mosquitto broker running (`docker compose up -d mosquitto`), also run `npm run smoke` to verify the OCPP+REST+MQTT integration end-to-end.
 
 ## Architecture
 
