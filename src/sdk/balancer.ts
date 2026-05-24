@@ -13,6 +13,10 @@ export interface LoadpointSnapshot {
   targetSoc?: number
   targetTime?: Date
   pricesAvailable: boolean
+  /** Per-loadpoint current ceiling derived from charger config. */
+  maxCurrentA: number
+  /** Set by lifecycle for smart-mode loadpoints: false = expensive slot, skip charging. Undefined = charge. */
+  shouldChargeNow?: boolean
 }
 
 export interface BalancerInput {
@@ -26,6 +30,8 @@ export interface BalancerOutput {
 
 export interface Balancer {
   readonly id: string
+  start(): Promise<void>
+  stop(): Promise<void>
   health(): ModuleHealth
   tick(input: BalancerInput): Promise<BalancerOutput>
 }

@@ -117,6 +117,8 @@ Reference: `src/modules/tariff-elering/`
 ```ts
 interface Balancer {
   readonly id: string
+  start(): Promise<void>
+  stop(): Promise<void>
   health(): ModuleHealth
   tick(input: BalancerInput): Promise<BalancerOutput>
 }
@@ -133,7 +135,17 @@ interface BalancerOutput {
 
 `tick` is called every `intervalSec` seconds. It must always return a valid `allocations` map — never throw. If meter data is stale or unavailable, return a safe fallback current (not zero, unless the loadpoint mode is `disabled`).
 
-The `LoadpointSnapshot` includes `mode`, `connected`, `charging`, `estimatedSoc`, `targetSoc`, `targetTime`, and `pricesAvailable`. Use them to decide who gets how many amps.
+The `LoadpointSnapshot` includes these notable fields:
+
+| Field | Description |
+|---|---|
+| `mode` | `disabled` / `smart` / `fast` |
+| `maxCurrentA` | Per-loadpoint ceiling from charger config. Never exceed it. |
+| `shouldChargeNow?` | Set by lifecycle for smart-mode loadpoints. `false` = expensive slot, allocate 0. `undefined` = charge. |
+| `pricesAvailable` | Whether the tariff module has data. Informational. |
+| `currentA` | What the charger is currently drawing. Add this back before re-distributing headroom (credit-back). |
+
+Lifecycle sets `shouldChargeNow=false` for smart-mode loadpoints in expensive tariff slots; the balancer allocates 0 to those and distributes freed headroom to the remaining loadpoints.
 
 ### `Vehicle` (`src/sdk/vehicle.ts`)
 
