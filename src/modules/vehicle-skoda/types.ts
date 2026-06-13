@@ -13,7 +13,8 @@ export function parseConfig(raw: unknown): SkodaCfg {
   if (typeof r.name !== 'string') throw new Error('vehicle-skoda: missing name')
   if (typeof r.username !== 'string') throw new Error('vehicle-skoda: missing username')
   if (typeof r.password !== 'string') throw new Error('vehicle-skoda: missing password')
-  if (typeof r.vin !== 'string' || r.vin.length !== 17) throw new Error('vehicle-skoda: vin must be 17 chars')
+  if (typeof r.vin !== 'string' || r.vin.length !== 17)
+    throw new Error('vehicle-skoda: vin must be 17 chars')
   return {
     name: r.name,
     username: r.username,

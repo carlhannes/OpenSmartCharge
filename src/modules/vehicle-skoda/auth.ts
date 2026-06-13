@@ -109,7 +109,10 @@ function pkce(): { verifier: string; challenge: string } {
   return { verifier, challenge }
 }
 
-export function createAuthClient(cfg: SkodaCfg, ctx: { db: DatabaseSync; log: Logger }): AuthClient {
+export function createAuthClient(
+  cfg: SkodaCfg,
+  ctx: { db: DatabaseSync; log: Logger },
+): AuthClient {
   let tokens: TokenSet | null = null
   let authFailures = 0
   let firstFailureAt = 0
@@ -130,7 +133,9 @@ export function createAuthClient(cfg: SkodaCfg, ctx: { db: DatabaseSync; log: Lo
       u = new URL(finalUrl)
     } catch {
       ctx.log.debug({ finalUrl }, 'skoda auth: could not parse redirect URL')
-      throw new Error('Skoda auth: unexpected redirect URL (URL omitted from log; run with LOG_LEVEL=debug)')
+      throw new Error(
+        'Skoda auth: unexpected redirect URL (URL omitted from log; run with LOG_LEVEL=debug)',
+      )
     }
     // evcc: "if u.Fragment != '' { u.RawQuery = u.Fragment }"
     const searchStr = u.hash ? u.hash.slice(1) : u.search.slice(1)
@@ -169,18 +174,26 @@ export function createAuthClient(cfg: SkodaCfg, ctx: { db: DatabaseSync; log: Lo
 
   // New login flow (VW Group Identity 2023+): single POST with username+password+state.
   // Ported from evcc vwidentity/endpoint.go loginNew().
-  async function loginNew(html: string, username: string, password: string, jar: CookieJar): Promise<string> {
+  async function loginNew(
+    html: string,
+    username: string,
+    password: string,
+    jar: CookieJar,
+  ): Promise<string> {
     const $ = load(html)
     const stateVal = $('input[name="state"]').first().attr('value')
     if (!stateVal) throw new Error('Skoda login (new flow): no state input found in page')
 
     const formBody = new URLSearchParams({ username, password, state: stateVal }).toString()
-    const { finalUrl } = await navigate(`${IDENTITY_BASE}/u/login?state=${encodeURIComponent(stateVal)}`, {
-      method: 'POST',
-      body: formBody,
-      contentType: 'application/x-www-form-urlencoded',
-      jar,
-    })
+    const { finalUrl } = await navigate(
+      `${IDENTITY_BASE}/u/login?state=${encodeURIComponent(stateVal)}`,
+      {
+        method: 'POST',
+        body: formBody,
+        contentType: 'application/x-www-form-urlencoded',
+        jar,
+      },
+    )
 
     if (finalUrl.includes('/consent/marketing/')) return skipMarketingConsent(finalUrl, jar)
     return parseCode(finalUrl)
@@ -189,7 +202,12 @@ export function createAuthClient(cfg: SkodaCfg, ctx: { db: DatabaseSync; log: Lo
   // Legacy login flow (older VW Group Identity): separate identifier + authenticate steps.
   // Parses the window._IDK JavaScript variable to extract CSRF token and form action.
   // Ported from evcc vwidentity/endpoint.go loginLegacy() + forms.go parseCredentials().
-  async function loginLegacy(html: string, username: string, password: string, jar: CookieJar): Promise<string> {
+  async function loginLegacy(
+    html: string,
+    username: string,
+    password: string,
+    jar: CookieJar,
+  ): Promise<string> {
     const $ = load(html)
     const form = $('form#emailPasswordForm').first()
     const action = form.attr('action') ?? ''
@@ -211,13 +229,17 @@ export function createAuthClient(cfg: SkodaCfg, ctx: { db: DatabaseSync; log: Lo
 
     // Step 2: Extract window._IDK JSON for CSRF token and form action
     const idkMatch = /window\._IDK\s*=\s*(.*?)[;<]/s.exec(credHtml)
-    if (!idkMatch) throw new Error('Skoda login (legacy): window._IDK not found in credentials page')
+    if (!idkMatch)
+      throw new Error('Skoda login (legacy): window._IDK not found in credentials page')
 
     let idkJson = idkMatch[1].replace(/'/g, '"')
     idkJson = idkJson.replace(/\s(\w+)\s*:/g, ' "$1":')
     idkJson = idkJson.replace(/,\s+}/g, '}')
 
-    let idk: { templateModel?: { hmac?: string; relayState?: string; postAction?: string; error?: string }; csrf_token?: string }
+    let idk: {
+      templateModel?: { hmac?: string; relayState?: string; postAction?: string; error?: string }
+      csrf_token?: string
+    }
     try {
       idk = JSON.parse(idkJson) as typeof idk
     } catch {
@@ -265,7 +287,10 @@ export function createAuthClient(cfg: SkodaCfg, ctx: { db: DatabaseSync; log: Lo
       code_challenge_method: 'S256',
     })
 
-    const { body: html, finalUrl } = await navigate(`${IDENTITY_BASE}/oidc/v1/authorize?${params.toString()}`, { jar })
+    const { body: html, finalUrl } = await navigate(
+      `${IDENTITY_BASE}/oidc/v1/authorize?${params.toString()}`,
+      { jar },
+    )
 
     // Marketing consent can interject immediately on the authorize URL
     if (finalUrl.includes('/consent/marketing/')) return skipMarketingConsent(finalUrl, jar)
@@ -295,10 +320,15 @@ export function createAuthClient(cfg: SkodaCfg, ctx: { db: DatabaseSync; log: Lo
     })
     if (!resp.ok) throw new Error(`Skoda token refresh: HTTP ${resp.status}`)
     const tok = (await resp.json()) as { accessToken?: string; refreshToken?: string }
-    if (!tok.accessToken || !tok.refreshToken) throw new Error('Skoda token refresh: missing fields in response')
+    if (!tok.accessToken || !tok.refreshToken)
+      throw new Error('Skoda token refresh: missing fields in response')
     saveRefreshToken(ctx.db, cfg.name, tok.refreshToken)
     ctx.log.debug({ at: mask(tok.accessToken) }, 'skoda token refreshed')
-    return { accessToken: tok.accessToken, refreshToken: tok.refreshToken, expiresAt: Date.now() + ACCESS_TOKEN_TTL_MS }
+    return {
+      accessToken: tok.accessToken,
+      refreshToken: tok.refreshToken,
+      expiresAt: Date.now() + ACCESS_TOKEN_TTL_MS,
+    }
   }
 
   async function doLogin(): Promise<TokenSet> {
@@ -313,10 +343,15 @@ export function createAuthClient(cfg: SkodaCfg, ctx: { db: DatabaseSync; log: Lo
     })
     if (!resp.ok) throw new Error(`Skoda code exchange: HTTP ${resp.status}`)
     const tok = (await resp.json()) as { accessToken?: string; refreshToken?: string }
-    if (!tok.accessToken || !tok.refreshToken) throw new Error('Skoda code exchange: missing fields in response')
+    if (!tok.accessToken || !tok.refreshToken)
+      throw new Error('Skoda code exchange: missing fields in response')
     saveRefreshToken(ctx.db, cfg.name, tok.refreshToken)
     ctx.log.info({ at: mask(tok.accessToken) }, 'skoda login successful')
-    return { accessToken: tok.accessToken, refreshToken: tok.refreshToken, expiresAt: Date.now() + ACCESS_TOKEN_TTL_MS }
+    return {
+      accessToken: tok.accessToken,
+      refreshToken: tok.refreshToken,
+      expiresAt: Date.now() + ACCESS_TOKEN_TTL_MS,
+    }
   }
 
   return {

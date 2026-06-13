@@ -14,7 +14,13 @@ export interface ScheduleDecision {
   reason: 'startup' | 'wait-for-window' | 'retry' | 'next-day'
 }
 
-function stockholmParts(d: Date): { year: number; month: number; day: number; hour: number; minute: number } {
+function stockholmParts(d: Date): {
+  year: number
+  month: number
+  day: number
+  hour: number
+  minute: number
+} {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: STOCKHOLM_TZ,
     year: 'numeric',
@@ -25,7 +31,13 @@ function stockholmParts(d: Date): { year: number; month: number; day: number; ho
     hour12: false,
   }).formatToParts(d)
   const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0)
-  return { year: get('year'), month: get('month'), day: get('day'), hour: get('hour'), minute: get('minute') }
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+    hour: get('hour'),
+    minute: get('minute'),
+  }
 }
 
 // Returns ms until the next occurrence of HH:MM in Stockholm local time (same day or tomorrow).
@@ -37,7 +49,9 @@ export function msUntilStockholmTime(now: Date, hour: number, minute: number): n
   // then subtract the Stockholm UTC offset to get the real UTC timestamp.
   // Using fakeUTC as the input to getStockholmOffsetMs is correct here because
   // 13:15 Stockholm never falls within the DST transition window (02:00–03:00).
-  const fakeUTC = new Date(`${p.year}-${pad(p.month)}-${pad(p.day)}T${pad(hour)}:${pad(minute)}:00Z`)
+  const fakeUTC = new Date(
+    `${p.year}-${pad(p.month)}-${pad(p.day)}T${pad(hour)}:${pad(minute)}:00Z`,
+  )
   const target = new Date(fakeUTC.getTime() + getStockholmOffsetMs(fakeUTC))
 
   if (target.getTime() > now.getTime()) {
@@ -67,20 +81,28 @@ export function isPastPublishWindow(now: Date): boolean {
   return p.hour > PUBLISH_HOUR || (p.hour === PUBLISH_HOUR && p.minute >= PUBLISH_MINUTE)
 }
 
-export function nextDelay(state: SchedulerState, haveTomorrow: boolean, now: Date): ScheduleDecision {
+export function nextDelay(
+  state: SchedulerState,
+  haveTomorrow: boolean,
+  now: Date,
+): ScheduleDecision {
   if (haveTomorrow) {
     return { delayMs: msUntilStockholmTime(now, PUBLISH_HOUR, PUBLISH_MINUTE), reason: 'next-day' }
   }
 
   if (!isPastPublishWindow(now)) {
-    return { delayMs: msUntilStockholmTime(now, PUBLISH_HOUR, PUBLISH_MINUTE), reason: 'wait-for-window' }
+    return {
+      delayMs: msUntilStockholmTime(now, PUBLISH_HOUR, PUBLISH_MINUTE),
+      reason: 'wait-for-window',
+    }
   }
 
   // Past publish window, don't have tomorrow yet — retry chain
   const n = state.consecutiveFailures
-  const delayMs = n === 0
-    ? 30 * 60_000                          // first retry: +30 min
-    : Math.pow(2, n - 1) * 3600_000        // subsequent: 1h, 2h, 4h, …
+  const delayMs =
+    n === 0
+      ? 30 * 60_000 // first retry: +30 min
+      : Math.pow(2, n - 1) * 3600_000 // subsequent: 1h, 2h, 4h, …
 
   const tillMidnight = msUntilStockholmMidnight(now)
   if (delayMs >= tillMidnight) {

@@ -102,15 +102,15 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
         log.warn({ topic, str }, 'invalid mode command')
         return
       }
-      deps.onModeChange(name, str as ChargeMode).catch((err) =>
-        log.warn({ err }, 'MQTT mode change error'),
-      )
+      deps
+        .onModeChange(name, str as ChargeMode)
+        .catch((err) => log.warn({ err }, 'MQTT mode change error'))
     } else if (command === 'target') {
       try {
         const body = JSON.parse(str) as { soc?: number; time?: string }
-        deps.onTargetChange(name, body.soc, body.time).catch((err) =>
-          log.warn({ err }, 'MQTT target change error'),
-        )
+        deps
+          .onTargetChange(name, body.soc, body.time)
+          .catch((err) => log.warn({ err }, 'MQTT target change error'))
       } catch {
         log.warn({ topic, str }, 'invalid target JSON')
       }
@@ -119,10 +119,17 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
 
   // Mirror balancer tick results to MQTT
   deps.events.on('balancer.tick', (payload) => {
-    const p = payload as { name: string; allocations: Record<string, number>; freeAmps: number; health: string }
+    const p = payload as {
+      name: string
+      allocations: Record<string, number>
+      freeAmps: number
+      health: string
+    }
     client.publish(`${prefix}/balancer/${p.name}/health`, p.health, { retain: true })
     client.publish(`${prefix}/balancer/${p.name}/free_amps`, String(p.freeAmps), { retain: true })
-    client.publish(`${prefix}/balancer/${p.name}/allocations`, JSON.stringify(p.allocations), { retain: true })
+    client.publish(`${prefix}/balancer/${p.name}/allocations`, JSON.stringify(p.allocations), {
+      retain: true,
+    })
   })
 
   // Re-publish current tariff price whenever new data lands

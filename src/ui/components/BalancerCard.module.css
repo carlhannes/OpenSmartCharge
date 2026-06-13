@@ -9,10 +9,31 @@
   gap: calc(var(--space) * 1.5);
 }
 
-.header { display: flex; align-items: center; justify-content: space-between; }
-.name { font-weight: 600; font-size: 1.05rem; }
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.name {
+  font-weight: 600;
+  font-size: 1.05rem;
+}
 
-.freeAmps { display: flex; align-items: baseline; gap: var(--space); }
-.freeLabel { color: var(--color-muted); font-size: 0.8rem; }
-.freeValue { font-size: 1.8rem; font-weight: 700; color: var(--color-accent); }
-.breaker { color: var(--color-muted); font-size: 0.8rem; }
+.freeAmps {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space);
+}
+.freeLabel {
+  color: var(--color-muted);
+  font-size: 0.8rem;
+}
+.freeValue {
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+.breaker {
+  color: var(--color-muted);
+  font-size: 0.8rem;
+}

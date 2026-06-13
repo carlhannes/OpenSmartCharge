@@ -28,7 +28,10 @@ const mod: BalancerModule = {
           }
           ctx.events.on('meter.snapshot', onSnap)
           unsub = () => ctx.events.off('meter.snapshot', onSnap)
-          ctx.log.info({ meterReader: cfg.meterReader }, 'balancer wired to in-process meter reader')
+          ctx.log.info(
+            { meterReader: cfg.meterReader },
+            'balancer wired to in-process meter reader',
+          )
         } else {
           if (!ctx.mqtt) {
             throw new Error(
@@ -46,10 +49,17 @@ const mod: BalancerModule = {
           })
           const phaseCurrents = { i1: 0, i2: 0, i3: 0 }
           client.on('connect', () => {
-            ctx.log.info({ host: ctx.mqtt!.host, prefix }, 'balancer MQTT subscribed to phase currents')
-            client!.subscribe([`${prefix}/i1_a`, `${prefix}/i2_a`, `${prefix}/i3_a`], { qos: 0 }, (err) => {
-              if (err) ctx.log.warn({ err }, 'balancer MQTT subscribe failed')
-            })
+            ctx.log.info(
+              { host: ctx.mqtt!.host, prefix },
+              'balancer MQTT subscribed to phase currents',
+            )
+            client!.subscribe(
+              [`${prefix}/i1_a`, `${prefix}/i2_a`, `${prefix}/i3_a`],
+              { qos: 0 },
+              (err) => {
+                if (err) ctx.log.warn({ err }, 'balancer MQTT subscribe failed')
+              },
+            )
           })
           client.on('message', (topic, payload) => {
             const val = parseFloat(payload.toString())

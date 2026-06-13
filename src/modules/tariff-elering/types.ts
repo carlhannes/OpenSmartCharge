@@ -1,6 +1,6 @@
 export interface EleringPriceRecord {
-  timestamp: number  // Unix epoch seconds (UTC)
-  price: number      // EUR/MWh
+  timestamp: number // Unix epoch seconds (UTC)
+  price: number // EUR/MWh
 }
 
 export interface EleringResponse {

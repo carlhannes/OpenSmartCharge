@@ -80,7 +80,10 @@ registerVehicle({
         // First poll immediately with direct fetch (no jitter at boot)
         void pollOnce(globalThis.fetch)
         // Subsequent polls use ctx.fetch (jitter prevents thundering-herd on restart)
-        timer = setInterval(() => void pollOnce(ctx.fetch), Math.max(300, cfg.pollIntervalSec) * 1000)
+        timer = setInterval(
+          () => void pollOnce(ctx.fetch),
+          Math.max(300, cfg.pollIntervalSec) * 1000,
+        )
       },
 
       async stop(): Promise<void> {

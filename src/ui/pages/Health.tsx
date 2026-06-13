@@ -16,7 +16,9 @@ export default function Health() {
           <div key={id} className={styles.row}>
             <HealthBadge health={status} size={10} />
             <span className={styles.id}>{id}</span>
-            <span className={styles.status} data-status={status}>{status}</span>
+            <span className={styles.status} data-status={status}>
+              {status}
+            </span>
           </div>
         ))}
       </div>

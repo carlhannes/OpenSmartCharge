@@ -18,7 +18,9 @@ function makeFakeClock() {
 
   return {
     now: () => now,
-    schedule: (fn: () => void, delay: number) => { pending.push({ fn, fireAt: now + delay }) },
+    schedule: (fn: () => void, delay: number) => {
+      pending.push({ fn, fireAt: now + delay })
+    },
     tick,
   }
 }
@@ -30,12 +32,14 @@ test('duplicate value (same as last written) is dropped', async () => {
     minIntervalMs: 10_000,
     now: clock.now,
     schedule: clock.schedule,
-    write: async (v) => { writes.push(v) },
+    write: async (v) => {
+      writes.push(v)
+    },
   })
 
-  await set(8)   // first write — goes through immediately
-  await set(8)   // duplicate — dropped
-  await set(8)   // duplicate — dropped
+  await set(8) // first write — goes through immediately
+  await set(8) // duplicate — dropped
+  await set(8) // duplicate — dropped
 
   assert.deepEqual(writes, [8])
 })
@@ -47,11 +51,13 @@ test('two writes within minIntervalMs: one immediate + one coalesced trailing', 
     minIntervalMs: 10_000,
     now: clock.now,
     schedule: clock.schedule,
-    write: async (v) => { writes.push(v) },
+    write: async (v) => {
+      writes.push(v)
+    },
   })
 
-  await set(8)   // immediate write at t=0
-  await set(12)  // suppressed, trailing scheduled at t=0+10000
+  await set(8) // immediate write at t=0
+  await set(12) // suppressed, trailing scheduled at t=0+10000
   clock.tick(10_000)
 
   assert.deepEqual(writes, [8, 12])
@@ -64,13 +70,15 @@ test('trailing write is the last coalesced value', async () => {
     minIntervalMs: 10_000,
     now: clock.now,
     schedule: clock.schedule,
-    write: async (v) => { writes.push(v) },
+    write: async (v) => {
+      writes.push(v)
+    },
   })
 
-  await set(8)   // immediate
-  await set(10)  // suppressed — trailing pending
-  await set(12)  // overwrites pending value (still one trailing scheduled)
-  await set(14)  // overwrites pending value again
+  await set(8) // immediate
+  await set(10) // suppressed — trailing pending
+  await set(12) // overwrites pending value (still one trailing scheduled)
+  await set(14) // overwrites pending value again
   clock.tick(10_000)
 
   assert.deepEqual(writes, [8, 14])
@@ -83,11 +91,13 @@ test('trailing write equals last written: no write', async () => {
     minIntervalMs: 10_000,
     now: clock.now,
     schedule: clock.schedule,
-    write: async (v) => { writes.push(v) },
+    write: async (v) => {
+      writes.push(v)
+    },
   })
 
-  await set(8)   // immediate
-  await set(8)   // duplicate — no trailing scheduled (value == lastWritten)
+  await set(8) // immediate
+  await set(8) // duplicate — no trailing scheduled (value == lastWritten)
   clock.tick(10_000)
 
   assert.deepEqual(writes, [8])
@@ -100,12 +110,14 @@ test('write after cooldown goes through immediately without trailing', async () 
     minIntervalMs: 10_000,
     now: clock.now,
     schedule: clock.schedule,
-    write: async (v) => { writes.push(v) },
+    write: async (v) => {
+      writes.push(v)
+    },
   })
 
-  await set(8)        // t=0: immediate
-  clock.tick(10_000)  // t=10_000: cooldown expired
-  await set(12)       // immediate (cooldown elapsed)
+  await set(8) // t=0: immediate
+  clock.tick(10_000) // t=10_000: cooldown expired
+  await set(12) // immediate (cooldown elapsed)
 
   assert.deepEqual(writes, [8, 12])
 })

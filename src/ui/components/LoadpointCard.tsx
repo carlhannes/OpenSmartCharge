@@ -14,7 +14,14 @@ interface Props {
 
 const MODES: ChargeMode[] = ['disabled', 'smart', 'fast']
 
-export default function LoadpointCard({ lp, siteConfig: _siteConfig, supportsRemoteStart, supportsRemoteStop, supportsProfile, onUpdate }: Props) {
+export default function LoadpointCard({
+  lp,
+  siteConfig: _siteConfig,
+  supportsRemoteStart,
+  supportsRemoteStop,
+  supportsProfile,
+  onUpdate,
+}: Props) {
   const [pendingMode, setPendingMode] = useState<ChargeMode | null>(null)
   const [socInput, setSocInput] = useState(String(lp.targetSoc ?? ''))
   const [timeInput, setTimeInput] = useState(lp.targetTime ?? '')
@@ -48,14 +55,24 @@ export default function LoadpointCard({ lp, siteConfig: _siteConfig, supportsRem
 
   const handleStart = async () => {
     setBusy(true)
-    try { onUpdate(await remoteStart(lp.name)) } catch (err) { console.error('start failed', err) }
-    finally { setBusy(false) }
+    try {
+      onUpdate(await remoteStart(lp.name))
+    } catch (err) {
+      console.error('start failed', err)
+    } finally {
+      setBusy(false)
+    }
   }
 
   const handleStop = async () => {
     setBusy(true)
-    try { onUpdate(await remoteStop(lp.name)) } catch (err) { console.error('stop failed', err) }
-    finally { setBusy(false) }
+    try {
+      onUpdate(await remoteStop(lp.name))
+    } catch (err) {
+      console.error('stop failed', err)
+    } finally {
+      setBusy(false)
+    }
   }
 
   const handleProfile = async () => {
@@ -150,7 +167,11 @@ export default function LoadpointCard({ lp, siteConfig: _siteConfig, supportsRem
             </button>
           )}
           {supportsRemoteStop && (
-            <button className={`${styles.cmdBtn} ${styles.danger}`} onClick={handleStop} disabled={busy || !lp.charging}>
+            <button
+              className={`${styles.cmdBtn} ${styles.danger}`}
+              onClick={handleStop}
+              disabled={busy || !lp.charging}
+            >
               Stop
             </button>
           )}
@@ -173,7 +194,9 @@ export default function LoadpointCard({ lp, siteConfig: _siteConfig, supportsRem
               <button className={styles.cmdBtn} onClick={handleProfile} disabled={busy}>
                 Apply
               </button>
-              <button className={styles.cmdBtn} onClick={() => setShowProfile(false)}>Cancel</button>
+              <button className={styles.cmdBtn} onClick={() => setShowProfile(false)}>
+                Cancel
+              </button>
             </>
           )}
         </div>

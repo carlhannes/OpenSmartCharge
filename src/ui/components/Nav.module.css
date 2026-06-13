@@ -28,6 +28,12 @@
   transition: color 0.15s;
 }
 
-.links a:hover { color: var(--color-text); text-decoration: none; }
+.links a:hover {
+  color: var(--color-text);
+  text-decoration: none;
+}
 
-.active { color: var(--color-text) !important; border-bottom: 2px solid var(--color-accent); }
+.active {
+  color: var(--color-text) !important;
+  border-bottom: 2px solid var(--color-accent);
+}

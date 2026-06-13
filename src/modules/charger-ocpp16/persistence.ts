@@ -56,8 +56,7 @@ export function insertMeterValues(
   )
 
   for (const mv of params.meterValue) {
-    const get = (measurand: string) =>
-      mv.sampledValue.find((s) => s.measurand === measurand)?.value
+    const get = (measurand: string) => mv.sampledValue.find((s) => s.measurand === measurand)?.value
 
     const energyWh = parseFloat(get('Energy.Active.Import.Register') ?? 'NaN')
     const powerW = parseFloat(get('Power.Active.Import') ?? 'NaN')

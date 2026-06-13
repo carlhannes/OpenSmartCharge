@@ -6,7 +6,9 @@ function dispatch(type: string, rawData: string) {
   try {
     const data = JSON.parse(rawData) as unknown
     for (const cb of listeners.get(type) ?? []) cb(data)
-  } catch { /* ignore malformed payloads */ }
+  } catch {
+    /* ignore malformed payloads */
+  }
 }
 
 function wireType(source: EventSource, type: string) {

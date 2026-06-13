@@ -93,11 +93,32 @@ export interface SiteLoadpointDto {
   targetTime?: string
 }
 
-export interface SiteChargerDto { name: string; type: string; stationId?: string; maxA: number }
-export interface SiteBalancerDto { name: string; type: string; mainBreakerA: number; phases: number }
-export interface SiteTariffDto { name: string; type: string; zone?: string }
-export interface SiteVehicleDto { name: string; type: string; vin?: string }
-export interface SiteMeterDto { name: string; type: string }
+export interface SiteChargerDto {
+  name: string
+  type: string
+  stationId?: string
+  maxA: number
+}
+export interface SiteBalancerDto {
+  name: string
+  type: string
+  mainBreakerA: number
+  phases: number
+}
+export interface SiteTariffDto {
+  name: string
+  type: string
+  zone?: string
+}
+export interface SiteVehicleDto {
+  name: string
+  type: string
+  vin?: string
+}
+export interface SiteMeterDto {
+  name: string
+  type: string
+}
 
 export interface SiteDto {
   site: { name: string; port: number }
@@ -135,7 +156,9 @@ export const setProfile = (name: string, amps: number) =>
   apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/profile`, json({ amps }))
 
 export const getTariffPrices = (name: string, from: Date, to: Date) =>
-  apiFetch<TariffSlotDto[]>(`/api/tariffs/${name}/prices?from=${from.toISOString()}&to=${to.toISOString()}`)
+  apiFetch<TariffSlotDto[]>(
+    `/api/tariffs/${name}/prices?from=${from.toISOString()}&to=${to.toISOString()}`,
+  )
 
 export const getBalancer = (name: string) => apiFetch<BalancerStateDto>(`/api/balancers/${name}`)
 export const getVehicle = (name: string) => apiFetch<VehicleStateDto>(`/api/vehicles/${name}`)
@@ -149,5 +172,6 @@ export const getTransactions = (opts?: { loadpoint?: string; limit?: number }) =
   const qs = params.size > 0 ? `?${params}` : ''
   return apiFetch<TransactionDto[]>(`/api/transactions${qs}`)
 }
-export const getTransaction = (id: number) => apiFetch<TransactionDetailDto>(`/api/transactions/${id}`)
+export const getTransaction = (id: number) =>
+  apiFetch<TransactionDetailDto>(`/api/transactions/${id}`)
 export const getSite = () => apiFetch<SiteDto>('/api/site')

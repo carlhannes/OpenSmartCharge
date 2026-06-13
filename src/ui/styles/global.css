@@ -1,4 +1,10 @@
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
 :root {
   --color-bg: #0f1117;
@@ -15,14 +21,22 @@
 }
 
 body {
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
   background: var(--color-bg);
   color: var(--color-text);
   min-height: 100dvh;
 }
 
-a { color: var(--color-accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
 
 main {
   padding: calc(var(--space) * 2);
@@ -30,5 +44,11 @@ main {
   margin: 0 auto;
 }
 
-h1 { font-size: 1.5rem; margin-bottom: calc(var(--space) * 2); }
-h2 { font-size: 1.2rem; margin-bottom: var(--space); }
+h1 {
+  font-size: 1.5rem;
+  margin-bottom: calc(var(--space) * 2);
+}
+h2 {
+  font-size: 1.2rem;
+  margin-bottom: var(--space);
+}

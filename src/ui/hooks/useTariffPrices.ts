@@ -14,7 +14,7 @@ export function useTariffPrices(name: string, from: Date, to: Date) {
       if ((d as { name?: string }).name === name) fetch()
     })
     return unsub
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name, from.getTime(), to.getTime()])
 
   return slots

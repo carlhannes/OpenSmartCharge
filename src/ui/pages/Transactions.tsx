@@ -1,5 +1,10 @@
 import { useState, useEffect } from 'react'
-import { getTransactions, getTransaction, type TransactionDto, type TransactionDetailDto } from '../api/rest.js'
+import {
+  getTransactions,
+  getTransaction,
+  type TransactionDto,
+  type TransactionDetailDto,
+} from '../api/rest.js'
 import SessionChart from '../components/SessionChart.js'
 import styles from './Transactions.module.css'
 
@@ -13,7 +18,10 @@ export default function Transactions() {
   }, [])
 
   const handleRow = async (id: number) => {
-    if (detail?.transaction.id === id) { setDetail(null); return }
+    if (detail?.transaction.id === id) {
+      setDetail(null)
+      return
+    }
     setLoadingId(id)
     try {
       setDetail(await getTransaction(id))
@@ -27,7 +35,9 @@ export default function Transactions() {
   return (
     <div>
       <h1>Transactions</h1>
-      {transactions.length === 0 && <p style={{ color: 'var(--color-muted)' }}>No transactions yet.</p>}
+      {transactions.length === 0 && (
+        <p style={{ color: 'var(--color-muted)' }}>No transactions yet.</p>
+      )}
       <table className={styles.table}>
         <thead>
           <tr>
@@ -46,7 +56,10 @@ export default function Transactions() {
                 className={`${styles.row}${detail?.transaction.id === tx.id ? ` ${styles.expanded}` : ''}`}
                 onClick={() => void handleRow(tx.id)}
               >
-                <td>{tx.id}{loadingId === tx.id ? ' …' : ''}</td>
+                <td>
+                  {tx.id}
+                  {loadingId === tx.id ? ' …' : ''}
+                </td>
                 <td>{tx.loadpoint_name}</td>
                 <td>{new Date(tx.start_time).toLocaleString()}</td>
                 <td>{tx.end_time ? new Date(tx.end_time).toLocaleString() : '—'}</td>

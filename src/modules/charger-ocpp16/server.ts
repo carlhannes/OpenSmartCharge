@@ -10,8 +10,13 @@ import type { ModuleHealth } from '../../sdk/types.js'
 interface OcppClient {
   readonly handshake: { identity: string }
   call(method: string, params?: unknown): Promise<unknown>
-  handle(method: string, handler: (event: { params?: unknown }) => Promise<Record<string, unknown>>): void
-  handle(handler: (event: { method?: string; params?: unknown }) => Promise<Record<string, unknown>>): void
+  handle(
+    method: string,
+    handler: (event: { params?: unknown }) => Promise<Record<string, unknown>>,
+  ): void
+  handle(
+    handler: (event: { method?: string; params?: unknown }) => Promise<Record<string, unknown>>,
+  ): void
   on(event: string, listener: (...args: unknown[]) => void): this
 }
 import type {
@@ -97,7 +102,10 @@ export class OcppServer {
     this._pendingCallbacks.set(stationId, list)
     return () => {
       const current = this._pendingCallbacks.get(stationId) ?? []
-      this._pendingCallbacks.set(stationId, current.filter((c) => c !== cb))
+      this._pendingCallbacks.set(
+        stationId,
+        current.filter((c) => c !== cb),
+      )
     }
   }
 
@@ -132,7 +140,11 @@ export class OcppServer {
     const state = this.stations.get(stationId)
     if (!state) return
     for (const cb of state.statusCallbacks) {
-      try { cb(status) } catch { /* ignore subscriber errors */ }
+      try {
+        cb(status)
+      } catch {
+        /* ignore subscriber errors */
+      }
     }
   }
 
@@ -169,7 +181,10 @@ export class OcppServer {
 
     client.handle('BootNotification', async ({ params }) => {
       const p = params as BootNotificationReq
-      this.log.info({ stationId, vendor: p.chargePointVendor, model: p.chargePointModel }, 'BootNotification')
+      this.log.info(
+        { stationId, vendor: p.chargePointVendor, model: p.chargePointModel },
+        'BootNotification',
+      )
 
       // Issue safe default current immediately so charger is never at an unknown limit
       setImmediate(() => {
@@ -198,10 +213,15 @@ export class OcppServer {
         state.connectorId = p.connectorId
       }
 
-      this.log.debug({ stationId, connectorId: p.connectorId, status: p.status }, 'StatusNotification')
+      this.log.debug(
+        { stationId, connectorId: p.connectorId, status: p.status },
+        'StatusNotification',
+      )
 
-      const charging = p.status === 'Charging' || p.status === 'SuspendedEV' || p.status === 'SuspendedEVSE'
-      const connected = p.status !== 'Available' && p.status !== 'Unavailable' && p.status !== 'Faulted'
+      const charging =
+        p.status === 'Charging' || p.status === 'SuspendedEV' || p.status === 'SuspendedEVSE'
+      const connected =
+        p.status !== 'Available' && p.status !== 'Unavailable' && p.status !== 'Faulted'
 
       this.pushStatus(stationId, {
         connectorId: p.connectorId,

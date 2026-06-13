@@ -46,7 +46,8 @@ test('single cheapest slot picked when requiredKWh fits in one slot', () => {
   assert.equal(charging.length, 1)
   const cheapestHourStart = new Date(NOW.getTime() + 1 * 3_600_000)
   assert.ok(
-    charging[0].start >= cheapestHourStart && charging[0].start < new Date(cheapestHourStart.getTime() + 3_600_000),
+    charging[0].start >= cheapestHourStart &&
+      charging[0].start < new Date(cheapestHourStart.getTime() + 3_600_000),
     'the single charging slot should fall in the cheapest hour',
   )
 })

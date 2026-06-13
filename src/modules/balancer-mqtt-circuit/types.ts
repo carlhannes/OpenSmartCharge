@@ -12,7 +12,8 @@ export interface BalancerMqttCfg {
 export function parseConfig(raw: unknown): BalancerMqttCfg {
   const r = raw as Record<string, unknown>
   if (typeof r.name !== 'string') throw new Error('balancer-mqtt-circuit: name is required')
-  if (typeof r.mainBreakerA !== 'number') throw new Error('balancer-mqtt-circuit: mainBreakerA is required')
+  if (typeof r.mainBreakerA !== 'number')
+    throw new Error('balancer-mqtt-circuit: mainBreakerA is required')
   return {
     name: r.name,
     mainBreakerA: r.mainBreakerA,

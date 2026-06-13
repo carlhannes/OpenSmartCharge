@@ -33,7 +33,9 @@ registerMeterReader({
       latest: () => client.latest(),
       onSnapshot: (cb) => {
         subscribers.add(cb)
-        return () => { subscribers.delete(cb) }
+        return () => {
+          subscribers.delete(cb)
+        }
       },
     }
     return reader

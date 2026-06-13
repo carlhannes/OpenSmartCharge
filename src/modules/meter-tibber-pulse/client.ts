@@ -41,10 +41,14 @@ export function createPulseClient(opts: PulseClientOpts): PulseClientHandle {
   }
 
   function republish(c: MqttClient, prefix: string, snap: MeterSnapshot): void {
-    if (snap.powerW !== undefined) c.publish(`${prefix}/power_w`, String(snap.powerW), { qos: 0, retain: false })
-    if (snap.i1A !== undefined) c.publish(`${prefix}/i1_a`, String(snap.i1A), { qos: 0, retain: false })
-    if (snap.i2A !== undefined) c.publish(`${prefix}/i2_a`, String(snap.i2A), { qos: 0, retain: false })
-    if (snap.i3A !== undefined) c.publish(`${prefix}/i3_a`, String(snap.i3A), { qos: 0, retain: false })
+    if (snap.powerW !== undefined)
+      c.publish(`${prefix}/power_w`, String(snap.powerW), { qos: 0, retain: false })
+    if (snap.i1A !== undefined)
+      c.publish(`${prefix}/i1_a`, String(snap.i1A), { qos: 0, retain: false })
+    if (snap.i2A !== undefined)
+      c.publish(`${prefix}/i2_a`, String(snap.i2A), { qos: 0, retain: false })
+    if (snap.i3A !== undefined)
+      c.publish(`${prefix}/i3_a`, String(snap.i3A), { qos: 0, retain: false })
   }
 
   function handleMessage(c: MqttClient, payload: Buffer): void {
@@ -59,7 +63,9 @@ export function createPulseClient(opts: PulseClientOpts): PulseClientHandle {
         JSON.parse(payload.toString('utf8'))
         stats.json++
         return
-      } catch { /* fall through — not valid JSON, treat as text */ }
+      } catch {
+        /* fall through — not valid JSON, treat as text */
+      }
     }
 
     let text: string
@@ -144,7 +150,9 @@ export function createPulseClient(opts: PulseClientOpts): PulseClientHandle {
 
     health(): ModuleHealth {
       if (!latestSnapshot) return 'unavailable'
-      return Date.now() - latestSnapshot.timestamp.getTime() < opts.staleAfterSec * 1000 ? 'ok' : 'degraded'
+      return Date.now() - latestSnapshot.timestamp.getTime() < opts.staleAfterSec * 1000
+        ? 'ok'
+        : 'degraded'
     },
   }
 }

@@ -1,8 +1,15 @@
-import type { SetChargingProfileReq, RemoteStartTransactionReq, RemoteStopTransactionReq } from './types.js'
+import type {
+  SetChargingProfileReq,
+  RemoteStartTransactionReq,
+  RemoteStopTransactionReq,
+} from './types.js'
 
 type Client = { call(method: string, params: unknown): Promise<unknown> }
 
-export function buildChargingProfilePayload(limitA: number, connectorId = 0): SetChargingProfileReq {
+export function buildChargingProfilePayload(
+  limitA: number,
+  connectorId = 0,
+): SetChargingProfileReq {
   return {
     connectorId,
     csChargingProfiles: {
@@ -19,7 +26,11 @@ export function buildChargingProfilePayload(limitA: number, connectorId = 0): Se
   }
 }
 
-export async function setCurrentLimit(client: Client, amps: number, connectorId = 0): Promise<void> {
+export async function setCurrentLimit(
+  client: Client,
+  amps: number,
+  connectorId = 0,
+): Promise<void> {
   await client.call('SetChargingProfile', buildChargingProfilePayload(amps, connectorId))
 }
 

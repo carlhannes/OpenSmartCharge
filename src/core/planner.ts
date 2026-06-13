@@ -36,10 +36,7 @@ export function plan(input: PlannerInput): PlannedSlot[] {
   return cheapestSlotsPlan(allSlots, slotsNeeded, priceSlots)
 }
 
-function latestStartPlan(
-  slots: { start: Date; end: Date }[],
-  slotsNeeded: number,
-): PlannedSlot[] {
+function latestStartPlan(slots: { start: Date; end: Date }[], slotsNeeded: number): PlannedSlot[] {
   const startIndex = slots.length - slotsNeeded
   return slots.map((slot, i) => ({ ...slot, shouldCharge: i >= startIndex }))
 }
@@ -55,9 +52,7 @@ function cheapestSlotsPlan(
   })
 
   const sorted = [...withPrices].sort((a, b) => a.pricePerKWh - b.pricePerKWh)
-  const cheapestStarts = new Set(
-    sorted.slice(0, slotsNeeded).map((s) => s.start.toISOString()),
-  )
+  const cheapestStarts = new Set(sorted.slice(0, slotsNeeded).map((s) => s.start.toISOString()))
 
   return withPrices.map((slot) => ({
     start: slot.start,
