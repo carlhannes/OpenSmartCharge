@@ -34,6 +34,7 @@ import {
   latestEnergyKwh,
 } from './persistence.js'
 import { setCurrentLimit, remoteStart, remoteStop as cmdRemoteStop } from './commands.js'
+import { computeConnectionState, shouldAutoStart, computeHealth } from './status.js'
 
 type StatusCallback = (status: ChargerStatus) => void
 
@@ -117,11 +118,7 @@ export class OcppServer {
   getHealth(): ModuleHealth {
     // Derived from live connection state — no stored field to keep in sync.
     // `stations` mutates on connect/disconnect, so health recomputes for free.
-    // Health is server-wide (this OcppServer is shared across all ocpp16 chargers).
-    const expected = this._pendingAutoStart.size
-    if (expected === 0) return 'ok' // no stations registered — nothing to be unhealthy about
-    if (this.stations.size === 0) return 'unavailable'
-    return this.stations.size >= expected ? 'ok' : 'degraded'
+    return computeHealth(this._pendingAutoStart.size, this.stations.size)
   }
 
   async remoteStart(stationId: string, idTag = 'osc-manual'): Promise<void> {
@@ -223,10 +220,7 @@ export class OcppServer {
         'StatusNotification',
       )
 
-      const charging =
-        p.status === 'Charging' || p.status === 'SuspendedEV' || p.status === 'SuspendedEVSE'
-      const connected =
-        p.status !== 'Available' && p.status !== 'Unavailable' && p.status !== 'Faulted'
+      const { charging, connected } = computeConnectionState(p.status)
 
       this.pushStatus(stationId, {
         connectorId: p.connectorId,
@@ -236,7 +230,7 @@ export class OcppServer {
       })
 
       // Auto-start: send RemoteStartTransaction when vehicle plugs in and no tx is active
-      if (p.status === 'Preparing' && !state.activeTransactionId && state.autoStart) {
+      if (shouldAutoStart(p.status, !!state.activeTransactionId, state.autoStart)) {
         this.log.info({ stationId }, 'auto-starting transaction')
         setImmediate(() => {
           void remoteStart(state.client, 'osc-auto', p.connectorId).catch((err) =>
