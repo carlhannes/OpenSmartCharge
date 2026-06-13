@@ -23,6 +23,7 @@ import { getOcppServer } from '../modules/charger-ocpp16/index.js'
 import { startServer } from '../server/index.js'
 import { startMqttBridge } from '../server/mqtt-bridge.js'
 import { plan } from './planner.js'
+import { chargeRateKW, DEFAULT_CHARGING_EFFICIENCY, DUTY_CYCLE_FALLBACK } from './electrical.js'
 import type { Charger } from '../sdk/charger.js'
 import type { Tariff } from '../sdk/tariff.js'
 import type { MeterReader } from '../sdk/meter-reader.js'
@@ -324,10 +325,13 @@ async function main() {
     }
     if (!priceSlots || priceSlots.length === 0) return true
 
+    // Charge rate depends on the loadpoint's circuit phase count (1–3); fall back to
+    // 3-phase (the balancer schema default) when no balancer is wired.
+    const phases = config.balancers.find((b) => b.name === lpCfg.balancer)?.phases ?? 3
+
     // Use real SoC if a vehicle is wired and data is available; fall back to duty-cycle heuristic
     let requiredKWh: number
-    const lpCfgV = config.loadpoints.find((l) => l.name === lpName)?.vehicle
-    const vehicle = lpCfgV ? vehicles.get(lpCfgV) : undefined
+    const vehicle = lpCfg.vehicle ? vehicles.get(lpCfg.vehicle) : undefined
     const capacity = vehicle?.getCachedCapacity()
     let currentSoc: number | undefined
     if (vehicle && capacity) {
@@ -339,15 +343,15 @@ async function main() {
     }
     if (currentSoc !== undefined && capacity && state.targetSoc) {
       const remaining = Math.max(0, state.targetSoc - currentSoc)
-      requiredKWh = ((remaining / 100) * capacity) / 0.92
+      requiredKWh = ((remaining / 100) * capacity) / DEFAULT_CHARGING_EFFICIENCY
       ctx.log.debug(
         { lpName, currentSoc, targetSoc: state.targetSoc, capacity, requiredKWh },
         'skoda SoC-based requiredKWh',
       )
     } else {
-      // Fallback: 40%-duty-cycle heuristic when vehicle API unavailable
-      const chargeRateKW = (state.maxCurrentA * 3 * 230) / 1000
-      requiredKWh = Math.max(1, hoursUntilTarget * chargeRateKW * 0.4)
+      // Fallback: duty-cycle heuristic when vehicle API unavailable
+      const rateKW = chargeRateKW(state.maxCurrentA, phases)
+      requiredKWh = Math.max(1, hoursUntilTarget * rateKW * DUTY_CYCLE_FALLBACK)
     }
 
     // Already at target SoC — no need to charge
@@ -357,7 +361,7 @@ async function main() {
       requiredKWh,
       targetTime,
       maxCurrentA: state.maxCurrentA,
-      phases: 3,
+      phases,
       priceSlots,
     })
     const currentSlot = planned.find((s) => s.start <= now && s.end > now)

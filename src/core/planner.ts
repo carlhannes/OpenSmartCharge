@@ -1,4 +1,5 @@
 import type { TariffSlot } from '../sdk/tariff.js'
+import { chargeRateKW } from './electrical.js'
 
 export interface PlannerInput {
   requiredKWh: number
@@ -21,8 +22,8 @@ export function plan(input: PlannerInput): PlannedSlot[] {
   const { requiredKWh, targetTime, maxCurrentA, phases, priceSlots } = input
   const now = new Date()
 
-  const chargeRateKW = (maxCurrentA * phases * 230) / 1000
-  const requiredSlots = Math.ceil((requiredKWh / chargeRateKW) * 4) // 4 slots per hour
+  const rateKW = chargeRateKW(maxCurrentA, phases)
+  const requiredSlots = Math.ceil((requiredKWh / rateKW) * 4) // 4 slots per hour
 
   const allSlots = generateSlots(now, targetTime)
   if (allSlots.length === 0) return []
