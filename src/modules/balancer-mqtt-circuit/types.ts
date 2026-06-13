@@ -10,6 +10,10 @@ export interface BalancerMqttCfg {
 }
 
 export function parseConfig(raw: unknown): BalancerMqttCfg {
+  // Defaults for phases/meterTopicPrefix/safeStaticCurrentA/meterStaleAfterSec/intervalSec
+  // are applied upstream by the zod balancerConfigSchema (src/core/config.ts) — the single
+  // source of truth. We trust those validated values here. The two guards below cover the
+  // fields that have no schema default and keep the module usable in a standalone fork.
   const r = raw as Record<string, unknown>
   if (typeof r.name !== 'string') throw new Error('balancer-mqtt-circuit: name is required')
   if (typeof r.mainBreakerA !== 'number')
@@ -17,11 +21,11 @@ export function parseConfig(raw: unknown): BalancerMqttCfg {
   return {
     name: r.name,
     mainBreakerA: r.mainBreakerA,
-    phases: typeof r.phases === 'number' ? r.phases : 3,
-    meterTopicPrefix: typeof r.meterTopicPrefix === 'string' ? r.meterTopicPrefix : 'house',
+    phases: r.phases as number,
+    meterTopicPrefix: r.meterTopicPrefix as string,
     meterReader: typeof r.meterReader === 'string' ? r.meterReader : undefined,
-    safeStaticCurrentA: typeof r.safeStaticCurrentA === 'number' ? r.safeStaticCurrentA : 10,
-    meterStaleAfterSec: typeof r.meterStaleAfterSec === 'number' ? r.meterStaleAfterSec : 60,
-    intervalSec: typeof r.intervalSec === 'number' ? r.intervalSec : 15,
+    safeStaticCurrentA: r.safeStaticCurrentA as number,
+    meterStaleAfterSec: r.meterStaleAfterSec as number,
+    intervalSec: r.intervalSec as number,
   }
 }
