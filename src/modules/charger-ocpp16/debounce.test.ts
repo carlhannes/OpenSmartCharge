@@ -1,5 +1,4 @@
-import { test } from 'node:test'
-import assert from 'node:assert/strict'
+import { test, expect } from 'vitest'
 import { createDebouncedSetter } from './debounce.js'
 
 /** Synchronous fake scheduler: collects pending callbacks with their delay. */
@@ -41,7 +40,7 @@ test('duplicate value (same as last written) is dropped', async () => {
   await set(8) // duplicate — dropped
   await set(8) // duplicate — dropped
 
-  assert.deepEqual(writes, [8])
+  expect(writes).toEqual([8])
 })
 
 test('two writes within minIntervalMs: one immediate + one coalesced trailing', async () => {
@@ -60,7 +59,7 @@ test('two writes within minIntervalMs: one immediate + one coalesced trailing', 
   await set(12) // suppressed, trailing scheduled at t=0+10000
   clock.tick(10_000)
 
-  assert.deepEqual(writes, [8, 12])
+  expect(writes).toEqual([8, 12])
 })
 
 test('trailing write is the last coalesced value', async () => {
@@ -81,7 +80,7 @@ test('trailing write is the last coalesced value', async () => {
   await set(14) // overwrites pending value again
   clock.tick(10_000)
 
-  assert.deepEqual(writes, [8, 14])
+  expect(writes).toEqual([8, 14])
 })
 
 test('trailing write equals last written: no write', async () => {
@@ -100,7 +99,7 @@ test('trailing write equals last written: no write', async () => {
   await set(8) // duplicate — no trailing scheduled (value == lastWritten)
   clock.tick(10_000)
 
-  assert.deepEqual(writes, [8])
+  expect(writes).toEqual([8])
 })
 
 test('write after cooldown goes through immediately without trailing', async () => {
@@ -119,5 +118,5 @@ test('write after cooldown goes through immediately without trailing', async () 
   clock.tick(10_000) // t=10_000: cooldown expired
   await set(12) // immediate (cooldown elapsed)
 
-  assert.deepEqual(writes, [8, 12])
+  expect(writes).toEqual([8, 12])
 })

@@ -1,5 +1,4 @@
-import { test } from 'node:test'
-import assert from 'node:assert/strict'
+import { test, expect } from 'vitest'
 import { allocate } from './allocator.js'
 import type { LoadpointSnapshot } from '../../sdk/balancer.js'
 
@@ -39,7 +38,7 @@ test('disabled loadpoint always gets 0', () => {
   const { allocations } = allocate(
     input({ loadpoints: [lp({ id: 'a', mode: 'disabled', currentA: 10, commandedA: 10 })] }),
   )
-  assert.equal(allocations.get('a'), 0)
+  expect(allocations.get('a')).toBe(0)
 })
 
 test('smart with shouldChargeNow=false gets 0', () => {
@@ -50,7 +49,7 @@ test('smart with shouldChargeNow=false gets 0', () => {
       ],
     }),
   )
-  assert.equal(allocations.get('a'), 0)
+  expect(allocations.get('a')).toBe(0)
 })
 
 test('healthy steady-state: credit-back on commandedA keeps allocation stable', () => {
@@ -62,8 +61,8 @@ test('healthy steady-state: credit-back on commandedA keeps allocation stable', 
       phaseCurrentsA: { i1: 24, i2: 0, i3: 0 },
     }),
   )
-  assert.equal(allocations.get('a'), 16)
-  assert.ok(freeAmps >= 0)
+  expect(allocations.get('a')).toBe(16)
+  expect(freeAmps).toBeGreaterThanOrEqual(0)
 })
 
 test('ramp-up: commandedA prevents oscillation during car ramp', () => {
@@ -81,7 +80,7 @@ test('ramp-up: commandedA prevents oscillation during car ramp', () => {
     }),
   )
   // commandedA credit-back keeps the car going; without it, give=4 → IEC floor → 0
-  assert.ok((allocations.get('a') ?? 0) >= 6, 'allocation should be ≥6A during ramp-up')
+  expect(allocations.get('a') ?? 0).toBeGreaterThanOrEqual(6)
 })
 
 test('fast 6A floor: sub-minimum headroom rounds to 0', () => {
@@ -92,7 +91,7 @@ test('fast 6A floor: sub-minimum headroom rounds to 0', () => {
       phaseCurrentsA: { i1: 22, i2: 0, i3: 0 },
     }),
   )
-  assert.equal(allocations.get('a'), 0)
+  expect(allocations.get('a')).toBe(0)
 })
 
 test('smart 6A floor: sub-minimum headroom rounds to 0', () => {
@@ -103,7 +102,7 @@ test('smart 6A floor: sub-minimum headroom rounds to 0', () => {
       phaseCurrentsA: { i1: 22, i2: 0, i3: 0 },
     }),
   )
-  assert.equal(allocations.get('a'), 0)
+  expect(allocations.get('a')).toBe(0)
 })
 
 test('stale fallback: total commanded never exceeds mainBreakerA', () => {
@@ -115,7 +114,7 @@ test('stale fallback: total commanded never exceeds mainBreakerA', () => {
     input({ loadpoints: lps, mainBreakerA: 16, phaseCurrentsA: null, meterStale: true }),
   )
   const total = (allocations.get('a') ?? 0) + (allocations.get('b') ?? 0)
-  assert.ok(total <= 16, `total ${total}A exceeds 16A breaker`)
+  expect(total).toBeLessThanOrEqual(16)
 })
 
 test('stale fallback: fast loadpoint gets priority over smart', () => {
@@ -133,9 +132,9 @@ test('stale fallback: fast loadpoint gets priority over smart', () => {
       safeStaticCurrentA: 10,
     }),
   )
-  assert.equal(allocations.get('fast1'), 10)
+  expect(allocations.get('fast1')).toBe(10)
   // remaining = 12 - 10 = 2; 2 < 6 → 0
-  assert.equal(allocations.get('smart1'), 0)
+  expect(allocations.get('smart1')).toBe(0)
 })
 
 test('hysteresis: allocation within ±1A of commandedA stays unchanged', () => {
@@ -147,7 +146,7 @@ test('hysteresis: allocation within ±1A of commandedA stays unchanged', () => {
       phaseCurrentsA: { i1: 21, i2: 0, i3: 0 },
     }),
   )
-  assert.equal(allocations.get('a'), 9)
+  expect(allocations.get('a')).toBe(9)
 })
 
 test('hysteresis breach: allocation outside ±1A moves to new value', () => {
@@ -159,7 +158,7 @@ test('hysteresis breach: allocation outside ±1A moves to new value', () => {
       phaseCurrentsA: { i1: 23, i2: 0, i3: 0 },
     }),
   )
-  assert.equal(allocations.get('a'), 6)
+  expect(allocations.get('a')).toBe(6)
 })
 
 test('fast priority: fast gets headroom first, smart gets remainder', () => {
@@ -174,6 +173,6 @@ test('fast priority: fast gets headroom first, smart gets remainder', () => {
       phaseCurrentsA: { i1: 13, i2: 0, i3: 0 },
     }),
   )
-  assert.equal(allocations.get('fast1'), 12)
-  assert.equal(allocations.get('smart1'), 0)
+  expect(allocations.get('fast1')).toBe(12)
+  expect(allocations.get('smart1')).toBe(0)
 })
