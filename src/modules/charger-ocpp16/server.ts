@@ -51,7 +51,6 @@ export class OcppServer {
   private readonly stations = new Map<string, StationState>()
   private readonly _pendingAutoStart = new Map<string, boolean>()
   private readonly _pendingCallbacks = new Map<string, StatusCallback[]>()
-  private health: ModuleHealth = 'ok'
 
   constructor(
     private readonly db: DatabaseSync,
@@ -116,7 +115,13 @@ export class OcppServer {
   }
 
   getHealth(): ModuleHealth {
-    return this.health
+    // Derived from live connection state — no stored field to keep in sync.
+    // `stations` mutates on connect/disconnect, so health recomputes for free.
+    // Health is server-wide (this OcppServer is shared across all ocpp16 chargers).
+    const expected = this._pendingAutoStart.size
+    if (expected === 0) return 'ok' // no stations registered — nothing to be unhealthy about
+    if (this.stations.size === 0) return 'unavailable'
+    return this.stations.size >= expected ? 'ok' : 'degraded'
   }
 
   async remoteStart(stationId: string, idTag = 'osc-manual'): Promise<void> {

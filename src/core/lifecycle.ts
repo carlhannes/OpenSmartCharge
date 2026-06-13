@@ -212,6 +212,9 @@ async function main() {
       state.currentA = status.currentA ?? state.currentA
       state.sessionEnergyKWh = status.sessionEnergyKWh ?? state.sessionEnergyKWh
 
+      // Charger module health tracks connection state — refresh on connect/disconnect.
+      updateHealth(health, lpCfg.charger, charger.health())
+
       // Persist energy for estimation when vehicle is offline
       events.emit('loadpoint.state', {
         name: state.name,
