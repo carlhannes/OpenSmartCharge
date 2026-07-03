@@ -33,7 +33,9 @@ export function loadLoadpointStates(
   db: DatabaseSync,
   inits: LoadpointInit[],
 ): Map<string, LoadpointState> {
-  const insert = db.prepare(`INSERT OR IGNORE INTO loadpoint_state (name, mode) VALUES (?, 'smart')`)
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO loadpoint_state (name, mode) VALUES (?, 'smart')`,
+  )
   const read = db.prepare(`SELECT * FROM loadpoint_state WHERE name = ?`)
 
   const states = new Map<string, LoadpointState>()
@@ -57,9 +59,9 @@ export function loadLoadpointStates(
 }
 
 export function setLoadpointMode(db: DatabaseSync, name: string, mode: ChargeMode): void {
-  db
-    .prepare(`UPDATE loadpoint_state SET mode = ?, updated_at = datetime('now') WHERE name = ?`)
-    .run(mode, name)
+  db.prepare(
+    `UPDATE loadpoint_state SET mode = ?, updated_at = datetime('now') WHERE name = ?`,
+  ).run(mode, name)
 }
 
 export function setLoadpointTarget(
@@ -68,9 +70,7 @@ export function setLoadpointTarget(
   targetSoc?: number,
   targetTime?: string,
 ): void {
-  db
-    .prepare(
-      `UPDATE loadpoint_state SET target_soc = ?, target_time = ?, updated_at = datetime('now') WHERE name = ?`,
-    )
-    .run(targetSoc ?? null, targetTime ?? null, name)
+  db.prepare(
+    `UPDATE loadpoint_state SET target_soc = ?, target_time = ?, updated_at = datetime('now') WHERE name = ?`,
+  ).run(targetSoc ?? null, targetTime ?? null, name)
 }

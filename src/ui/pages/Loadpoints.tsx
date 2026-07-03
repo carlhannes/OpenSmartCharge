@@ -18,7 +18,11 @@ export default function Loadpoints() {
     const unsubState = subscribe('loadpoint.state', (d) => patch(d as Patch))
     const unsubMode = subscribe('loadpoint.mode', (d) => patch(d as Patch))
     const unsubTarget = subscribe('loadpoint.target', (d) => patch(d as Patch))
-    return () => { unsubState(); unsubMode(); unsubTarget() }
+    return () => {
+      unsubState()
+      unsubMode()
+      unsubTarget()
+    }
   }, [])
 
   const handleUpdate = (updated: LoadpointStateDto) => {
@@ -31,7 +35,13 @@ export default function Loadpoints() {
       {loadpoints.length === 0 && (
         <p style={{ color: 'var(--color-muted)' }}>No loadpoints configured.</p>
       )}
-      <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
+      <div
+        style={{
+          display: 'grid',
+          gap: 16,
+          gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',
+        }}
+      >
         {loadpoints.map((lp) => {
           const siteLp = site?.loadpoints.find((s) => s.name === lp.name)
           const siteCharger = site?.chargers.find((c) => c.name === siteLp?.charger)

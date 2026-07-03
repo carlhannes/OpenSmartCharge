@@ -5,13 +5,20 @@ interface LoadpointDiscoveryOpts {
   topicPrefix: string
 }
 
-export function publishHaDiscovery(mqtt: MqttClient, loadpoints: string[], topicPrefix: string): void {
+export function publishHaDiscovery(
+  mqtt: MqttClient,
+  loadpoints: string[],
+  topicPrefix: string,
+): void {
   for (const name of loadpoints) {
     publishLoadpointDiscovery(mqtt, { name, topicPrefix })
   }
 }
 
-function publishLoadpointDiscovery(mqtt: MqttClient, { name, topicPrefix }: LoadpointDiscoveryOpts): void {
+function publishLoadpointDiscovery(
+  mqtt: MqttClient,
+  { name, topicPrefix }: LoadpointDiscoveryOpts,
+): void {
   const prefix = `${topicPrefix}/loadpoints/${name}`
   const haBase = `homeassistant`
   const deviceId = `osc_${name.replace(/\W/g, '_')}`

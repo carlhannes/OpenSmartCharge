@@ -1,6 +1,6 @@
 import type { LoadpointSnapshot } from '../../sdk/balancer.js'
 
-const OCPP_MIN_A = 6  // per-loadpoint minimum below which we round to 0
+const OCPP_MIN_A = 6 // per-loadpoint minimum below which we round to 0
 const HYSTERESIS_A = 1 // dead-band: ignore allocation changes within ±1A of last commanded value
 
 export function allocate(input: {

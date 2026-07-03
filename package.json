@@ -20,7 +20,9 @@
     "backup": "node scripts/backup.mjs",
     "restore": "node scripts/restore.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "test": "node --import tsx/esm --test src/modules/balancer-mqtt-circuit/allocator.test.ts src/core/planner.test.ts src/modules/charger-ocpp16/debounce.test.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -44,12 +46,14 @@
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
+    "@vitest/coverage-v8": "^4.1.8",
     "concurrently": "^9.2.1",
     "prettier": "^3.5.3",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.32.1",
-    "vite": "^8.0.14"
+    "vite": "^8.0.14",
+    "vitest": "^4.1.8"
   },
   "engines": {
     "node": ">=22.5"

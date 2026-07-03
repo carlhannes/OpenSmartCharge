@@ -27,7 +27,7 @@ These were established at project start and apply to all changes:
 7. **Rationale first** — state assumptions and rationale before making changes.
 8. **No comments that describe what** — code names should do that. Comments only for *why* (a hidden constraint, a subtle invariant, a workaround).
 9. **Update docs** — when changing something that's documented, update the docs in the same commit.
-10. **Run the tools** — after file edits, run `npm run typecheck && npm run lint` and fix all errors before reporting done.
+10. **Run the tools** — after file edits, run `npm run format && npm run typecheck && npm run lint` and fix all errors before reporting done.
 11. **Sanity-check** — after completing a task, randomly pick one modified file and re-read it as a stranger would. State what you find.
 
 ---

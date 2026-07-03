@@ -44,7 +44,7 @@ export async function fetchEleringPrices(
   return records.map((r) => ({
     start: new Date(r.timestamp * 1000),
     end: new Date((r.timestamp + 3600) * 1000),
-    pricePerKWh: r.price / 1000,  // EUR/MWh → EUR/kWh
+    pricePerKWh: r.price / 1000, // EUR/MWh → EUR/kWh
     currency: 'EUR',
   }))
 }

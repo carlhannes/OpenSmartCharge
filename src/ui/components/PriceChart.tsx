@@ -7,7 +7,8 @@ interface Props {
 }
 
 export default function PriceChart({ slots, currency }: Props) {
-  if (slots.length === 0) return <p style={{ color: 'var(--color-muted)' }}>No price data available.</p>
+  if (slots.length === 0)
+    return <p style={{ color: 'var(--color-muted)' }}>No price data available.</p>
 
   const now = Date.now()
   const data = slots.map((s) => ({
@@ -19,14 +20,22 @@ export default function PriceChart({ slots, currency }: Props) {
   return (
     <ResponsiveContainer width="100%" height={200}>
       <BarChart data={data} margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
-        <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--color-muted)' }} interval="preserveStartEnd" />
+        <XAxis
+          dataKey="label"
+          tick={{ fontSize: 10, fill: 'var(--color-muted)' }}
+          interval="preserveStartEnd"
+        />
         <YAxis
           tick={{ fontSize: 10, fill: 'var(--color-muted)' }}
           tickFormatter={(v: number) => `${v.toFixed(2)}`}
           width={45}
         />
         <Tooltip
-          contentStyle={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 6 }}
+          contentStyle={{
+            background: 'var(--color-surface)',
+            border: '1px solid var(--color-border)',
+            borderRadius: 6,
+          }}
           labelStyle={{ color: 'var(--color-text)' }}
           formatter={(v) => [`${(v as number).toFixed(4)} ${currency}/kWh`, 'Price']}
         />

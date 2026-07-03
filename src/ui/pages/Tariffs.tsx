@@ -12,8 +12,13 @@ function TariffPanel({ name, zone }: { name: string; zone?: string }) {
 
   return (
     <div className={styles.panel}>
-      <h2>{name}{zone ? <span className={styles.zone}> ({zone})</span> : null}</h2>
-      <p className={styles.meta}>{slots.length} slots · {currency}</p>
+      <h2>
+        {name}
+        {zone ? <span className={styles.zone}> ({zone})</span> : null}
+      </h2>
+      <p className={styles.meta}>
+        {slots.length} slots · {currency}
+      </p>
       <PriceChart slots={slots} currency={currency} />
     </div>
   )
@@ -26,7 +31,9 @@ export default function Tariffs() {
     <div>
       <h1>Tariffs</h1>
       {!site && <p style={{ color: 'var(--color-muted)' }}>Loading…</p>}
-      {site?.tariffs.length === 0 && <p style={{ color: 'var(--color-muted)' }}>No tariffs configured.</p>}
+      {site?.tariffs.length === 0 && (
+        <p style={{ color: 'var(--color-muted)' }}>No tariffs configured.</p>
+      )}
       {site?.tariffs.map((t) => (
         <TariffPanel key={t.name} name={t.name} zone={t.zone} />
       ))}

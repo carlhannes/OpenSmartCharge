@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { StartTransactionReq, StopTransactionReq, MeterValuesReq } from './types.js'
+import { parseMeterValue } from './meter-parser.js'
 
 export function allocateTransactionId(db: DatabaseSync): number {
   const row = db.prepare(`SELECT next_value FROM ocpp_tx_counter WHERE id = 1`).get() as
@@ -56,23 +57,15 @@ export function insertMeterValues(
   )
 
   for (const mv of params.meterValue) {
-    const get = (measurand: string) =>
-      mv.sampledValue.find((s) => s.measurand === measurand)?.value
-
-    const energyWh = parseFloat(get('Energy.Active.Import.Register') ?? 'NaN')
-    const powerW = parseFloat(get('Power.Active.Import') ?? 'NaN')
-    const currentA = parseFloat(get('Current.Import') ?? 'NaN')
-    const voltageV = parseFloat(get('Voltage') ?? 'NaN')
-    const socPct = parseFloat(get('SoC') ?? 'NaN')
-
+    const parsed = parseMeterValue(mv)
     stmt.run(
       transactionId,
       mv.timestamp,
-      isNaN(energyWh) ? null : energyWh / 1000,
-      isNaN(powerW) ? null : powerW,
-      isNaN(currentA) ? null : currentA,
-      isNaN(voltageV) ? null : voltageV,
-      isNaN(socPct) ? null : socPct,
+      parsed.energyKwh ?? null,
+      parsed.powerW ?? null,
+      parsed.currentA ?? null,
+      parsed.voltageV ?? null,
+      parsed.socPct ?? null,
       JSON.stringify(mv),
     )
   }

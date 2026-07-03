@@ -1,5 +1,4 @@
-import { test } from 'node:test'
-import assert from 'node:assert/strict'
+import { test, expect } from 'vitest'
 import { plan } from './planner.js'
 import type { TariffSlot } from '../sdk/tariff.js'
 
@@ -28,7 +27,7 @@ test('requiredKWh=0 produces no charging slots', () => {
     priceSlots: priceSlots([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]),
   })
   const charging = slots.filter((s) => s.shouldCharge)
-  assert.equal(charging.length, 0, 'no slots should be scheduled when requiredKWh=0')
+  expect(charging.length).toBe(0)
 })
 
 test('single cheapest slot picked when requiredKWh fits in one slot', () => {
@@ -43,12 +42,13 @@ test('single cheapest slot picked when requiredKWh fits in one slot', () => {
   })
   const charging = slots.filter((s) => s.shouldCharge)
   // Only 1 slot needed; it should be in the cheapest hour (index 1 = price 0.1)
-  assert.equal(charging.length, 1)
+  expect(charging.length).toBe(1)
   const cheapestHourStart = new Date(NOW.getTime() + 1 * 3_600_000)
-  assert.ok(
-    charging[0].start >= cheapestHourStart && charging[0].start < new Date(cheapestHourStart.getTime() + 3_600_000),
-    'the single charging slot should fall in the cheapest hour',
-  )
+  // the single charging slot should fall in the cheapest hour
+  expect(
+    charging[0].start >= cheapestHourStart &&
+      charging[0].start < new Date(cheapestHourStart.getTime() + 3_600_000),
+  ).toBe(true)
 })
 
 test('spreads across two cheapest hours when one slot is not enough', () => {
@@ -63,7 +63,7 @@ test('spreads across two cheapest hours when one slot is not enough', () => {
   })
   const charging = slots.filter((s) => s.shouldCharge)
   // 5 slots needed (ceil(1.25 h * 4)) = 5; they should be in hours 1 (0.1) and 4 (0.2)
-  assert.ok(charging.length >= 4, `expected ≥4 charging slots, got ${charging.length}`)
+  expect(charging.length).toBeGreaterThanOrEqual(4)
 })
 
 test('already-past target returns empty plan', () => {
@@ -74,7 +74,7 @@ test('already-past target returns empty plan', () => {
     maxCurrentA: 16,
     phases: 3,
   })
-  assert.equal(slots.length, 0)
+  expect(slots.length).toBe(0)
 })
 
 test('empty priceSlots falls back to latest-start plan (no cheap-slot pick)', () => {
@@ -91,12 +91,10 @@ test('empty priceSlots falls back to latest-start plan (no cheap-slot pick)', ()
   // Should be the last 2 slots before TARGET_2H
   const notCharging = slots.filter((s) => !s.shouldCharge)
   if (notCharging.length > 0 && charging.length > 0) {
-    assert.ok(
-      notCharging[notCharging.length - 1].end <= charging[0].start,
-      'non-charging slots should precede charging slots in latest-start plan',
-    )
+    // non-charging slots should precede charging slots in latest-start plan
+    expect(notCharging[notCharging.length - 1].end <= charging[0].start).toBe(true)
   }
-  assert.ok(charging.length > 0, 'at least one charging slot expected')
+  expect(charging.length).toBeGreaterThan(0)
 })
 
 test('undefined priceSlots falls back to latest-start plan', () => {
@@ -107,7 +105,7 @@ test('undefined priceSlots falls back to latest-start plan', () => {
     maxCurrentA: 16,
     phases: 3,
   })
-  assert.ok(slots.length > 0)
+  expect(slots.length).toBeGreaterThan(0)
   const charging = slots.filter((s) => s.shouldCharge)
-  assert.ok(charging.length > 0)
+  expect(charging.length).toBeGreaterThan(0)
 })

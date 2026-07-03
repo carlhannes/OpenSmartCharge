@@ -17,7 +17,7 @@ Before opening a pull request for anything else:
 3. **Follow the conventions.** See [AGENTS.md](AGENTS.md) for the full list — the short version: functional TypeScript (no classes), no speculative abstractions, no early optimization.
 4. **Run the tools before pushing:**
    ```bash
-   npm run typecheck && npm run lint
+   npm run format && npm run typecheck && npm run lint
    ```
 5. **Update docs** if your change affects any documented behavior.
 

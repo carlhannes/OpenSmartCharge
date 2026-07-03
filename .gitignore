@@ -9,3 +9,4 @@ osc.yaml
 .DS_Store
 test-results/
 playwright-report/
+coverage/

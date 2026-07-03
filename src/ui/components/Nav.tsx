@@ -30,7 +30,11 @@ export default function Nav() {
       <ul className={styles.links}>
         {links.map(({ to, label }) => (
           <li key={to}>
-            <NavLink to={to} end={to === '/'} className={({ isActive }) => isActive ? styles.active : undefined}>
+            <NavLink
+              to={to}
+              end={to === '/'}
+              className={({ isActive }) => (isActive ? styles.active : undefined)}
+            >
               {label}
               {to === '/health' && Object.keys(health).length > 0 && (
                 <span style={{ marginLeft: 5, verticalAlign: 'middle' }}>

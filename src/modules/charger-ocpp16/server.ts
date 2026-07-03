@@ -10,8 +10,13 @@ import type { ModuleHealth } from '../../sdk/types.js'
 interface OcppClient {
   readonly handshake: { identity: string }
   call(method: string, params?: unknown): Promise<unknown>
-  handle(method: string, handler: (event: { params?: unknown }) => Promise<Record<string, unknown>>): void
-  handle(handler: (event: { method?: string; params?: unknown }) => Promise<Record<string, unknown>>): void
+  handle(
+    method: string,
+    handler: (event: { params?: unknown }) => Promise<Record<string, unknown>>,
+  ): void
+  handle(
+    handler: (event: { method?: string; params?: unknown }) => Promise<Record<string, unknown>>,
+  ): void
   on(event: string, listener: (...args: unknown[]) => void): this
 }
 import type {
@@ -29,6 +34,7 @@ import {
   latestEnergyKwh,
 } from './persistence.js'
 import { setCurrentLimit, remoteStart, remoteStop as cmdRemoteStop } from './commands.js'
+import { computeConnectionState, shouldAutoStart, computeHealth } from './status.js'
 
 type StatusCallback = (status: ChargerStatus) => void
 
@@ -46,7 +52,6 @@ export class OcppServer {
   private readonly stations = new Map<string, StationState>()
   private readonly _pendingAutoStart = new Map<string, boolean>()
   private readonly _pendingCallbacks = new Map<string, StatusCallback[]>()
-  private health: ModuleHealth = 'ok'
 
   constructor(
     private readonly db: DatabaseSync,
@@ -97,7 +102,10 @@ export class OcppServer {
     this._pendingCallbacks.set(stationId, list)
     return () => {
       const current = this._pendingCallbacks.get(stationId) ?? []
-      this._pendingCallbacks.set(stationId, current.filter((c) => c !== cb))
+      this._pendingCallbacks.set(
+        stationId,
+        current.filter((c) => c !== cb),
+      )
     }
   }
 
@@ -108,7 +116,9 @@ export class OcppServer {
   }
 
   getHealth(): ModuleHealth {
-    return this.health
+    // Derived from live connection state — no stored field to keep in sync.
+    // `stations` mutates on connect/disconnect, so health recomputes for free.
+    return computeHealth(this._pendingAutoStart.size, this.stations.size)
   }
 
   async remoteStart(stationId: string, idTag = 'osc-manual'): Promise<void> {
@@ -132,7 +142,11 @@ export class OcppServer {
     const state = this.stations.get(stationId)
     if (!state) return
     for (const cb of state.statusCallbacks) {
-      try { cb(status) } catch { /* ignore subscriber errors */ }
+      try {
+        cb(status)
+      } catch {
+        /* ignore subscriber errors */
+      }
     }
   }
 
@@ -169,7 +183,10 @@ export class OcppServer {
 
     client.handle('BootNotification', async ({ params }) => {
       const p = params as BootNotificationReq
-      this.log.info({ stationId, vendor: p.chargePointVendor, model: p.chargePointModel }, 'BootNotification')
+      this.log.info(
+        { stationId, vendor: p.chargePointVendor, model: p.chargePointModel },
+        'BootNotification',
+      )
 
       // Issue safe default current immediately so charger is never at an unknown limit
       setImmediate(() => {
@@ -198,10 +215,12 @@ export class OcppServer {
         state.connectorId = p.connectorId
       }
 
-      this.log.debug({ stationId, connectorId: p.connectorId, status: p.status }, 'StatusNotification')
+      this.log.debug(
+        { stationId, connectorId: p.connectorId, status: p.status },
+        'StatusNotification',
+      )
 
-      const charging = p.status === 'Charging' || p.status === 'SuspendedEV' || p.status === 'SuspendedEVSE'
-      const connected = p.status !== 'Available' && p.status !== 'Unavailable' && p.status !== 'Faulted'
+      const { charging, connected } = computeConnectionState(p.status)
 
       this.pushStatus(stationId, {
         connectorId: p.connectorId,
@@ -211,7 +230,7 @@ export class OcppServer {
       })
 
       // Auto-start: send RemoteStartTransaction when vehicle plugs in and no tx is active
-      if (p.status === 'Preparing' && !state.activeTransactionId && state.autoStart) {
+      if (shouldAutoStart(p.status, !!state.activeTransactionId, state.autoStart)) {
         this.log.info({ stationId }, 'auto-starting transaction')
         setImmediate(() => {
           void remoteStart(state.client, 'osc-auto', p.connectorId).catch((err) =>

@@ -74,10 +74,9 @@ Optional. Enables SoC-aware departure planning.
 vehicles:
   - name: enyaq
     type: skoda
-    vin: "TMBXXXXXXXXXXXXXXX"
-    credentials:
-      user: "me@example.com"
-      password: "secret"
+    username: "me@example.com"   # MySkoda account email
+    password: "your-password"    # MySkoda account password
+    vin: TMBABCDEF12345678       # 17-char VIN (uppercase)
 ```
 
 **Built-in types:** `skoda`

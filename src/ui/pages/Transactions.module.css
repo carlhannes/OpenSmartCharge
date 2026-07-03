@@ -18,8 +18,12 @@
   cursor: pointer;
 }
 
-.row:hover td { background: var(--color-surface); }
-.expanded td { background: var(--color-surface); }
+.row:hover td {
+  background: var(--color-surface);
+}
+.expanded td {
+  background: var(--color-surface);
+}
 
 .detailCell {
   padding: 16px 8px !important;

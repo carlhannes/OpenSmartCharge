@@ -166,8 +166,14 @@ export function createApiRouter(deps: ApiDeps): Router {
   router.post('/loadpoints/:name/start', async (req: Request, res: Response) => {
     const name = String(req.params.name)
     const charger = deps.chargers.get(name)
-    if (!charger) { res.status(404).json({ error: 'loadpoint not found' }); return }
-    if (!charger.remoteStart) { res.status(400).json({ error: 'charger does not support remote start' }); return }
+    if (!charger) {
+      res.status(404).json({ error: 'loadpoint not found' })
+      return
+    }
+    if (!charger.remoteStart) {
+      res.status(400).json({ error: 'charger does not support remote start' })
+      return
+    }
     await charger.remoteStart()
     res.json(deps.loadpoints.get(name) ?? {})
   })
@@ -176,8 +182,14 @@ export function createApiRouter(deps: ApiDeps): Router {
   router.post('/loadpoints/:name/stop', async (req: Request, res: Response) => {
     const name = String(req.params.name)
     const charger = deps.chargers.get(name)
-    if (!charger) { res.status(404).json({ error: 'loadpoint not found' }); return }
-    if (!charger.remoteStop) { res.status(400).json({ error: 'charger does not support remote stop' }); return }
+    if (!charger) {
+      res.status(404).json({ error: 'loadpoint not found' })
+      return
+    }
+    if (!charger.remoteStop) {
+      res.status(400).json({ error: 'charger does not support remote stop' })
+      return
+    }
     await charger.remoteStop()
     res.json(deps.loadpoints.get(name) ?? {})
   })
@@ -186,11 +198,20 @@ export function createApiRouter(deps: ApiDeps): Router {
   router.post('/loadpoints/:name/profile', async (req: Request, res: Response) => {
     const name = String(req.params.name)
     const charger = deps.chargers.get(name)
-    if (!charger) { res.status(404).json({ error: 'loadpoint not found' }); return }
-    if (!charger.setOneShotProfile) { res.status(400).json({ error: 'charger does not support one-shot profile' }); return }
+    if (!charger) {
+      res.status(404).json({ error: 'loadpoint not found' })
+      return
+    }
+    if (!charger.setOneShotProfile) {
+      res.status(400).json({ error: 'charger does not support one-shot profile' })
+      return
+    }
     const body = req.body as { amps?: unknown }
     const amps = typeof body.amps === 'number' ? body.amps : undefined
-    if (amps === undefined || amps < 0) { res.status(400).json({ error: 'amps must be a non-negative number' }); return }
+    if (amps === undefined || amps < 0) {
+      res.status(400).json({ error: 'amps must be a non-negative number' })
+      return
+    }
     await charger.setOneShotProfile(amps)
     res.json(deps.loadpoints.get(name) ?? {})
   })
@@ -206,7 +227,9 @@ export function createApiRouter(deps: ApiDeps): Router {
         balancer: lp.balancer,
         tariff: lp.tariff,
         vehicle: lp.vehicle,
-        maxCurrentA: (c.chargers.find((ch) => ch.name === lp.charger) as { maxA?: number } | undefined)?.maxA ?? 16,
+        maxCurrentA:
+          (c.chargers.find((ch) => ch.name === lp.charger) as { maxA?: number } | undefined)
+            ?.maxA ?? 16,
         autoStart: lp.autoStart,
         targetSoc: lp.targetSoc,
         targetTime: lp.targetTime,
@@ -247,9 +270,7 @@ export function createApiRouter(deps: ApiDeps): Router {
 
     const rows = loadpoint
       ? deps.db
-          .prepare(
-            `SELECT * FROM transactions WHERE loadpoint_name = ? ORDER BY id DESC LIMIT ?`,
-          )
+          .prepare(`SELECT * FROM transactions WHERE loadpoint_name = ? ORDER BY id DESC LIMIT ?`)
           .all(loadpoint, limit)
       : deps.db.prepare(`SELECT * FROM transactions ORDER BY id DESC LIMIT ?`).all(limit)
 
@@ -259,9 +280,15 @@ export function createApiRouter(deps: ApiDeps): Router {
   // GET /api/transactions/:id
   router.get('/transactions/:id', (req: Request, res: Response) => {
     const id = Number(req.params.id)
-    if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: 'id must be a positive integer' }); return }
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'id must be a positive integer' })
+      return
+    }
     const tx = deps.db.prepare('SELECT * FROM transactions WHERE id = ?').get(id)
-    if (!tx) { res.status(404).json({ error: 'transaction not found' }); return }
+    if (!tx) {
+      res.status(404).json({ error: 'transaction not found' })
+      return
+    }
     const samples = deps.db
       .prepare(
         'SELECT measured_at, energy_kwh, power_w, current_a, soc FROM meter_values WHERE transaction_id = ? ORDER BY measured_at ASC',
@@ -272,4 +299,3 @@ export function createApiRouter(deps: ApiDeps): Router {
 
   return router
 }
-

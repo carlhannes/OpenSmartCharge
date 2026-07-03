@@ -9,7 +9,13 @@ export function upsertSlots(db: DatabaseSync, zone: string, slots: TariffSlot[])
   )
   db.exec('BEGIN')
   for (const slot of slots) {
-    stmt.run(zone, slot.start.toISOString(), slot.end.toISOString(), slot.pricePerKWh, slot.currency)
+    stmt.run(
+      zone,
+      slot.start.toISOString(),
+      slot.end.toISOString(),
+      slot.pricePerKWh,
+      slot.currency,
+    )
   }
   db.exec('COMMIT')
 }

@@ -6,5 +6,13 @@
   margin-bottom: calc(var(--space) * 2);
 }
 
-.zone { color: var(--color-muted); font-weight: normal; font-size: 0.9em; }
-.meta { color: var(--color-muted); font-size: 0.8rem; margin-bottom: var(--space); }
+.zone {
+  color: var(--color-muted);
+  font-weight: normal;
+  font-size: 0.9em;
+}
+.meta {
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  margin-bottom: var(--space);
+}

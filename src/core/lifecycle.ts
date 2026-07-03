@@ -23,6 +23,7 @@ import { getOcppServer } from '../modules/charger-ocpp16/index.js'
 import { startServer } from '../server/index.js'
 import { startMqttBridge } from '../server/mqtt-bridge.js'
 import { plan } from './planner.js'
+import { chargeRateKW, DEFAULT_CHARGING_EFFICIENCY, DUTY_CYCLE_FALLBACK } from './electrical.js'
 import type { Charger } from '../sdk/charger.js'
 import type { Tariff } from '../sdk/tariff.js'
 import type { MeterReader } from '../sdk/meter-reader.js'
@@ -67,7 +68,12 @@ async function main() {
     log,
     fetch: jitterFetch,
     mqtt: config.mqtt
-      ? { host: config.mqtt.host, port: config.mqtt.port, user: config.mqtt.user, password: config.mqtt.password }
+      ? {
+          host: config.mqtt.host,
+          port: config.mqtt.port,
+          user: config.mqtt.user,
+          password: config.mqtt.password,
+        }
       : undefined,
   }
   const chargers = new Map<string, Charger>()
@@ -75,7 +81,10 @@ async function main() {
   for (const chargerCfg of config.chargers) {
     const mod = getChargerModule(chargerCfg.type)
     if (!mod) {
-      log.warn({ type: chargerCfg.type, name: chargerCfg.name }, 'no module registered for charger type')
+      log.warn(
+        { type: chargerCfg.type, name: chargerCfg.name },
+        'no module registered for charger type',
+      )
       continue
     }
     const charger = mod.create(chargerCfg, ctx)
@@ -90,7 +99,10 @@ async function main() {
   for (const tariffCfg of config.tariffs) {
     const mod = getTariffModule(tariffCfg.type)
     if (!mod) {
-      log.warn({ type: tariffCfg.type, name: tariffCfg.name }, 'no module registered for tariff type')
+      log.warn(
+        { type: tariffCfg.type, name: tariffCfg.name },
+        'no module registered for tariff type',
+      )
       continue
     }
     const tariff = mod.create(tariffCfg, ctx)
@@ -111,7 +123,10 @@ async function main() {
   for (const meterCfg of config.meterReaders) {
     const mod = getMeterReaderModule(meterCfg.type)
     if (!mod) {
-      log.warn({ type: meterCfg.type, name: meterCfg.name }, 'no module registered for meter reader type')
+      log.warn(
+        { type: meterCfg.type, name: meterCfg.name },
+        'no module registered for meter reader type',
+      )
       continue
     }
     const reader = mod.create(meterCfg, ctx)
@@ -158,7 +173,10 @@ async function main() {
   for (const balancerCfg of config.balancers) {
     const mod = getBalancerModule(balancerCfg.type)
     if (!mod) {
-      log.warn({ type: balancerCfg.type, name: balancerCfg.name }, 'no module registered for balancer type')
+      log.warn(
+        { type: balancerCfg.type, name: balancerCfg.name },
+        'no module registered for balancer type',
+      )
       continue
     }
     const balancer = mod.create(balancerCfg, ctx)
@@ -193,6 +211,9 @@ async function main() {
       state.charging = status.charging
       state.currentA = status.currentA ?? state.currentA
       state.sessionEnergyKWh = status.sessionEnergyKWh ?? state.sessionEnergyKWh
+
+      // Charger module health tracks connection state — refresh on connect/disconnect.
+      updateHealth(health, lpCfg.charger, charger.health())
 
       // Persist energy for estimation when vehicle is offline
       events.emit('loadpoint.state', {
@@ -294,7 +315,9 @@ async function main() {
     if (!tariff || tariff.health() === 'unavailable') return true
 
     const now = new Date()
-    const targetTime = state.targetTime ? parseTargetTime(state.targetTime) : new Date(Date.now() + 24 * 3600_000)
+    const targetTime = state.targetTime
+      ? parseTargetTime(state.targetTime)
+      : new Date(Date.now() + 24 * 3600_000)
     const hoursUntilTarget = Math.max(0.25, (targetTime.getTime() - now.getTime()) / 3_600_000)
 
     let priceSlots
@@ -305,10 +328,13 @@ async function main() {
     }
     if (!priceSlots || priceSlots.length === 0) return true
 
+    // Charge rate depends on the loadpoint's circuit phase count (1–3); fall back to
+    // 3-phase (the balancer schema default) when no balancer is wired.
+    const phases = config.balancers.find((b) => b.name === lpCfg.balancer)?.phases ?? 3
+
     // Use real SoC if a vehicle is wired and data is available; fall back to duty-cycle heuristic
     let requiredKWh: number
-    const lpCfgV = config.loadpoints.find((l) => l.name === lpName)?.vehicle
-    const vehicle = lpCfgV ? vehicles.get(lpCfgV) : undefined
+    const vehicle = lpCfg.vehicle ? vehicles.get(lpCfg.vehicle) : undefined
     const capacity = vehicle?.getCachedCapacity()
     let currentSoc: number | undefined
     if (vehicle && capacity) {
@@ -320,24 +346,36 @@ async function main() {
     }
     if (currentSoc !== undefined && capacity && state.targetSoc) {
       const remaining = Math.max(0, state.targetSoc - currentSoc)
-      requiredKWh = (remaining / 100) * capacity / 0.92
-      ctx.log.debug({ lpName, currentSoc, targetSoc: state.targetSoc, capacity, requiredKWh }, 'skoda SoC-based requiredKWh')
+      requiredKWh = ((remaining / 100) * capacity) / DEFAULT_CHARGING_EFFICIENCY
+      ctx.log.debug(
+        { lpName, currentSoc, targetSoc: state.targetSoc, capacity, requiredKWh },
+        'skoda SoC-based requiredKWh',
+      )
     } else {
-      // Fallback: 40%-duty-cycle heuristic when vehicle API unavailable
-      const chargeRateKW = (state.maxCurrentA * 3 * 230) / 1000
-      requiredKWh = Math.max(1, hoursUntilTarget * chargeRateKW * 0.4)
+      // Fallback: duty-cycle heuristic when vehicle API unavailable
+      const rateKW = chargeRateKW(state.maxCurrentA, phases)
+      requiredKWh = Math.max(1, hoursUntilTarget * rateKW * DUTY_CYCLE_FALLBACK)
     }
 
     // Already at target SoC — no need to charge
     if (requiredKWh <= 0) return false
 
-    const planned = plan({ requiredKWh, targetTime, maxCurrentA: state.maxCurrentA, phases: 3, priceSlots })
+    const planned = plan({
+      requiredKWh,
+      targetTime,
+      maxCurrentA: state.maxCurrentA,
+      phases,
+      priceSlots,
+    })
     const currentSlot = planned.find((s) => s.start <= now && s.end > now)
     return currentSlot?.shouldCharge ?? true
   }
 
   // Tick function for a specific balancer — called on the interval and on mode changes.
-  const lastTickByBalancer = new Map<string, { allocations: Record<string, number>; freeAmps: number }>()
+  const lastTickByBalancer = new Map<
+    string,
+    { allocations: Record<string, number>; freeAmps: number }
+  >()
   const tickSlots = new Map<string, { running: boolean; rerun: boolean }>()
 
   async function runBalancerTick(balancerName: string): Promise<void> {
@@ -360,7 +398,8 @@ async function main() {
       const snaps = await Promise.all(
         lpCfgs.map(async (lpCfg) => {
           const state = loadpointStates.get(lpCfg.name)!
-          const should = state.mode === 'smart' ? await computeShouldChargeNow(lpCfg.name) : undefined
+          const should =
+            state.mode === 'smart' ? await computeShouldChargeNow(lpCfg.name) : undefined
           const tariff = lpCfg.tariff ? tariffs.get(lpCfg.tariff) : undefined
           const pricesAvailable = !!tariff && tariff.health() !== 'unavailable'
           return buildSnapshot(state, lpCfg.vehicle, should, pricesAvailable)
@@ -445,16 +484,20 @@ async function main() {
 
   // MQTT bridge (optional)
   if (config.mqtt) {
-    startMqttBridge(config.mqtt, {
-      events,
-      loadpoints: loadpointStates,
-      tariffs,
-      balancers,
-      vehicles,
-      health,
-      onModeChange: handleModeChange,
-      onTargetChange: handleTargetChange,
-    }, log)
+    startMqttBridge(
+      config.mqtt,
+      {
+        events,
+        loadpoints: loadpointStates,
+        tariffs,
+        balancers,
+        vehicles,
+        health,
+        onModeChange: handleModeChange,
+        onTargetChange: handleTargetChange,
+      },
+      log,
+    )
     log.info({ host: config.mqtt.host }, 'MQTT bridge starting')
   }
 
@@ -466,7 +509,10 @@ async function main() {
     balancerIntervals.push(
       setInterval(() => void runBalancerTick(balancerCfg.name), balancerCfg.intervalSec * 1000),
     )
-    log.info({ balancer: balancerCfg.name, intervalSec: balancerCfg.intervalSec }, 'balancer tick loop started')
+    log.info(
+      { balancer: balancerCfg.name, intervalSec: balancerCfg.intervalSec },
+      'balancer tick loop started',
+    )
   }
 
   log.info('OpenSmartCharge ready')

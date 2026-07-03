@@ -9,7 +9,12 @@ export function useBalancer(name: string) {
     getBalancer(name).then(setState).catch(console.error)
 
     const unsub = subscribe('balancer.tick', (d) => {
-      const tick = d as { name: string; allocations: Record<string, number>; freeAmps: number; health: string }
+      const tick = d as {
+        name: string
+        allocations: Record<string, number>
+        freeAmps: number
+        health: string
+      }
       if (tick.name === name) {
         setState({
           name,

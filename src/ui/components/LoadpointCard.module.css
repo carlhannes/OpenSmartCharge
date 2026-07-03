@@ -35,8 +35,12 @@
   background: var(--color-muted);
   flex-shrink: 0;
 }
-.dot.connected { background: var(--color-ok); }
-.dot.charging { background: var(--color-accent); }
+.dot.connected {
+  background: var(--color-ok);
+}
+.dot.charging {
+  background: var(--color-accent);
+}
 
 .metrics {
   display: flex;
@@ -44,9 +48,21 @@
   font-size: 0.875rem;
 }
 
-.metric { display: flex; flex-direction: column; gap: 2px; }
-.metricLabel { color: var(--color-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
-.metricValue { font-weight: 500; font-size: 1rem; }
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.metricLabel {
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.metricValue {
+  font-weight: 500;
+  font-size: 1rem;
+}
 
 /* Mode selector */
 .modeSelector {
@@ -65,8 +81,15 @@
   font-size: 0.8rem;
   transition: all 0.15s;
 }
-.modeBtn:hover { border-color: var(--color-accent); color: var(--color-text); }
-.modeBtn.active { background: var(--color-accent); border-color: var(--color-accent); color: #fff; }
+.modeBtn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+.modeBtn.active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
 
 /* Target editor */
 .targetRow {
@@ -77,7 +100,10 @@
   font-size: 0.875rem;
 }
 
-.targetLabel { color: var(--color-muted); white-space: nowrap; }
+.targetLabel {
+  color: var(--color-muted);
+  white-space: nowrap;
+}
 
 .targetInput {
   background: var(--color-bg);
@@ -88,9 +114,16 @@
   font-size: 0.875rem;
   width: 80px;
 }
-.targetInput:focus { outline: none; border-color: var(--color-accent); }
+.targetInput:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
 
-.socSlider { flex: 1; min-width: 100px; accent-color: var(--color-accent); }
+.socSlider {
+  flex: 1;
+  min-width: 100px;
+  accent-color: var(--color-accent);
+}
 
 /* Manual commands */
 .commands {
@@ -109,10 +142,21 @@
   font-size: 0.8rem;
   transition: all 0.15s;
 }
-.cmdBtn:hover { border-color: var(--color-accent); }
-.cmdBtn:disabled { opacity: 0.4; cursor: default; }
-.cmdBtn.danger { border-color: var(--color-error); color: var(--color-error); }
-.cmdBtn.danger:hover { background: var(--color-error); color: #fff; }
+.cmdBtn:hover {
+  border-color: var(--color-accent);
+}
+.cmdBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.cmdBtn.danger {
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+.cmdBtn.danger:hover {
+  background: var(--color-error);
+  color: #fff;
+}
 
 .profileInput {
   background: var(--color-bg);
@@ -123,4 +167,7 @@
   font-size: 0.8rem;
   width: 60px;
 }
-.profileInput:focus { outline: none; border-color: var(--color-accent); }
+.profileInput:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}

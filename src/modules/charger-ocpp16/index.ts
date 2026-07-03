@@ -43,7 +43,9 @@ registerCharger({
     })
 
     const charger: Charger = {
-      get id() { return stationId },
+      get id() {
+        return stationId
+      },
 
       async start() {
         ctx.log.info({ stationId }, 'charger started')

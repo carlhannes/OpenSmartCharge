@@ -1,4 +1,5 @@
 import type { TariffSlot } from '../sdk/tariff.js'
+import { chargeRateKW } from './electrical.js'
 
 export interface PlannerInput {
   requiredKWh: number
@@ -21,8 +22,8 @@ export function plan(input: PlannerInput): PlannedSlot[] {
   const { requiredKWh, targetTime, maxCurrentA, phases, priceSlots } = input
   const now = new Date()
 
-  const chargeRateKW = (maxCurrentA * phases * 230) / 1000
-  const requiredSlots = Math.ceil((requiredKWh / chargeRateKW) * 4) // 4 slots per hour
+  const rateKW = chargeRateKW(maxCurrentA, phases)
+  const requiredSlots = Math.ceil((requiredKWh / rateKW) * 4) // 4 slots per hour
 
   const allSlots = generateSlots(now, targetTime)
   if (allSlots.length === 0) return []
@@ -36,10 +37,7 @@ export function plan(input: PlannerInput): PlannedSlot[] {
   return cheapestSlotsPlan(allSlots, slotsNeeded, priceSlots)
 }
 
-function latestStartPlan(
-  slots: { start: Date; end: Date }[],
-  slotsNeeded: number,
-): PlannedSlot[] {
+function latestStartPlan(slots: { start: Date; end: Date }[], slotsNeeded: number): PlannedSlot[] {
   const startIndex = slots.length - slotsNeeded
   return slots.map((slot, i) => ({ ...slot, shouldCharge: i >= startIndex }))
 }
@@ -55,9 +53,7 @@ function cheapestSlotsPlan(
   })
 
   const sorted = [...withPrices].sort((a, b) => a.pricePerKWh - b.pricePerKWh)
-  const cheapestStarts = new Set(
-    sorted.slice(0, slotsNeeded).map((s) => s.start.toISOString()),
-  )
+  const cheapestStarts = new Set(sorted.slice(0, slotsNeeded).map((s) => s.start.toISOString()))
 
   return withPrices.map((slot) => ({
     start: slot.start,

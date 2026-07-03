@@ -46,7 +46,9 @@ registerTariff({
     function scheduleNext(): void {
       const decision = nextDelay(state, haveTomorrow(), new Date())
       ctx.log.info({ name, zone, decision }, 'Elering: next fetch scheduled')
-      timer = setTimeout(() => { void runOnce(true) }, decision.delayMs)
+      timer = setTimeout(() => {
+        void runOnce(true)
+      }, decision.delayMs)
     }
 
     // scheduled=true → use ctx.fetch (jitter-enabled) for thundering-herd prevention
@@ -70,13 +72,18 @@ registerTariff({
         }
         state.consecutiveFailures++
         health = computeHealth()
-        ctx.log.warn({ err, zone, consecutiveFailures: state.consecutiveFailures }, 'Elering fetch failed')
+        ctx.log.warn(
+          { err, zone, consecutiveFailures: state.consecutiveFailures },
+          'Elering fetch failed',
+        )
       }
       scheduleNext()
     }
 
     return {
-      get id() { return name },
+      get id() {
+        return name
+      },
 
       async start() {
         // Immediate startup fetch (no jitter — user wants data right away)

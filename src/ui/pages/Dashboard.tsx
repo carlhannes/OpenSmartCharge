@@ -28,14 +28,19 @@ export default function Dashboard() {
       <div className={styles.cards}>
         <div className={styles.card}>
           <span className={styles.cardLabel}>System health</span>
-          <span className={styles.cardValue} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span
+            className={styles.cardValue}
+            style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+          >
             <HealthBadge health={overall} size={12} />
             {overall}
           </span>
         </div>
         <div className={styles.card}>
           <span className={styles.cardLabel}>Charging</span>
-          <span className={styles.cardValue}>{charging.length} / {loadpoints.length}</span>
+          <span className={styles.cardValue}>
+            {charging.length} / {loadpoints.length}
+          </span>
         </div>
         <div className={styles.card}>
           <span className={styles.cardLabel}>Total current</span>
@@ -43,7 +48,9 @@ export default function Dashboard() {
         </div>
         <div className={styles.card}>
           <span className={styles.cardLabel}>Connected</span>
-          <span className={styles.cardValue}>{connected.length} vehicle{connected.length !== 1 ? 's' : ''}</span>
+          <span className={styles.cardValue}>
+            {connected.length} vehicle{connected.length !== 1 ? 's' : ''}
+          </span>
         </div>
       </div>
     </div>
