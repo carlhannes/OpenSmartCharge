@@ -33,7 +33,16 @@ import {
   insertMeterValues,
   latestEnergyKwh,
 } from './persistence.js'
-import { setCurrentLimit, remoteStart, remoteStop as cmdRemoteStop } from './commands.js'
+import {
+  setCurrentLimit,
+  remoteStart,
+  remoteStop as cmdRemoteStop,
+  reset as cmdReset,
+  changeAvailability,
+  clearChargingProfile as cmdClearChargingProfile,
+  getCompositeSchedule as cmdGetCompositeSchedule,
+  type CompositeScheduleResp,
+} from './commands.js'
 import { computeConnectionState, shouldAutoStart, computeHealth } from './status.js'
 
 type StatusCallback = (status: ChargerStatus) => void
@@ -112,7 +121,13 @@ export class OcppServer {
   async setLimit(stationId: string, amps: number): Promise<void> {
     const state = this.stations.get(stationId)
     if (!state) return // Not connected — limit will be applied on BootNotification
-    await setCurrentLimit(state.client, amps, 0)
+    // Target the active connector (Zaptec and most chargers ignore TxDefaultProfile on
+    // connectorId 0 for a running transaction; evcc likewise sends on the connector).
+    const res = await setCurrentLimit(state.client, amps, state.connectorId)
+    this.log.info(
+      { stationId, amps, connectorId: state.connectorId, status: res?.status },
+      'SetChargingProfile result',
+    )
   }
 
   getHealth(): ModuleHealth {
@@ -132,6 +147,33 @@ export class OcppServer {
     if (!state) throw new Error(`station ${stationId} not connected`)
     if (!state.activeTransactionId) throw new Error(`no active transaction on ${stationId}`)
     await cmdRemoteStop(state.client, state.activeTransactionId)
+  }
+
+  async reset(stationId: string, type: 'Soft' | 'Hard' = 'Soft'): Promise<void> {
+    const state = this.stations.get(stationId)
+    if (!state) throw new Error(`station ${stationId} not connected`)
+    const res = await cmdReset(state.client, type)
+    this.log.info({ stationId, type, status: res?.status }, 'Reset result')
+  }
+
+  async clearChargingProfile(stationId: string): Promise<{ status?: string }> {
+    const state = this.stations.get(stationId)
+    if (!state) throw new Error(`station ${stationId} not connected`)
+    const res = await cmdClearChargingProfile(state.client)
+    this.log.info({ stationId, status: res?.status }, 'ClearChargingProfile result')
+    return res
+  }
+
+  async getCompositeSchedule(stationId: string, durationSec = 60): Promise<CompositeScheduleResp> {
+    const state = this.stations.get(stationId)
+    if (!state) throw new Error(`station ${stationId} not connected`)
+    const res = await cmdGetCompositeSchedule(state.client, state.connectorId, durationSec)
+    const limit = res.chargingSchedule?.chargingSchedulePeriod?.[0]?.limit
+    this.log.info(
+      { stationId, connectorId: state.connectorId, status: res?.status, offeredLimitA: limit },
+      'GetCompositeSchedule result',
+    )
+    return res
   }
 
   async close(): Promise<void> {
@@ -168,7 +210,11 @@ export class OcppServer {
     client.on('disconnect', () => {
       this.log.info({ stationId }, 'OCPP station disconnected')
       const s = this.stations.get(stationId)
-      if (s) {
+      // Only evict if THIS client is still the registered one. On a reconnect bounce the
+      // charger opens a new socket (which re-registers) before the old socket's disconnect
+      // fires; without this guard the stale disconnect would delete the live registration,
+      // leaving commands failing "not connected" while messages still flow on the new socket.
+      if (s && s.client === client) {
         this.stations.delete(stationId)
         this.pushStatus(stationId, {
           connectorId: s.connectorId,
@@ -177,6 +223,23 @@ export class OcppServer {
           charging: false,
         })
       }
+    })
+
+    // TEMP raw OCPP frame logging for Zaptec debugging — every inbound/outbound frame.
+    client.on('message', (ev: unknown) => {
+      const { message, outbound } = ev as { message: string; outbound: boolean }
+      this.log.debug({ stationId, dir: outbound ? 'OUT' : 'IN', frame: message }, 'ocpp-frame')
+    })
+
+    // Mirror evcc's connect handshake: explicitly mark the charge point Operative. Some
+    // chargers accept charging profiles but won't deliver current for a newly-connected
+    // central system until told they are Operative (connectorId 0 = whole charge point).
+    setImmediate(() => {
+      void changeAvailability(state.client, 0, 'Operative')
+        .then((res) =>
+          this.log.info({ stationId, status: res?.status }, 'ChangeAvailability(Operative) result'),
+        )
+        .catch((err) => this.log.warn({ err, stationId }, 'ChangeAvailability failed'))
     })
 
     // ── Inbound handlers ──────────────────────────────────────────────────
@@ -190,9 +253,14 @@ export class OcppServer {
 
       // Issue safe default current immediately so charger is never at an unknown limit
       setImmediate(() => {
-        void setCurrentLimit(state.client, this.defaultBootCurrentA, 0).catch((err) =>
-          this.log.warn({ err, stationId }, 'could not set boot default current'),
-        )
+        void setCurrentLimit(state.client, this.defaultBootCurrentA, state.connectorId)
+          .then((res) =>
+            this.log.info(
+              { stationId, amps: this.defaultBootCurrentA, connectorId: state.connectorId, status: res?.status },
+              'boot default SetChargingProfile result',
+            ),
+          )
+          .catch((err) => this.log.warn({ err, stationId }, 'could not set boot default current'))
       })
 
       return { status: 'Accepted', interval: 60, currentTime: new Date().toISOString() }

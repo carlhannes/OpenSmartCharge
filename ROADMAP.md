@@ -162,3 +162,32 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 - Vehicle brands beyond Skoda / VW group (community modules welcome)
 - Embedded MQTT broker
 - HEMS / §14a EnWG grid-operator dimming
+
+---
+
+## Known issues / follow-ups (discovered during real-hardware testing, 2026-07-03)
+
+Bugs and doc discrepancies found while first connecting a real charger. None block the OCPP happy path; all are safe to defer, but should be fixed.
+
+### Fixed / added (2026-07-03 real-charger session)
+
+- [x] **Charger stuck at `SuspendedEVSE` / `Current.Offered: 0` — RESOLVED.** Root cause: Zaptec native OCPP **stacks charging profiles (highest stack level wins)** and **persists them across CS reconnects**; a leftover **0 A `TxDefaultProfile` at stack level 8** from evcc's "Off" outranked OSC's hardcoded `stackLevel: 1`. Confirmed with `GetCompositeSchedule` (effective limit `0`); cleared → our profile won → charged. Full write-up + debugging playbook in **`docs/ocpp-smart-charging.md`**. Also fixed en route: **connector `0`→`1`** and **backdated `startSchedule`** in `buildChargingProfilePayload`, and added **`numberPhases: 3`** (see follow-up on making it configurable).
+- [x] **Added outbound OCPP commands + REST endpoints:** `Reset` (`/reset`), `ChangeAvailability` (Operative on connect), `ClearChargingProfile` (`/clear-profile`), `GetCompositeSchedule` (`/composite-schedule`) — wired `commands.ts` → `server.ts` → `index.ts` → `src/server/api.ts`.
+- [x] **Reconnect-bounce evicted the live station — FIXED.** On a fast reconnect the charger opens a new socket (re-registers in `stations`) before the old socket's `disconnect` fires; the old disconnect then deleted the *current* registration, so messages still flowed (station looked connected) but every command threw "station not connected". `server.ts` disconnect handler now guards `if (s && s.client === client)` before evicting. (This also partially mitigates the connection-state staleness item below.)
+
+### Permanent fix still to land
+
+- [ ] **Install OSC's charging profile at the charger's max stack level** (read `ChargeProfileMaxStackLevel`/`MaxChargingProfilesInstalled` via `GetConfiguration` on connect) with a stable `chargingProfileId`, so ours always wins by replacement — instead of hardcoded `stackLevel: 1`. Do **not** auto-`ClearChargingProfile` on every connect: after a clear the charger reverts to its 32 A default, which during a mid-charge WS reconnect could exceed the circuit breaker. Keep `ClearChargingProfile` manual/diagnostic only.
+- [ ] **`numberPhases` is hardcoded `3`** in `buildChargingProfilePayload` (fine for the 3-phase bench; it was *not* the fix). Make it a per-charger `phases` config, or drop it.
+
+### Open bugs / discrepancies
+
+- [ ] **Start/Stop/one-shot-profile endpoints assume loadpoint name == charger name.** `src/server/api.ts` (`/loadpoints/:name/start`, `/stop`, `/profile`) look up the charger via `deps.chargers.get(name)` using the *loadpoint* route param, but the `chargers` map is keyed by **charger name**. If they differ, these commands return `404 loadpoint not found`. **Fix:** resolve the loadpoint's `charger` ref first (`deps.config.loadpoints.find(l => l.name === name)?.charger`), then `deps.chargers.get(chargerName)`. (Mode/target endpoints are correct — they key by loadpoint name.) Workaround today: name the charger and loadpoint identically.
+
+- [ ] **`defaultMode` config field is never honored.** `src/core/loadpoint.ts:37` always seeds new loadpoints with `INSERT ... VALUES (?, 'smart')`, and `loadpointInits` in `src/core/lifecycle.ts:190-197` doesn't pass `defaultMode` through. So a fresh loadpoint always starts in `smart` regardless of config. **Fix:** thread `defaultMode` into `LoadpointInit` and use it in the seed INSERT (first-init only; a persisted mode should still win on restart, which is the current correct behavior).
+
+- [ ] **Price resolution is hourly, but docs claim 15-minute.** `src/modules/tariff-elering/api.ts:45` builds **hourly** slots (`timestamp + 3600`), while `README.md` and `docs/config.md` say "15-minute slot resolution." The planner buckets in 15-min and maps each bucket to its containing hour, so planning granularity is fine — but the price series is hourly. **Fix:** either consume Elering's 15-minute series (Nord Pool moved to 15-min settlement) or correct the docs to say hourly.
+
+- [ ] **`npm run dev:ui` served a blank page — the `/api` dev proxy hijacks the UI's own `src/ui/api/` source modules.** With Vite `root = src/ui`, `src/ui/api/{rest,sse}.ts` are served at `/api/rest.ts` / `/api/sse.ts`, but `server.proxy['/api']` forwards them to the backend → 404 → the module graph fails → white screen. A production build is unaffected (assets are hashed under `/assets/`), which is why the `vite preview`-based e2e tests never caught it. **Workaround applied** in `src/ui/vite.config.ts`: a proxy `bypass` skips requests ending in a JS/TS module extension. **Proper fix:** rename `src/ui/api/` → e.g. `src/ui/client/` (updates ~16 relative imports) so the source path never overlaps the `/api` proxy prefix, then remove the bypass.
+
+- [ ] **Charger connection state & health only refresh on `StatusNotification`, not on WebSocket connect.** `loadpoint.connected` and the `/api/health` map are updated only inside the `charger.onStatus` callback (`src/core/lifecycle.ts` ~209-216), which fires via `pushStatus` on StatusNotification/disconnect. On a *WebSocket reconnect* (vs a power cycle), a charger — confirmed with a Zaptec Go — does **not** re-send BootNotification/StatusNotification, so OSC shows the loadpoint `disconnected` and health `unavailable` even though the socket is live and heartbeating (`charger.health()` computed live from `stations.size` would return `ok`). Real risk for flaky-network chargers: they'd look permanently offline in the UI until the next status change. **Fix:** on `attachClient` (connect) push an initial connected status / refresh the health map, and/or periodically poll live `charger.health()` into the map.

@@ -47,7 +47,9 @@ npm start         # serves backend + bundled UI on port 8080
 # docker compose up
 ```
 
-Point your OCPP charger at `ws://<your-host>:8080/ocpp`. The UI is at `http://localhost:5173` in dev or `http://localhost:8080` in production.
+Point your OCPP charger at `ws://<your-host>:8080/ocpp/<stationId>` — the OCPP identity is the **trailing path segment** and must match a charger's `stationId` in `osc.yaml` (for Zaptec this is the charger's serial, which the charger appends automatically). The UI is at `http://localhost:5173` in dev or `http://localhost:8080` in production.
+
+> Charger accepts commands but won't deliver power (`SuspendedEVSE` / `Current.Offered: 0`)? See **[docs/ocpp-smart-charging.md](docs/ocpp-smart-charging.md)** — OCPP charging-profile quirks and a debugging playbook.
 
 **Before opening a PR:** run `npm run build && npm start` and verify the production UI matches what you see in dev. With a Mosquitto broker running (`docker compose up -d mosquitto`), also run `npm run smoke` to verify the OCPP+REST+MQTT integration end-to-end.
 
@@ -140,6 +142,12 @@ npm run restore -- --in backups/osc-2025-06-01T12-00-00.db
 | `GET` | `/api/loadpoints` | List all loadpoints with live state |
 | `POST` | `/api/loadpoints/:name/mode` | Set charge mode (`disabled`/`smart`/`fast`) |
 | `POST` | `/api/loadpoints/:name/target` | Set target SoC and/or departure time |
+| `POST` | `/api/loadpoints/:name/start` | RemoteStartTransaction |
+| `POST` | `/api/loadpoints/:name/stop` | RemoteStopTransaction |
+| `POST` | `/api/loadpoints/:name/profile` | One-shot current limit (`{"amps":N}`) |
+| `POST` | `/api/loadpoints/:name/reset` | Soft/Hard `Reset` (`{"type":"Soft"}`) |
+| `POST` | `/api/loadpoints/:name/clear-profile` | `ClearChargingProfile` (all) — see troubleshooting doc |
+| `GET` | `/api/loadpoints/:name/composite-schedule` | Charger's effective computed limit (`?duration=sec`) |
 | `GET` | `/api/tariffs/:name/prices` | Fetch price slots (`?from=&to=`) |
 | `GET` | `/api/meters/:name` | Meter reader latest snapshot + health |
 | `GET` | `/api/balancers/:name` | Balancer allocations + health |

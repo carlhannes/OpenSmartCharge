@@ -194,6 +194,47 @@ export function createApiRouter(deps: ApiDeps): Router {
     res.json(deps.loadpoints.get(name) ?? {})
   })
 
+  // POST /api/loadpoints/:name/reset  body { type?: 'Soft' | 'Hard' }
+  router.post('/loadpoints/:name/reset', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    const charger = deps.chargers.get(name)
+    if (!charger) {
+      res.status(404).json({ error: 'loadpoint not found' })
+      return
+    }
+    if (!charger.reset) {
+      res.status(400).json({ error: 'charger does not support reset' })
+      return
+    }
+    const body = req.body as { type?: unknown }
+    const type = body.type === 'Hard' ? 'Hard' : 'Soft'
+    await charger.reset(type)
+    res.json({ ok: true, type })
+  })
+
+  // POST /api/loadpoints/:name/clear-profile — clears all installed charging profiles
+  router.post('/loadpoints/:name/clear-profile', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    const charger = deps.chargers.get(name)
+    if (!charger?.clearChargingProfile) {
+      res.status(404).json({ error: 'loadpoint not found or unsupported' })
+      return
+    }
+    res.json(await charger.clearChargingProfile())
+  })
+
+  // GET /api/loadpoints/:name/composite-schedule?duration=<sec> — charger's computed limit
+  router.get('/loadpoints/:name/composite-schedule', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    const charger = deps.chargers.get(name)
+    if (!charger?.getCompositeSchedule) {
+      res.status(404).json({ error: 'loadpoint not found or unsupported' })
+      return
+    }
+    const duration = Number(req.query.duration ?? 60)
+    res.json(await charger.getCompositeSchedule(duration))
+  })
+
   // POST /api/loadpoints/:name/profile  body { amps: number }
   router.post('/loadpoints/:name/profile', async (req: Request, res: Response) => {
     const name = String(req.params.name)

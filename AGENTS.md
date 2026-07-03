@@ -150,6 +150,15 @@ HA discovery: `homeassistant/select/<lp>_mode/config` etc.
 
 ---
 
+## Debugging OCPP chargers
+
+Real chargers have quirks that cost real time. Before deep-diving a "charger won't charge" issue, read **`docs/ocpp-smart-charging.md`**. Key conventions:
+- **`SetChargingProfile` returning `Accepted` ≠ applied.** Chargers stack profiles (highest `stackLevel` wins) and persist them across central-system reconnects, so a leftover profile (even from another CS) can override yours. Verify the *effective* limit with **`GetCompositeSchedule`** — make it your first diagnostic when `Current.Offered: 0` / `SuspendedEVSE`.
+- **Read the charger's native/box-level OCPP docs**, not the cloud ones — reported capabilities (max stack level, units, supported commands) differ.
+- Enable raw OCPP frame logging early when bringing up new hardware.
+
+---
+
 ## Running the project
 
 ```bash

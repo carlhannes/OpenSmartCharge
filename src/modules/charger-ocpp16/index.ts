@@ -68,6 +68,18 @@ registerCharger({
         await sharedServer!.remoteStop(stationId)
       },
 
+      async reset(type: 'Soft' | 'Hard' = 'Soft') {
+        await sharedServer!.reset(stationId, type)
+      },
+
+      async clearChargingProfile() {
+        return sharedServer!.clearChargingProfile(stationId)
+      },
+
+      async getCompositeSchedule(durationSec = 60) {
+        return sharedServer!.getCompositeSchedule(stationId, durationSec)
+      },
+
       async setOneShotProfile(amps: number) {
         const limit = Math.max(0, Math.min(amps, maxA))
         await sharedServer!.setLimit(stationId, limit)

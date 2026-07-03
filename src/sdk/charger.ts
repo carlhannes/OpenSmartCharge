@@ -27,6 +27,9 @@ export interface Charger {
   remoteStart?(idTag?: string): Promise<void>
   remoteStop?(): Promise<void>
   setOneShotProfile?(amps: number): Promise<void>
+  reset?(type?: 'Soft' | 'Hard'): Promise<void>
+  clearChargingProfile?(): Promise<{ status?: string }>
+  getCompositeSchedule?(durationSec?: number): Promise<unknown>
   health(): ModuleHealth
   onStatus(cb: (status: ChargerStatus) => void): () => void
 }

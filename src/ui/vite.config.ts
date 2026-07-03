@@ -23,7 +23,15 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      '/api': { target: 'http://localhost:8080', changeOrigin: true },
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        // The UI has a `src/ui/api/` source folder; with root=src/ui, Vite serves it at
+        // `/api/*.ts`, which collides with this `/api` backend proxy. Don't proxy Vite's own
+        // source-module requests (they end in .ts/.tsx/.js) — only real API calls (which never
+        // end in a module extension) should reach the backend. See ROADMAP known-issues.
+        bypass: (req) => (req.url && /\.[tj]sx?(\?|$)/.test(req.url) ? req.url : undefined),
+      },
       // SSE: do not buffer — http-proxy streams correctly by default
       '/events': { target: 'http://localhost:8080', changeOrigin: true },
       // OCPP-J uses WebSocket
