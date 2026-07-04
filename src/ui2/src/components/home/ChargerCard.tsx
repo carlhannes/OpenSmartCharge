@@ -1,6 +1,7 @@
 import { useOsc, type Charger } from "@/lib/mock/store";
 import { StatusPill } from "@/components/StatusPill";
 import { fmtKW, fmtPct } from "@/lib/format";
+import { resolveActivePlan } from "@/lib/plan";
 
 interface Props {
   charger: Charger;
@@ -9,7 +10,12 @@ interface Props {
 
 export function ChargerCard({ charger, onOpen }: Props) {
   const vehicle = useOsc((s) => s.vehicles.find((v) => v.id === charger.activeVehicleId));
-  const plan = useOsc((s) => s.plans.find((p) => p.chargerId === charger.id && p.enabled));
+  const plans = useOsc((s) => s.plans);
+  const timezone = useOsc((s) => s.timezone);
+  const plan = resolveActivePlan(
+    plans.filter((p) => p.chargerId === charger.id),
+    timezone,
+  );
 
   const soc = vehicle?.soc ?? 0;
   const target = plan?.target ?? 80;

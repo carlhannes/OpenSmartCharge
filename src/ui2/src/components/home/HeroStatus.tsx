@@ -1,9 +1,11 @@
 import { useOsc } from "@/lib/mock/store";
 import { statusLabel } from "@/lib/copy";
+import { resolveActivePlan } from "@/lib/plan";
 
 export function HeroStatus() {
   const chargers = useOsc((s) => s.chargers);
   const plans = useOsc((s) => s.plans);
+  const timezone = useOsc((s) => s.timezone);
   const primary = chargers[0];
 
   if (!primary) {
@@ -15,7 +17,10 @@ export function HeroStatus() {
     );
   }
 
-  const plan = plans.find((p) => p.chargerId === primary.id && p.enabled);
+  const plan = resolveActivePlan(
+    plans.filter((p) => p.chargerId === primary.id),
+    timezone,
+  );
 
   let headline = statusLabel(primary.status);
   let sub = "";

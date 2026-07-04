@@ -1,9 +1,16 @@
 // Pure mappers: backend API DTOs → the existing zustand store shapes.
 // Kept side-effect-free so they're easy to reason about (and unit-test later).
 import type { ChargerRuntimeStatus } from "@/lib/copy";
-import type { Charger, Vehicle, Session, ModuleHealth as StoreHealth } from "@/lib/mock/store";
+import type {
+  Charger,
+  Vehicle,
+  Session,
+  Plan,
+  ModuleHealth as StoreHealth,
+} from "@/lib/mock/store";
 import type {
   LoadpointStateDto,
+  PlanDto,
   SiteDto,
   VehicleStateDto,
   TariffSlotDto,
@@ -42,7 +49,20 @@ export function mapLoadpoint(lp: LoadpointStateDto, site?: SiteDto): Charger {
     sessionKwh: lp.sessionEnergyKWh,
     sessionStart: null,
     guestTargetKwh: lp.targetKWh ?? null,
+    minSoc: lp.minSoc ?? null,
     constraintAmps: null, // filled from the balancer allocation, not the loadpoint
+  };
+}
+
+export function mapPlan(dto: PlanDto): Plan {
+  return {
+    id: dto.id,
+    chargerId: dto.loadpointName,
+    days: dto.days,
+    readyBy: dto.readyBy,
+    target: dto.target,
+    unit: dto.unit,
+    enabled: dto.enabled,
   };
 }
 

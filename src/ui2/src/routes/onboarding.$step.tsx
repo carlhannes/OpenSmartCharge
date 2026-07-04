@@ -1,5 +1,10 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useOsc } from "@/lib/mock/store";
+import {
+  addPlan as addPlanCmd,
+  updatePlan as updatePlanCmd,
+  setTimezone,
+} from "@/lib/live/commands";
 import { REGIONS } from "@/lib/copy";
 import { useEffect, useState } from "react";
 import { Copy, Check } from "lucide-react";
@@ -18,6 +23,8 @@ function OnboardingStep() {
   const next = () => {
     if (idx < STEPS.length - 1) nav({ to: "/onboarding/$step", params: { step: STEPS[idx + 1] } });
     else {
+      // Setup done → persist the browser's timezone as the site timezone (PUT when live).
+      void setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone);
       useOsc.getState().finishOnboarding();
       nav({ to: "/" });
     }
@@ -335,14 +342,12 @@ function CarStep() {
 function PlanStep() {
   const chargers = useOsc((s) => s.chargers);
   const plans = useOsc((s) => s.plans);
-  const addPlan = useOsc((s) => s.addPlan);
-  const update = useOsc((s) => s.updatePlan);
   const [chargerId] = useState(chargers[0]?.id);
   const existing = plans.find((p) => p.chargerId === chargerId && p.enabled);
 
   useEffect(() => {
-    if (chargerId && !existing) addPlan(chargerId);
-  }, [chargerId, existing, addPlan]);
+    if (chargerId && !existing) void addPlanCmd(chargerId);
+  }, [chargerId, existing]);
 
   const plan = plans.find((p) => p.chargerId === chargerId);
 
@@ -358,7 +363,7 @@ function PlanStep() {
             <input
               type="time"
               value={plan.readyBy}
-              onChange={(e) => update(plan.id, { readyBy: e.target.value })}
+              onChange={(e) => void updatePlanCmd(plan.id, { readyBy: e.target.value })}
               className="rounded-lg border border-input bg-background px-2 py-1 text-sm tabular-nums"
             />
           </div>
@@ -368,7 +373,10 @@ function PlanStep() {
               type="number"
               value={plan.target}
               onChange={(e) =>
-                update(plan.id, { target: parseFloat(e.target.value) || 0, unit: "pct" })
+                void updatePlanCmd(plan.id, {
+                  target: parseFloat(e.target.value) || 0,
+                  unit: "pct",
+                })
               }
               className="w-20 rounded-lg border border-input bg-background px-2 py-1 text-sm tabular-nums"
             />

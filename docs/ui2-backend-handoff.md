@@ -69,6 +69,12 @@ interface PlanDto {
 
 ## Wiring TODO (ui2 side)
 
+> **Status: done** — all items below were wired on `feat/ocpp-zaptec-charging` (ui2 auto-detects the
+> backend; plans/timezone/minSoc are read on startup, mutated via the optimistic + `isLive()` command
+> seam, and reconciled over SSE). The day-aware active-plan resolver lives in `src/ui2/src/lib/plan.ts`.
+> The mock (`scripts/mock-backend.mjs`) implements the same endpoints so demo mode exercises them.
+> Kept as reference for the contract. No backend changes were made.
+
 1. **`src/ui2/src/lib/api/rest.ts`** — add client methods (mirror `setMode`/`setProfile`):
    `getPlans(name)`, `createPlan(name, body)`, `updatePlan(name, id, patch)`, `deletePlan(name, id)`;
    `getSettings()`, `setSettings({timezone})`. Add `minSoc?` to `LoadpointStateDto` + `setTarget`'s body.

@@ -37,6 +37,7 @@ export interface Charger {
   sessionKwh: number;
   sessionStart: number | null; // ms
   guestTargetKwh: number | null;
+  minSoc: number | null; // keep-above floor (%), from POST /target { minSoc }
   constraintAmps: number | null; // when limited by balancer
 }
 
@@ -87,6 +88,7 @@ interface OscState {
   config: Config;
   tickMs: number;
   source: "probing" | "live" | "demo"; // probing→ decide; live = backend via REST/SSE; demo = mock tick
+  timezone: string; // site timezone (IANA); from GET /api/settings when live
 
   // actions
   setMode: (chargerId: string, mode: Mode) => void;
@@ -117,9 +119,10 @@ interface OscState {
 
   // Live-sync (populated from the backend when source === "live")
   setSource: (source: "probing" | "live" | "demo") => void;
+  setTimezone: (tz: string) => void;
   hydrate: (
     patch: Partial<
-      Pick<OscState, "chargers" | "vehicles" | "moduleHealth" | "prices" | "sessions">
+      Pick<OscState, "chargers" | "vehicles" | "moduleHealth" | "prices" | "sessions" | "plans">
     >,
   ) => void;
   patchCharger: (id: string, patch: Partial<Charger>) => void;
@@ -163,6 +166,7 @@ function seed(): Pick<
     sessionKwh: 0,
     sessionStart: null,
     guestTargetKwh: null,
+    minSoc: null,
     constraintAmps: null,
   };
   const plan: Plan = {
@@ -222,6 +226,7 @@ function seed(): Pick<
 export const useOsc = create<OscState>()((set, get) => ({
   ...seed(),
   source: "probing",
+  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 
   setMode: (chargerId, mode) =>
     set((s) => ({
@@ -315,6 +320,7 @@ export const useOsc = create<OscState>()((set, get) => ({
       sessionKwh: 0,
       sessionStart: null,
       guestTargetKwh: null,
+      minSoc: null,
       constraintAmps: null,
     };
     set((s) => ({
@@ -359,6 +365,7 @@ export const useOsc = create<OscState>()((set, get) => ({
     })),
 
   setSource: (source) => set({ source }),
+  setTimezone: (tz) => set({ timezone: tz }),
   hydrate: (patch) => set(patch),
   patchCharger: (id, patch) =>
     set((s) => ({ chargers: s.chargers.map((c) => (c.id === id ? { ...c, ...patch } : c)) })),

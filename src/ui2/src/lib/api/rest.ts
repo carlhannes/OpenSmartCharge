@@ -1,6 +1,7 @@
 // REST client for the OpenSmartCharge backend — mirrors src/ui/client/rest.ts.
 // Relative `/api` paths; works via the Vite dev proxy (dev) or same-origin (prod).
 // Over-the-wire shapes: Dates are serialized as ISO strings; omitted optionals are absent.
+import type { DayKey } from "@/lib/format";
 
 export type ModuleHealth = "ok" | "degraded" | "unavailable";
 export type ChargeMode = "disabled" | "smart" | "fast";
@@ -11,12 +12,27 @@ export interface LoadpointStateDto {
   targetSoc?: number;
   targetTime?: string;
   targetKWh?: number;
+  minSoc?: number;
   connected: boolean;
   charging: boolean;
   currentA: number;
   sessionEnergyKWh: number;
   maxCurrentA: number;
   autoStart: boolean;
+}
+
+export interface PlanDto {
+  id: string;
+  loadpointName: string;
+  days: DayKey[];
+  readyBy: string; // "HH:MM"
+  target: number;
+  unit: "pct" | "km" | "kwh";
+  enabled: boolean;
+}
+
+export interface SettingsDto {
+  timezone: string;
 }
 
 export interface TariffSlotDto {
@@ -149,14 +165,28 @@ const json = (body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
+const jsonBody = (method: string, body: unknown): RequestInit => ({
+  method,
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+// For endpoints that return no body (e.g. 204 DELETE).
+async function apiVoid(path: string, init: RequestInit): Promise<void> {
+  const res = await fetch(path, init);
+  if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+}
+
 export const getLoadpoints = () => apiFetch<LoadpointStateDto[]>("/api/loadpoints");
 export const getLoadpoint = (name: string) =>
   apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}`);
 export const setMode = (name: string, mode: ChargeMode) =>
   apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/mode`, json({ mode }));
-// NOTE: /target is a full replace — resend every field you want to keep. (Not used in batch 1.)
-export const setTarget = (name: string, t: { soc?: number; time?: string; kwh?: number }) =>
-  apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/target`, json(t));
+// /target COALESCE-merges — send only the fields you want to change.
+export const setTarget = (
+  name: string,
+  t: { soc?: number; time?: string; kwh?: number; minSoc?: number },
+) => apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/target`, json(t));
 export const remoteStart = (name: string) =>
   apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/start`, { method: "POST" });
 export const remoteStop = (name: string) =>
@@ -169,6 +199,20 @@ export const getCompositeSchedule = (name: string, duration = 60) =>
   apiFetch<unknown>(`/api/loadpoints/${name}/composite-schedule?duration=${duration}`);
 export const setProfile = (name: string, amps: number) =>
   apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/profile`, json({ amps }));
+
+// Plans (per loadpoint)
+export const getPlans = (name: string) => apiFetch<PlanDto[]>(`/api/loadpoints/${name}/plans`);
+export const createPlan = (name: string, body: Omit<PlanDto, "id" | "loadpointName">) =>
+  apiFetch<PlanDto>(`/api/loadpoints/${name}/plans`, jsonBody("POST", body));
+export const updatePlanApi = (name: string, id: string, patch: Partial<PlanDto>) =>
+  apiFetch<PlanDto>(`/api/loadpoints/${name}/plans/${id}`, jsonBody("PUT", patch));
+export const deletePlan = (name: string, id: string) =>
+  apiVoid(`/api/loadpoints/${name}/plans/${id}`, { method: "DELETE" });
+
+// Settings (site timezone)
+export const getSettings = () => apiFetch<SettingsDto>("/api/settings");
+export const setSettings = (s: SettingsDto) =>
+  apiFetch<SettingsDto>("/api/settings", jsonBody("PUT", s));
 
 export const getHealth = () => apiFetch<Record<string, ModuleHealth>>("/api/health");
 export const getSite = () => apiFetch<SiteDto>("/api/site");

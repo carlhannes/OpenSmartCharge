@@ -5,11 +5,16 @@ import {
   applyOneShot,
   runCommand as runCmdApi,
   viewComposite,
+  addPlan as addPlanCmd,
+  updatePlan as updatePlanCmd,
+  removePlan as removePlanCmd,
+  setMinSoc,
 } from "@/lib/live/commands";
 import { Timeline24h } from "./Timeline24h";
 import { StatusPill } from "@/components/StatusPill";
 import { modeLabel } from "@/lib/copy";
 import { fmtKW, fmtPct, fmtKm, DAYS, DAY_KEYS, type DayKey } from "@/lib/format";
+import { resolveActivePlan } from "@/lib/plan";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { ActionButton } from "@/components/ui/action-button";
@@ -33,10 +38,11 @@ export function ChargerDetail({ charger, onClose }: Props) {
   );
   const setActiveVehicle = useOsc((s) => s.setActiveVehicle);
   const setGuestTarget = useOsc((s) => s.setGuestTarget);
-  const addPlan = useOsc((s) => s.addPlan);
   const oneShotAmps = useOsc((s) => s.oneShotAmps);
+  const timezone = useOsc((s) => s.timezone);
   const [advOpen, setAdvOpen] = useState(false);
   const [amps, setAmps] = useState(charger?.constraintAmps ?? charger?.maxAmps ?? 16);
+  const [minSocVal, setMinSocVal] = useState(charger?.minSoc ?? 20);
   const [ampApplied, setAmpApplied] = useState(false);
   const [lastCmd, setLastCmd] = useState<string | null>(null);
   const [showComposite, setShowComposite] = useState(false);
@@ -51,13 +57,14 @@ export function ChargerDetail({ charger, onClose }: Props) {
     if (ampTimer.current) clearTimeout(ampTimer.current);
     ampTimer.current = setTimeout(() => setAmpApplied(false), 1500);
   };
+  const commitMinSoc = () => void setMinSoc(charger.id, minSocVal);
   const runCommand = async (label: string) => {
     await runCmdApi(charger.id, label); // real OCPP endpoint when live; simulated delay in demo
     setLastCmd(label);
   };
 
   const vehicle = vehicles.find((v) => v.id === charger.activeVehicleId) ?? null;
-  const nextReady = plans.find((p) => p.enabled)?.readyBy;
+  const nextReady = resolveActivePlan(plans, timezone)?.readyBy;
   const readyByHour = nextReady ? parseInt(nextReady.split(":")[0], 10) : undefined;
 
   return (
@@ -136,12 +143,31 @@ export function ChargerDetail({ charger, onClose }: Props) {
               ))}
             </div>
             {vehicle ? (
-              <div className="mt-3 flex items-baseline justify-between">
-                <div className="font-display text-3xl font-semibold">{fmtPct(vehicle.soc)}</div>
-                <div className="text-sm text-muted-foreground">
-                  {fmtKm(vehicle.rangeKm)} range · {fmtKW(charger.currentPowerW)}
+              <>
+                <div className="mt-3 flex items-baseline justify-between">
+                  <div className="font-display text-3xl font-semibold">{fmtPct(vehicle.soc)}</div>
+                  <div className="text-sm text-muted-foreground">
+                    {fmtKm(vehicle.rangeKm)} range · {fmtKW(charger.currentPowerW)}
+                  </div>
                 </div>
-              </div>
+                <div className="mt-3">
+                  <div className="mb-1 flex items-center justify-between">
+                    <label className="text-xs text-muted-foreground">Keep charged above</label>
+                    <span className="tabular-nums text-xs">{minSocVal}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={minSocVal}
+                    onChange={(e) => setMinSocVal(parseInt(e.target.value, 10))}
+                    onMouseUp={commitMinSoc}
+                    onTouchEnd={commitMinSoc}
+                    className="w-full accent-primary"
+                  />
+                </div>
+              </>
             ) : (
               <div className="mt-3">
                 <label className="mb-1 block text-xs text-muted-foreground">
@@ -168,7 +194,7 @@ export function ChargerDetail({ charger, onClose }: Props) {
                 Plans
               </h3>
               <button
-                onClick={() => addPlan(charger.id)}
+                onClick={() => void addPlanCmd(charger.id)}
                 className="inline-flex items-center gap-1 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
               >
                 <Plus className="h-3.5 w-3.5" /> Add plan
@@ -283,8 +309,6 @@ export function ChargerDetail({ charger, onClose }: Props) {
 
 function PlanRow({ planId }: { planId: string }) {
   const plan = useOsc((s) => s.plans.find((p) => p.id === planId)!);
-  const update = useOsc((s) => s.updatePlan);
-  const remove = useOsc((s) => s.removePlan);
   const vehicles = useOsc((s) => s.vehicles);
   const veh = vehicles[0];
   if (!plan) return null;
@@ -293,7 +317,7 @@ function PlanRow({ planId }: { planId: string }) {
     const set = new Set(plan.days);
     if (set.has(d)) set.delete(d);
     else set.add(d);
-    update(plan.id, { days: Array.from(set) });
+    void updatePlanCmd(plan.id, { days: Array.from(set) });
   };
 
   const derivedPct =
@@ -309,17 +333,20 @@ function PlanRow({ planId }: { planId: string }) {
     >
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Switch checked={plan.enabled} onCheckedChange={(v) => update(plan.id, { enabled: v })} />
+          <Switch
+            checked={plan.enabled}
+            onCheckedChange={(v) => void updatePlanCmd(plan.id, { enabled: v })}
+          />
           <span className="text-sm font-medium">Ready by</span>
           <input
             type="time"
             value={plan.readyBy}
-            onChange={(e) => update(plan.id, { readyBy: e.target.value })}
+            onChange={(e) => void updatePlanCmd(plan.id, { readyBy: e.target.value })}
             className="rounded-lg border border-input bg-background px-2 py-1 text-sm tabular-nums outline-none focus:ring-2 focus:ring-ring/40"
           />
         </div>
         <button
-          onClick={() => remove(plan.id)}
+          onClick={() => void removePlanCmd(plan.id)}
           className="text-muted-foreground hover:text-destructive"
         >
           <Trash2 className="h-4 w-4" />
@@ -353,14 +380,16 @@ function PlanRow({ planId }: { planId: string }) {
               type="number"
               min={0}
               value={plan.target}
-              onChange={(e) => update(plan.id, { target: parseFloat(e.target.value) || 0 })}
+              onChange={(e) =>
+                void updatePlanCmd(plan.id, { target: parseFloat(e.target.value) || 0 })
+              }
               className="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm tabular-nums outline-none focus:ring-2 focus:ring-ring/40"
             />
             <div className="flex rounded-lg bg-secondary p-0.5">
               {(["pct", "km", "kwh"] as const).map((u) => (
                 <button
                   key={u}
-                  onClick={() => update(plan.id, { unit: u })}
+                  onClick={() => void updatePlanCmd(plan.id, { unit: u })}
                   className={`rounded-md px-2 py-1 text-[11px] font-medium ${
                     plan.unit === u ? "bg-background shadow-sm" : "text-muted-foreground"
                   }`}

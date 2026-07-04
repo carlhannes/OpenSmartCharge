@@ -4,6 +4,7 @@ import * as api from "@/lib/api/rest";
 import { ensureConnected, subscribe } from "@/lib/api/sse";
 import {
   mapLoadpoint,
+  mapPlan,
   mapVehicle,
   mapHealth,
   mapPrices,
@@ -25,6 +26,17 @@ function applyAllocations(alloc: Record<string, number> | null) {
   for (const [name, amps] of Object.entries(alloc)) {
     const c = st.chargers.find((x) => x.id === name);
     if (c) st.patchCharger(name, { constraintAmps: amps < c.maxAmps ? amps : null });
+  }
+}
+
+/** Re-fetch one loadpoint's plans, replacing that charger's plans and keeping the others. */
+async function refetchPlansFor(name: string) {
+  try {
+    const fresh = (await api.getPlans(name)).map(mapPlan);
+    const others = useOsc.getState().plans.filter((p) => p.chargerId !== name);
+    useOsc.getState().hydrate({ plans: [...others, ...fresh] });
+  } catch {
+    /* ignore */
   }
 }
 
@@ -67,6 +79,24 @@ export function useLiveSync() {
       if (cancelled) return;
 
       store.hydrate({ chargers: loadpoints.map((lp) => mapLoadpoint(lp, site)) });
+
+      // Plans per loadpoint + site timezone.
+      try {
+        const plans = (
+          await Promise.all(loadpoints.map((lp) => api.getPlans(lp.name).catch(() => [])))
+        )
+          .flat()
+          .map(mapPlan);
+        if (!cancelled) store.hydrate({ plans });
+      } catch {
+        /* plans optional */
+      }
+      try {
+        const settings = await api.getSettings();
+        if (!cancelled) store.setTimezone(settings.timezone);
+      } catch {
+        /* settings optional */
+      }
 
       try {
         store.hydrate({ moduleHealth: mapHealth(await api.getHealth()) });
@@ -147,8 +177,11 @@ export function useLiveSync() {
           useOsc.getState().patchCharger(e.name, patch);
         }),
         subscribe("loadpoint.target", (d) => {
-          const e = d as { name: string; targetKWh?: number };
-          useOsc.getState().patchCharger(e.name, { guestTargetKwh: e.targetKWh ?? null });
+          const e = d as { name: string; targetKWh?: number; minSoc?: number };
+          useOsc.getState().patchCharger(e.name, {
+            guestTargetKwh: e.targetKWh ?? null,
+            minSoc: e.minSoc ?? null,
+          });
         }),
         subscribe("vehicle.poll", (d) => {
           const e = d as { name: string; soc: number };
@@ -165,6 +198,14 @@ export function useLiveSync() {
             .getTariffPrices(e.name, now, to)
             .then((slots) => useOsc.getState().hydrate({ prices: mapPrices(slots) }))
             .catch(() => {});
+        }),
+        subscribe("loadpoint.plans", (d) => {
+          const e = d as { name: string };
+          void refetchPlansFor(e.name);
+        }),
+        subscribe("settings.changed", (d) => {
+          const e = d as { timezone: string };
+          useOsc.getState().setTimezone(e.timezone);
         }),
       );
 

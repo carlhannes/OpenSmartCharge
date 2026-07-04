@@ -22,9 +22,25 @@ const lp = {
   sessionEnergyKWh: 3.2,
   maxCurrentA: 16,
   autoStart: true,
+  minSoc: 20,
 };
 const veh = { soc: 62, range: 310, batteryCapacity: 77 };
 let oneShotCap = null;
+
+// Plans (per loadpoint) + site settings.
+let plans = [
+  {
+    id: "1",
+    loadpointName: "garage",
+    days: ["mon", "tue", "wed", "thu", "fri"],
+    readyBy: "07:00",
+    target: 80,
+    unit: "pct",
+    enabled: true,
+  },
+];
+let nextPlanId = 2;
+let settings = { timezone: "Europe/Stockholm" };
 
 const loadpointDto = () => ({
   name: lp.name,
@@ -32,6 +48,7 @@ const loadpointDto = () => ({
   ...(lp.targetSoc != null ? { targetSoc: lp.targetSoc } : {}),
   ...(lp.targetTime != null ? { targetTime: lp.targetTime } : {}),
   ...(lp.targetKWh != null ? { targetKWh: lp.targetKWh } : {}),
+  ...(lp.minSoc != null ? { minSoc: lp.minSoc } : {}),
   connected: lp.connected,
   charging: lp.charging,
   currentA: lp.charging ? lp.currentA : 0,
@@ -93,7 +110,7 @@ const server = http.createServer((req, res) => {
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
       "access-control-allow-origin": "*",
-      "access-control-allow-methods": "GET,POST,OPTIONS",
+      "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
       "access-control-allow-headers": "content-type",
     });
     return res.end();
@@ -111,6 +128,75 @@ const server = http.createServer((req, res) => {
     res.write(": connected\n\n");
     clients.add(res);
     req.on("close", () => clients.delete(res));
+    return;
+  }
+
+  // Settings (site timezone).
+  if (p === "/api/settings") {
+    if (req.method === "GET") return send(res, settings);
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      try {
+        const b = JSON.parse(body || "{}");
+        if (b.timezone) settings = { timezone: b.timezone };
+      } catch {
+        /* ignore */
+      }
+      emit("settings.changed", settings);
+      return send(res, settings);
+    });
+    return;
+  }
+
+  // Plans: /api/loadpoints/:name/plans[/:id]
+  const planMatch = p.match(/^\/api\/loadpoints\/([^/]+)\/plans(?:\/([^/]+))?$/);
+  if (planMatch) {
+    const name = planMatch[1];
+    const id = planMatch[2];
+    if (req.method === "GET") return send(res, plans.filter((pl) => pl.loadpointName === name));
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      let b = {};
+      try {
+        b = body ? JSON.parse(body) : {};
+      } catch {
+        /* ignore */
+      }
+      if (req.method === "POST") {
+        const plan = {
+          id: String(nextPlanId++),
+          loadpointName: name,
+          days: b.days,
+          readyBy: b.readyBy,
+          target: b.target,
+          unit: b.unit,
+          enabled: b.enabled ?? true,
+        };
+        plans.push(plan);
+        emit("loadpoint.plans", { name });
+        return send(res, plan, 201);
+      }
+      if (req.method === "PUT" && id) {
+        const plan = plans.find((pl) => pl.id === id && pl.loadpointName === name);
+        if (!plan) {
+          res.writeHead(404, { "access-control-allow-origin": "*" });
+          return res.end("not found");
+        }
+        Object.assign(plan, b);
+        emit("loadpoint.plans", { name });
+        return send(res, plan);
+      }
+      if (req.method === "DELETE" && id) {
+        plans = plans.filter((pl) => !(pl.id === id && pl.loadpointName === name));
+        emit("loadpoint.plans", { name });
+        res.writeHead(204, { "access-control-allow-origin": "*" });
+        return res.end();
+      }
+      res.writeHead(405, { "access-control-allow-origin": "*" });
+      res.end("method not allowed");
+    });
     return;
   }
 
@@ -132,14 +218,17 @@ const server = http.createServer((req, res) => {
         return send(res, loadpointDto());
       }
       if (p.endsWith("/target")) {
-        lp.targetSoc = b.soc;
-        lp.targetTime = b.time;
-        lp.targetKWh = b.kwh;
+        // COALESCE-merge — only overwrite fields present in the body.
+        if (b.soc !== undefined) lp.targetSoc = b.soc;
+        if (b.time !== undefined) lp.targetTime = b.time;
+        if (b.kwh !== undefined) lp.targetKWh = b.kwh;
+        if (b.minSoc !== undefined) lp.minSoc = b.minSoc;
         emit("loadpoint.target", {
           name: lp.name,
           targetSoc: lp.targetSoc,
           targetTime: lp.targetTime,
           targetKWh: lp.targetKWh,
+          minSoc: lp.minSoc,
         });
         return send(res, loadpointDto());
       }
