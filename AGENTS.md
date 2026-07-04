@@ -196,6 +196,7 @@ HA discovery: `homeassistant/select/<lp>_mode/config` etc.
 - Do not add error handling for impossible scenarios. Validate at system boundaries (config load, API calls), not internally.
 - Do not use classes in TypeScript. Use functions and plain objects.
 - Do not add caches unless the task explicitly requires them.
+- Do not use the jittered `ctx.fetch` for time-sensitive or demand-driven calls (vehicle reads, auth, car↔charger detection) — it sleeps up to 120 s. It is ONLY for public, non-urgent *scheduled* data (tariffs). Use the plain global `fetch` for everything else. (Definition: `ModuleCtx.fetch` JSDoc in `src/sdk/types.ts`.)
 - Do not push to remote without explicit user request.
 - Do not assume the internet is available — all code paths must handle its absence gracefully.
 

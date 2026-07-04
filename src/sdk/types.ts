@@ -9,13 +9,15 @@ export interface ModuleCtx {
   events: EventEmitter
   log: Logger
   /**
-   * Drop-in replacement for the global `fetch()`.
-   * Adds a random 0–120 s jitter before each request so that all running
-   * OSC instances don't hit the same external endpoint at the same millisecond
-   * when a scheduled task fires (thundering-herd prevention).
+   * Jittered `fetch()` — sleeps a random 0–120 s before each request. Its ONLY purpose is to
+   * spread load when many OSC instances would otherwise hit the same PUBLIC endpoint at the same
+   * wall-clock instant (thundering-herd prevention) — e.g. day-ahead tariff prices fetched right
+   * after their fixed publish time.
    *
-   * Use this for all scheduled/periodic outbound HTTP calls. For startup
-   * fetches where you need an immediate response, use the global `fetch`.
+   * Use it ONLY for public, non-time-sensitive, scheduled data (tariffs). Do NOT use it for
+   * anything that needs a prompt answer — vehicle reads (poll on connect / during charging),
+   * car↔charger detection, auth: those must use the plain global `fetch` so they return
+   * immediately. When in doubt, use the global `fetch`.
    */
   fetch: typeof globalThis.fetch
   /**

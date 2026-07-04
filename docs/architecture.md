@@ -74,7 +74,7 @@ interface ModuleCtx {
   db: DatabaseSync
   events: EventEmitter
   log: Logger
-  fetch: typeof globalThis.fetch  // jittered (0–120 s)
+  fetch: typeof globalThis.fetch  // jittered 0–120 s — PUBLIC scheduled data only (tariffs)
   mqtt?: { host: string; port: number; user?: string; password?: string }
 }
 ```

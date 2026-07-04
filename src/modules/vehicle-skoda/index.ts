@@ -25,10 +25,13 @@ registerVehicle({
     async function refresh(): Promise<VehicleData> {
       const accessToken = await auth.token()
 
+      // Vehicle reads use the global `fetch`, NOT ctx.fetch: this is a demand-driven, time-sensitive
+      // poll (triggered on charger-connect / during charging), so it must return promptly. ctx.fetch's
+      // 0–120 s anti-thundering-herd jitter is only for public, non-urgent scheduled data (tariffs).
       // Charging status is the primary read; air-conditioning (plug + climate) is best-effort.
       const [charging, airCon] = await Promise.all([
-        getChargingStatus(cfg.vin, accessToken, ctx.fetch),
-        getAirConditioning(cfg.vin, accessToken, ctx.fetch).catch(() => undefined),
+        getChargingStatus(cfg.vin, accessToken, fetch),
+        getAirConditioning(cfg.vin, accessToken, fetch).catch(() => undefined),
       ])
 
       const soc = charging.status?.battery?.stateOfChargeInPercent
@@ -36,7 +39,7 @@ registerVehicle({
 
       // Battery capacity is stable per VIN — fetch once, then reuse.
       if (capacityKWh === undefined) {
-        const v = await getVehicleDetails(cfg.vin, accessToken, ctx.fetch)
+        const v = await getVehicleDetails(cfg.vin, accessToken, fetch)
         const c = v.specification?.battery?.capacityInKWh
         if (c) capacityKWh = c
       }
