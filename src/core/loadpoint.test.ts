@@ -161,3 +161,30 @@ test('applyConfigToLoadpoints declaratively overwrites persisted mode + targets 
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('minSoc: seeded from config, partial-updated independently, and declaratively applied', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-lp-'))
+  const db = openDb(dir)
+  try {
+    expect(loadLoadpointStates(db, [{ name: 'lp', minSoc: 20 }]).get('lp')?.minSoc).toBe(20)
+    // minSoc and the charge targets update independently (COALESCE partial writes).
+    setLoadpointTarget(db, 'lp', 80, undefined, undefined, undefined) // soc only
+    setLoadpointTarget(db, 'lp', undefined, undefined, undefined, 30) // minSoc only
+    const row = db
+      .prepare('SELECT target_soc, min_soc FROM loadpoint_state WHERE name = ?')
+      .get('lp') as { target_soc: number; min_soc: number }
+    expect(row).toMatchObject({ target_soc: 80, min_soc: 30 }) // neither wiped the other
+    // config:apply overwrites minSoc declaratively.
+    applyConfigToLoadpoints(db, [{ name: 'lp', minSoc: 15 }])
+    expect(
+      (
+        db.prepare('SELECT min_soc FROM loadpoint_state WHERE name = ?').get('lp') as {
+          min_soc: number
+        }
+      ).min_soc,
+    ).toBe(15)
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

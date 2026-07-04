@@ -50,7 +50,7 @@ import { estimateSocSinceAnchor } from './estimator.js'
 import { resolveEnergyTarget } from './smart-charging/energy.js'
 import { resolvePriceCurve } from './smart-charging/price.js'
 import { resolveCurrentBudget } from './smart-charging/current.js'
-import { decideShouldCharge } from './smart-charging/decide.js'
+import { decideShouldCharge, forceMinSoc } from './smart-charging/decide.js'
 import { shouldPollVehicle } from './smart-charging/vehicle-poll.js'
 import {
   buildCircuits,
@@ -287,6 +287,7 @@ async function main() {
     soc?: number,
     time?: string,
     kwh?: number,
+    minSoc?: number,
   ): Promise<void> {
     const state = loadpointStates.get(name)
     if (!state) return
@@ -295,12 +296,14 @@ async function main() {
     if (soc !== undefined) state.targetSoc = soc
     if (time !== undefined) state.targetTime = time
     if (kwh !== undefined) state.targetKWh = kwh
-    setLoadpointTarget(db, name, soc, time, kwh)
+    if (minSoc !== undefined) state.minSoc = minSoc
+    setLoadpointTarget(db, name, soc, time, kwh, minSoc)
     events.emit('loadpoint.target', {
       name,
       targetSoc: state.targetSoc,
       targetTime: state.targetTime,
       targetKWh: state.targetKWh,
+      minSoc: state.minSoc,
     })
     // A new target changes the plan — tick the circuit now instead of waiting for the interval.
     const circuit = circuitForLoadpoint(circuits, name)
@@ -324,6 +327,8 @@ async function main() {
   // instead of double-counting the whole session on top of a mid-session reading.
   const vehiclePollState = new Map<string, { lastPollAt: number; polledThisConnection: boolean }>()
   const vehicleAnchor = new Map<string, { soc: number; sessionEnergyKWh: number }>()
+  // Loadpoints we've already warned about being below minSoc while disabled (warn once per episode).
+  const minSocWarned = new Set<string>()
 
   // Re-anchored SoC estimate: last real SoC + (session kWh since that reading) × efficiency / capacity.
   function estimatedSocFor(
@@ -554,9 +559,13 @@ async function main() {
       tz,
     })
 
+    // minSoc safety floor: in smart mode, force-charge when the SoC is below the minimum (bypasses
+    // the price wait). In disabled mode we respect the explicit Off but warn once per episode.
+    // Unknown SoC / no minSoc → no floor (never force-charge blind).
+    const belowMinSoc = forceMinSoc(estimatedSocPct, state.minSoc)
     let shouldChargeNow: boolean | undefined
     if (state.mode === 'smart') {
-      shouldChargeNow = decideShouldCharge({
+      const priceDecision = decideShouldCharge({
         requiredKWh: energy.value,
         now,
         targetTime,
@@ -564,6 +573,23 @@ async function main() {
         phases,
         priceSlots: price.value,
       })
+      shouldChargeNow = belowMinSoc || priceDecision
+      if (belowMinSoc && !priceDecision)
+        log.debug(
+          { loadpoint: lpCfg.name, estimatedSoc: estimatedSocPct, minSoc: state.minSoc },
+          'minSoc floor: force-charging past the price wait',
+        )
+    }
+    if (belowMinSoc && state.mode === 'disabled') {
+      if (!minSocWarned.has(lpCfg.name)) {
+        minSocWarned.add(lpCfg.name)
+        log.warn(
+          { loadpoint: lpCfg.name, estimatedSoc: estimatedSocPct, minSoc: state.minSoc },
+          'SoC below minSoc but loadpoint is disabled — not charging',
+        )
+      }
+    } else {
+      minSocWarned.delete(lpCfg.name)
     }
 
     return {

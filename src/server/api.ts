@@ -39,7 +39,13 @@ export interface ApiDeps {
   vehicles: Map<string, Vehicle>
   lastTickByBalancer: Map<string, { allocations: Record<string, number>; freeAmps: number }>
   onModeChange(name: string, mode: ChargeMode): Promise<void>
-  onTargetChange(name: string, soc?: number, time?: string, kwh?: number): Promise<void>
+  onTargetChange(
+    name: string,
+    soc?: number,
+    time?: string,
+    kwh?: number,
+    minSoc?: number,
+  ): Promise<void>
   /** Called after any plan create/update/delete so the lifecycle can emit SSE + re-tick. */
   onPlansChanged(loadpointName: string): void
 }
@@ -267,10 +273,11 @@ export function createApiRouter(deps: ApiDeps): Router {
       return
     }
 
-    const body = req.body as { soc?: unknown; time?: unknown; kwh?: unknown }
+    const body = req.body as { soc?: unknown; time?: unknown; kwh?: unknown; minSoc?: unknown }
     const soc = typeof body.soc === 'number' ? body.soc : undefined
     const time = typeof body.time === 'string' ? body.time : undefined
     const kwh = typeof body.kwh === 'number' ? body.kwh : undefined
+    const minSoc = typeof body.minSoc === 'number' ? body.minSoc : undefined
 
     if (soc !== undefined && (soc < 0 || soc > 100)) {
       res.status(400).json({ error: 'soc must be 0–100' })
@@ -284,8 +291,12 @@ export function createApiRouter(deps: ApiDeps): Router {
       res.status(400).json({ error: 'kwh must be 1–100' })
       return
     }
+    if (minSoc !== undefined && (minSoc < 0 || minSoc > 100)) {
+      res.status(400).json({ error: 'minSoc must be 0–100' })
+      return
+    }
 
-    await deps.onTargetChange(name, soc, time, kwh)
+    await deps.onTargetChange(name, soc, time, kwh, minSoc)
     res.json(deps.loadpoints.get(name))
   })
 

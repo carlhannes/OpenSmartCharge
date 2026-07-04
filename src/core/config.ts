@@ -72,6 +72,9 @@ const loadpointConfigSchema = z.object({
   // Fixed energy-to-add target (kWh) — the energy fallback when there's no vehicle SoC
   // (guest car / no app). Session-relative: charge until this session has delivered it.
   targetKWh: z.number().min(1).max(100).optional(),
+  // Minimum SoC (%) safety floor. In smart mode, if the car's SoC drops below this, OSC
+  // force-charges immediately (bypassing the price wait). See docs/config.md.
+  minSoc: z.number().min(0).max(100).optional(),
   /** Auto-start a transaction when a vehicle connects (default: true) */
   autoStart: z.boolean().default(true),
 })

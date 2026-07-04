@@ -53,3 +53,12 @@ export function shouldWrite(
   if (lastCommandedA === undefined) return true
   return Math.abs(candidateA - lastCommandedA) >= deadbandA
 }
+
+/**
+ * Minimum-SoC safety floor: true when the (estimated) SoC is known AND below the configured
+ * minimum. When true, smart mode force-charges NOW regardless of price. Unknown SoC or no minSoc
+ * configured → false (nothing to enforce — never force-charge blind).
+ */
+export function forceMinSoc(estimatedSoc: number | undefined, minSoc: number | undefined): boolean {
+  return estimatedSoc != null && minSoc != null && estimatedSoc < minSoc
+}

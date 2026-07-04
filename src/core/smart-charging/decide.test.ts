@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { decideShouldCharge, shouldWrite } from './decide.js'
+import { decideShouldCharge, shouldWrite, forceMinSoc } from './decide.js'
 import type { TariffSlot } from '../../sdk/tariff.js'
 
 const hour = (h: number, price: number): TariffSlot => ({
@@ -67,6 +67,14 @@ test('charges when now is off-boundary and the imminent slot IS among the cheape
   expect(
     decideShouldCharge({ requiredKWh: 2, now, targetTime, planRateA: 16, phases: 3, priceSlots }),
   ).toBe(true)
+})
+
+test('forceMinSoc: true only when a KNOWN SoC is strictly below a configured minSoc', () => {
+  expect(forceMinSoc(20, 25)).toBe(true) // below floor → force
+  expect(forceMinSoc(25, 25)).toBe(false) // at the floor, not below
+  expect(forceMinSoc(30, 25)).toBe(false) // above
+  expect(forceMinSoc(undefined, 25)).toBe(false) // unknown SoC → never force blind
+  expect(forceMinSoc(20, undefined)).toBe(false) // no floor configured
 })
 
 test('shouldWrite: first write always; then only when |delta| ≥ deadband', () => {

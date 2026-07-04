@@ -168,3 +168,36 @@ test('POST plan rejects invalid input with 400', async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('POST /target validates minSoc and passes it through', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-minsoc-'))
+  const db = openDb(dir)
+  let captured: number | undefined = -1
+  const deps = {
+    db,
+    events: { emit() {} },
+    config: { loadpoints: [{ name: 'garage', charger: 'garage' }] },
+    chargers: new Map(),
+    loadpoints: new Map([['garage', { name: 'garage' }]]),
+    onTargetChange: async (_n: string, _s?: number, _t?: string, _k?: number, minSoc?: number) => {
+      captured = minSoc
+    },
+    onPlansChanged: () => {},
+  } as unknown as ApiDeps
+  try {
+    await withApi(deps, async (baseUrl) => {
+      const post = (body: unknown) =>
+        fetch(`${baseUrl}/api/loadpoints/garage/target`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+      expect((await post({ minSoc: 150 })).status).toBe(400) // out of range
+      expect((await post({ minSoc: 25 })).status).toBe(200)
+      expect(captured).toBe(25) // parsed + threaded to onTargetChange
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

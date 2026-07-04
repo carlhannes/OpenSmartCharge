@@ -112,6 +112,7 @@ function runMigrations(db: DatabaseSync): void {
   // column to an already-created table.
   addColumnIfMissing(db, 'transactions', 'meter_start', 'REAL')
   addColumnIfMissing(db, 'loadpoint_state', 'target_kwh', 'REAL')
+  addColumnIfMissing(db, 'loadpoint_state', 'min_soc', 'REAL')
 }
 
 function addColumnIfMissing(db: DatabaseSync, table: string, column: string, type: string): void {

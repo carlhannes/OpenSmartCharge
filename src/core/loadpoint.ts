@@ -9,6 +9,8 @@ export interface LoadpointState {
   targetTime?: string
   /** Fixed energy-to-add target (kWh) — energy fallback when no vehicle SoC is available. */
   targetKWh?: number
+  /** Minimum SoC (%) safety floor — force-charge in smart mode when SoC drops below it. */
+  minSoc?: number
   connected: boolean
   charging: boolean
   currentA: number
@@ -52,6 +54,7 @@ interface DbRow {
   target_soc: number | null
   target_time: string | null
   target_kwh: number | null
+  min_soc: number | null
 }
 
 export interface LoadpointInit {
@@ -63,6 +66,7 @@ export interface LoadpointInit {
   targetSoc?: number
   targetTime?: string
   targetKWh?: number
+  minSoc?: number
 }
 
 export function loadLoadpointStates(
@@ -72,8 +76,8 @@ export function loadLoadpointStates(
   // INSERT OR IGNORE: seed a new loadpoint with its configured defaultMode + targets; an
   // existing (persisted) row is left untouched, so a saved mode/target still wins on restart.
   const insert = db.prepare(
-    `INSERT OR IGNORE INTO loadpoint_state (name, mode, target_soc, target_time, target_kwh)
-     VALUES (?, ?, ?, ?, ?)`,
+    `INSERT OR IGNORE INTO loadpoint_state (name, mode, target_soc, target_time, target_kwh, min_soc)
+     VALUES (?, ?, ?, ?, ?, ?)`,
   )
   const read = db.prepare(`SELECT * FROM loadpoint_state WHERE name = ?`)
 
@@ -86,6 +90,7 @@ export function loadLoadpointStates(
       init.targetSoc ?? null,
       init.targetTime ?? null,
       init.targetKWh ?? null,
+      init.minSoc ?? null,
     )
     const row = read.get(name) as unknown as DbRow
     states.set(name, {
@@ -94,6 +99,7 @@ export function loadLoadpointStates(
       targetSoc: row.target_soc ?? undefined,
       targetTime: row.target_time ?? undefined,
       targetKWh: row.target_kwh ?? undefined,
+      minSoc: row.min_soc ?? undefined,
       connected: false,
       charging: false,
       currentA: 0,
@@ -118,6 +124,7 @@ export function configToLoadpointInits(config: Config): LoadpointInit[] {
       targetSoc: lp.targetSoc,
       targetTime: lp.targetTime,
       targetKWh: lp.targetKWh,
+      minSoc: lp.minSoc,
     }
   })
 }
@@ -129,13 +136,14 @@ export function configToLoadpointInits(config: Config): LoadpointInit[] {
 // Declarative: a target omitted in config is cleared (set to NULL), so the DB matches the file.
 export function applyConfigToLoadpoints(db: DatabaseSync, inits: LoadpointInit[]): void {
   const upsert = db.prepare(
-    `INSERT INTO loadpoint_state (name, mode, target_soc, target_time, target_kwh)
-       VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO loadpoint_state (name, mode, target_soc, target_time, target_kwh, min_soc)
+       VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(name) DO UPDATE SET
        mode        = excluded.mode,
        target_soc  = excluded.target_soc,
        target_time = excluded.target_time,
        target_kwh  = excluded.target_kwh,
+       min_soc     = excluded.min_soc,
        updated_at  = datetime('now')`,
   )
   for (const init of inits) {
@@ -145,6 +153,7 @@ export function applyConfigToLoadpoints(db: DatabaseSync, inits: LoadpointInit[]
       init.targetSoc ?? null,
       init.targetTime ?? null,
       init.targetKWh ?? null,
+      init.minSoc ?? null,
     )
   }
 }
@@ -164,13 +173,15 @@ export function setLoadpointTarget(
   targetSoc?: number,
   targetTime?: string,
   targetKWh?: number,
+  minSoc?: number,
 ): void {
   db.prepare(
     `UPDATE loadpoint_state
        SET target_soc  = COALESCE(?, target_soc),
            target_time = COALESCE(?, target_time),
            target_kwh  = COALESCE(?, target_kwh),
+           min_soc     = COALESCE(?, min_soc),
            updated_at  = datetime('now')
      WHERE name = ?`,
-  ).run(targetSoc ?? null, targetTime ?? null, targetKWh ?? null, name)
+  ).run(targetSoc ?? null, targetTime ?? null, targetKWh ?? null, minSoc ?? null, name)
 }
