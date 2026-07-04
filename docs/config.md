@@ -223,6 +223,8 @@ npm run config:apply    # reads osc.yaml (OSC_CONFIG) → writes data/osc.db (OS
 
 It prints a before→after diff per loadpoint and exits; it does not start the server. Use it after editing `osc.yaml`, or to reset runtime tweaks back to the declared config. (`maxA` and `autoStart` are re-read from config on every boot and are not persisted.)
 
+**It writes the database, so restart (or start) the server for it to take effect** — a running server holds its loadpoint state in memory and won't pick up the change until it reboots.
+
 ## Multiple grids and chargers
 
 All sections are lists. Add more entries to support multiple tariff zones, circuits, or chargers:
