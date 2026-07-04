@@ -176,7 +176,7 @@ Bugs and doc discrepancies found bringing up a real charger. The set below was w
 - [x] **`numberPhases` is now a per-charger `phases` config** (default 3), threaded through the profile builder.
 - [x] **Reconnect resilience (flaky-WiFi / host-sleep):** on every (re)connect OSC re-asserts the last commanded limit + `TriggerMessage(StatusNotification)`; status subscriptions persist across reconnects so the loadpoint keeps updating after a drop. Resolves the old "connection state stale after reconnect" bug.
 - [x] **Reconnect-bounce eviction:** disconnect handler guards `s.client === client` so a stale disconnect can't evict a live re-registered socket.
-- [x] **Live current/power:** `MeterValues` push `currentA`/`powerW` to `ChargerStatus` → `/api/loadpoints.currentA` (was stuck at 0 while charging).
+- [x] **Live current/power:** `MeterValues` push `currentA`/`powerW` to `ChargerStatus` → `/api/loadpoints.currentA` (was stuck at 0 while charging). Also **cleared to 0 when not charging** — a bare `StatusNotification`/`StopTransaction` carries no `currentA`, so the last live reading was sticking after a stop (UI showed e.g. `9.7 A` with the car idle); `foldChargerStatus` (`loadpoint.ts`) forces 0 whenever `charging` is false.
 - [x] **Session energy = delta:** report `(latest register − meterStart)`; added `transactions.meter_start` + guarded additive migration.
 - [x] **Outbound OCPP commands + REST endpoints:** `Reset`, `ChangeAvailability`, `ClearChargingProfile`, `GetCompositeSchedule`, `GetConfiguration`, `TriggerMessage`.
 - [x] **Endpoint loadpoint→charger resolution:** `/start`,`/stop`,`/profile`,`/reset`,`/clear-profile`,`/composite-schedule` resolve the loadpoint's charger (no longer assume loadpoint name == charger name).

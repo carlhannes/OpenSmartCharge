@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { ChargeMode } from './config.js'
+import type { ChargerStatus } from '../sdk/charger.js'
 
 export interface LoadpointState {
   name: string
@@ -14,6 +15,33 @@ export interface LoadpointState {
   maxCurrentA: number
   /** Whether to auto-start a transaction on plug-in */
   autoStart: boolean
+}
+
+/** The live, charger-driven subset of loadpoint state. */
+export type LoadpointLiveFields = Pick<
+  LoadpointState,
+  'connected' | 'charging' | 'currentA' | 'sessionEnergyKWh'
+>
+
+/**
+ * Fold a charger status update into the loadpoint's live fields.
+ *
+ * `currentA` and `sessionEnergyKWh` are sticky: a bare StatusNotification carries neither,
+ * so we keep the last MeterValues reading rather than blanking the display between frames.
+ * The exception is `currentA` when the charger isn't charging — a stopped or suspended
+ * session draws no current, so it's forced to 0. Otherwise the last live value would stick
+ * forever after StopTransaction (which pushes `charging:false` with no `currentA`).
+ */
+export function foldChargerStatus(
+  prev: LoadpointLiveFields,
+  status: ChargerStatus,
+): LoadpointLiveFields {
+  return {
+    connected: status.connected,
+    charging: status.charging,
+    currentA: status.charging ? (status.currentA ?? prev.currentA) : 0,
+    sessionEnergyKWh: status.sessionEnergyKWh ?? prev.sessionEnergyKWh,
+  }
 }
 
 interface DbRow {

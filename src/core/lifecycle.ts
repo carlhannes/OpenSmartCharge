@@ -9,7 +9,12 @@ import { loadConfig } from './config.js'
 import { openDb } from './db.js'
 import { createLogger } from './logger.js'
 import { loadPlugins } from './plugin-loader.js'
-import { loadLoadpointStates, setLoadpointMode, setLoadpointTarget } from './loadpoint.js'
+import {
+  loadLoadpointStates,
+  setLoadpointMode,
+  setLoadpointTarget,
+  foldChargerStatus,
+} from './loadpoint.js'
 import { createEventBus } from './events.js'
 import { createHealthMap, updateHealth } from './health.js'
 import {
@@ -208,10 +213,7 @@ async function main() {
     const state = loadpointStates.get(lpCfg.name)!
 
     charger.onStatus((status) => {
-      state.connected = status.connected
-      state.charging = status.charging
-      state.currentA = status.currentA ?? state.currentA
-      state.sessionEnergyKWh = status.sessionEnergyKWh ?? state.sessionEnergyKWh
+      Object.assign(state, foldChargerStatus(state, status))
 
       // Charger module health tracks connection state — refresh on connect/disconnect.
       updateHealth(health, lpCfg.charger, charger.health())
