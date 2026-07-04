@@ -4,6 +4,33 @@ import { z } from 'zod'
 
 const chargeModeSchema = z.enum(['disabled', 'smart', 'fast'])
 
+// Smart-charging control-loop cadence + graceful-degradation fallback tuning. Every field
+// has a default, so the whole section is optional.
+const smartChargingConfigSchema = z
+  .object({
+    // Control tick interval. Kept slow (default 30 s) because a charger/car takes 15–30 s to
+    // act on a new limit; ticking faster just makes the offered current oscillate.
+    controlIntervalSec: z.number().min(5).max(60).default(30),
+    // Only re-command the charger when the target moves at least this many amps (anti-chatter).
+    deadbandA: z.number().min(0).default(1),
+    // Assumed-cheap night window in local Stockholm hours [startHour, endHour), wrapping
+    // midnight. Used by the price fallback (night priced cheaper) and the static current
+    // fallback (night gets the generous budget).
+    nightWindow: z
+      .object({
+        startHour: z.number().int().min(0).max(23).default(23),
+        endHour: z.number().int().min(0).max(23).default(5),
+      })
+      .default({}),
+    // Static current fallback when there is no balancer and no load history:
+    // night = mainBreakerA − nightMarginA, day = mainBreakerA × daytimeFraction.
+    nightMarginA: z.number().min(0).default(3),
+    daytimeFraction: z.number().min(0).max(1).default(0.5),
+    // Look-back window for the historical price-average and worst-case-load rungs.
+    historicalDays: z.number().int().min(1).max(30).default(3),
+  })
+  .default({})
+
 // .catchall allows type-specific fields (zone, stationId, credentials, etc.)
 // to pass through to module factories as `cfg: unknown`
 const namedModuleSchema = z.object({ name: z.string(), type: z.string() }).catchall(z.unknown())
@@ -34,6 +61,9 @@ const loadpointConfigSchema = z.object({
     .string()
     .regex(/^\d{2}:\d{2}$/, 'targetTime must be HH:MM')
     .optional(),
+  // Fixed energy-to-add target (kWh) — the energy fallback when there's no vehicle SoC
+  // (guest car / no app). Session-relative: charge until this session has delivered it.
+  targetKWh: z.number().min(1).max(100).optional(),
   /** Auto-start a transaction when a vehicle connects (default: true) */
   autoStart: z.boolean().default(true),
 })
@@ -50,10 +80,15 @@ const mqttConfigSchema = z.object({
 const siteConfigSchema = z.object({
   name: z.string().default('OpenSmartCharge'),
   port: z.number().default(8080),
+  // Main-fuse amps per phase, used as the circuit ceiling for loadpoints that have NO
+  // balancer (the static/historical current fallback sizes against this). A balancer,
+  // when configured, carries its own mainBreakerA per circuit.
+  mainBreakerA: z.number().positive().optional(),
 })
 
 const configSchema = z.object({
   site: siteConfigSchema.default({}),
+  smartCharging: smartChargingConfigSchema,
   mqtt: mqttConfigSchema.optional(),
   tariffs: z.array(namedModuleSchema).default([]),
   balancers: z.array(balancerConfigSchema).default([]),
@@ -66,6 +101,7 @@ const configSchema = z.object({
 export type Config = z.infer<typeof configSchema>
 export type LoadpointConfig = z.infer<typeof loadpointConfigSchema>
 export type ChargeMode = z.infer<typeof chargeModeSchema>
+export type SmartChargingConfig = z.infer<typeof smartChargingConfigSchema>
 
 export function loadConfig(path: string): Config {
   const raw = readFileSync(path, 'utf8')

@@ -71,11 +71,23 @@ function runMigrations(db: DatabaseSync): void {
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    -- Hourly-max rollup of household load (max phase current), keyed by Stockholm-local
+    -- calendar day + hour. Feeds the "worst-case current over the last N days" charging
+    -- fallback. One row per (date, hour) — bounded at 24 rows/day regardless of meter
+    -- cadence, and DST-safe (a repeated local hour collapses via the max() upsert).
+    CREATE TABLE IF NOT EXISTS household_load_hourly (
+      date        TEXT NOT NULL,
+      hour        INTEGER NOT NULL,
+      max_phase_a REAL NOT NULL,
+      PRIMARY KEY (date, hour)
+    );
   `)
 
   // Additive migrations for pre-existing DBs — `CREATE TABLE IF NOT EXISTS` won't add a
   // column to an already-created table.
   addColumnIfMissing(db, 'transactions', 'meter_start', 'REAL')
+  addColumnIfMissing(db, 'loadpoint_state', 'target_kwh', 'REAL')
 }
 
 function addColumnIfMissing(db: DatabaseSync, table: string, column: string, type: string): void {

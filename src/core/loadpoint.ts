@@ -7,6 +7,8 @@ export interface LoadpointState {
   mode: ChargeMode
   targetSoc?: number
   targetTime?: string
+  /** Fixed energy-to-add target (kWh) — energy fallback when no vehicle SoC is available. */
+  targetKWh?: number
   connected: boolean
   charging: boolean
   currentA: number
@@ -49,6 +51,7 @@ interface DbRow {
   mode: ChargeMode
   target_soc: number | null
   target_time: string | null
+  target_kwh: number | null
 }
 
 export interface LoadpointInit {
@@ -56,26 +59,35 @@ export interface LoadpointInit {
   maxCurrentA?: number
   autoStart?: boolean
   defaultMode?: ChargeMode
+  /** Config-provided targets, seeded into a NEW loadpoint's persisted row. */
+  targetSoc?: number
+  targetTime?: string
+  targetKWh?: number
 }
 
 export function loadLoadpointStates(
   db: DatabaseSync,
   inits: LoadpointInit[],
 ): Map<string, LoadpointState> {
-  // INSERT OR IGNORE: seed a new loadpoint with its configured defaultMode; an existing
-  // (persisted) row is left untouched, so a saved mode still wins on restart.
-  const insert = db.prepare(`INSERT OR IGNORE INTO loadpoint_state (name, mode) VALUES (?, ?)`)
+  // INSERT OR IGNORE: seed a new loadpoint with its configured defaultMode + targets; an
+  // existing (persisted) row is left untouched, so a saved mode/target still wins on restart.
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO loadpoint_state (name, mode, target_soc, target_time, target_kwh)
+     VALUES (?, ?, ?, ?, ?)`,
+  )
   const read = db.prepare(`SELECT * FROM loadpoint_state WHERE name = ?`)
 
   const states = new Map<string, LoadpointState>()
-  for (const { name, maxCurrentA = 16, autoStart = true, defaultMode = 'smart' } of inits) {
-    insert.run(name, defaultMode)
+  for (const init of inits) {
+    const { name, maxCurrentA = 16, autoStart = true, defaultMode = 'smart' } = init
+    insert.run(name, defaultMode, init.targetSoc ?? null, init.targetTime ?? null, init.targetKWh ?? null)
     const row = read.get(name) as unknown as DbRow
     states.set(name, {
       name,
       mode: row.mode,
       targetSoc: row.target_soc ?? undefined,
       targetTime: row.target_time ?? undefined,
+      targetKWh: row.target_kwh ?? undefined,
       connected: false,
       charging: false,
       currentA: 0,
