@@ -13,6 +13,11 @@ site:
   mainBreakerA: 16  # optional — main fuse per phase (amps). Circuit ceiling for loadpoints
                     # WITHOUT a balancer; the smart-charging static current fallback sizes
                     # against it. A balancer, when configured, carries its own mainBreakerA.
+  timezone: Europe/Stockholm  # optional (default Europe/Stockholm) — the SITE/user timezone for
+                    # all wall-clock planning: the night window, plan "ready by" times, and
+                    # departure targets. Seeds the DB; the UI setup flow auto-detects + overrides
+                    # it (or PUT /api/settings). Tariff providers use their own market timezone,
+                    # not this — Nord Pool day-ahead is always CET regardless of where you are.
 ```
 
 ### `smartCharging`
@@ -193,13 +198,18 @@ loadpoints:
                               # On by default because many cheap OCPP chargers won't initiate
                               # a transaction without it.
     targetSoc: 80             # default charge target (%) — used when a vehicle SoC is available
-    targetTime: "07:00"       # daily departure time (HH:MM, Stockholm local)
+    targetTime: "07:00"       # daily departure time (HH:MM, site-local — see site.timezone)
                               # if omitted, smart mode charges as cheaply as possible
                               # without a time constraint
     targetKWh: 40             # optional — fixed energy to add per session (kWh). The energy
                               # fallback when there's no vehicle SoC (guest car / no app).
                               # UI offers 10–100 in steps of 10.
+    minSoc: 25                # optional — minimum SoC (%) safety floor. In smart mode, if the
+                              # car's SoC drops below this, OSC force-charges immediately
+                              # (bypassing the price wait). No-op with no vehicle SoC.
 ```
+
+`targetSoc`/`targetTime`/`targetKWh` are a single **ad-hoc** target — the fallback when no recurring [plan](#charging-plans) governs. They are also seeds (see [Config vs. runtime state](#config-vs-runtime-state-persist-wins--configapply)).
 
 **Charge modes:**
 
@@ -224,6 +234,16 @@ npm run config:apply    # reads osc.yaml (OSC_CONFIG) → writes data/osc.db (OS
 It prints a before→after diff per loadpoint and exits; it does not start the server. Use it after editing `osc.yaml`, or to reset runtime tweaks back to the declared config. (`maxA` and `autoStart` are re-read from config on every boot and are not persisted.)
 
 **It writes the database, so restart (or start) the server for it to take effect** — a running server holds its loadpoint state in memory and won't pick up the change until it reboots.
+
+### Charging plans
+
+Recurring, per-charger plans are the primary way to express intent — *"ready by 07:00 at 80% on weekdays."* Unlike the single ad-hoc target above, plans are **managed at runtime via the UI/API**, not `osc.yaml`, and live in the database (they're edited often, so they're not config).
+
+Each plan has a weekday set (mon–sun), a **ready-by** time (site-local `HH:MM`), a **target** + unit (`pct` %, `km` range, or `kwh`), and an enabled toggle. A charger can have zero or several.
+
+**Which plan governs now:** among *enabled* plans whose days include **today** with a **ready-by still later today**, the earliest ready-by wins. If none qualifies (wrong day, all passed, or no plans), OSC falls back to the loadpoint's ad-hoc `targetSoc`/`targetKWh`. A `km` target is converted to % via the car's live range/SoC ratio (needs a connected car; degrades gracefully without one).
+
+Manage plans via REST under `/api/loadpoints/:name/plans` — `GET` (list), `POST` (create), `PUT /:id` (partial update), `DELETE /:id`. A plan body: `{ "days": ["mon","fri"], "readyBy": "07:00", "target": 80, "unit": "pct", "enabled": true }`.
 
 ## Multiple grids and chargers
 

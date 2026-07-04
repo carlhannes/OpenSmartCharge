@@ -209,6 +209,20 @@ Smart mode now works with **any subset of dependencies degraded**, via pure reso
 - [x] **Declarative `config:apply` CLI.** `npm run config:apply` overwrites persisted loadpoint mode/targets from `osc.yaml` (the DB remains the runtime source of truth; boot still persist-wins). See `docs/config.md`.
 - [x] **Latent hardening:** transactions insert with the OCPP id as PK directly (no fragile insert-then-UPDATE remap); `parseMeterValue` honours `sampledValue.unit` (kWh vs Wh); `/api/transactions/:id` per-sample energy is the session delta, not the lifetime register.
 
+### Resolved (0.2.0 flagship — plans, timezone, minSoc, 2026-07-04)
+
+- [x] **Multiple recurring charging plans** per loadpoint (W3): `charge_plans` table + `src/core/plans.ts`
+  resolution layer (weekday-recurring; earliest still-upcoming ready-by governs) feeding the *unchanged*
+  planner. CRUD at `/api/loadpoints/:name/plans` + `loadpoint.plans` SSE. The ad-hoc target is the fallback.
+- [x] **km / kWh targets** (W4): plan unit `pct|km|kwh`; km→% via the cached vehicle range/SoC ratio (degrades without a car).
+- [x] **Configurable site timezone**: `settings` table + `src/core/settings.ts`; `stockholm-time.ts` →
+  tz-parameterized `local-time.ts`; the site tz (auto-detected in setup via `PUT /api/settings`, or
+  `site.timezone`) drives planning, while tariff providers keep the Nord Pool market tz.
+- [x] **minSoc safety floor**: per-loadpoint minimum SoC; smart mode force-charges below it (respects Off + warns).
+
+Unblocks ui2's plan UI. Remaining ui2-side wiring (that agent): `mapPlan`, plan commands, hydrate `plans`
+in `useLiveSync`, subscribe `loadpoint.plans` + `settings.changed`, setup timezone auto-detect, a minSoc control.
+
 ### Remaining / nice-to-have
 
 - [ ] Exclude `*.test.ts` + `mock-charger.ts` from the production build (they currently compile into `dist/` — harmless dead weight). Add to `tsconfig.json`/build config.

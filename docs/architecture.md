@@ -28,7 +28,7 @@
 1. **Config loaded** — YAML parsed, zod-validated, modules instantiated from registry
 2. **Loadpoints created** — one per `loadpoints[]` entry, mode restored from SQLite
 3. **Tariff module** — fetches day-ahead prices (elprisetjustnu for SE1–SE4, Elering for EE/FI/LV/LT), stores in SQLite; exposes `prices(from, to)`
-4. **Control tick** (every `controlIntervalSec`, default 30 s) — one damped loop drives everything. For each smart-mode loadpoint it resolves the three pure ladders (energy / price / current), turns that into a 15-min plan, and commands the charger through a deadband. Loadpoints sharing a balancer coordinate through `allocate()` (headroom = `mainBreakerA − max(housePhaseCurrents) + sum(chargerCurrents)`); a balancer-less loadpoint is its own circuit and takes the resolved current budget directly. The balancer is a per-tick allocator, not the loop driver — see [AGENTS.md](../AGENTS.md) → "Smart charging" and "Modules vs. the lifecycle".
+4. **Control tick** (every `controlIntervalSec`, default 30 s) — one damped loop drives everything. For each smart-mode loadpoint it resolves the governing recurring **plan** (else the ad-hoc target) into a single `{target, readyBy}`, then the three pure ladders (energy / price / current), turns that into a 15-min schedule, and commands the charger through a deadband. A **minSoc** floor overrides the price wait and force-charges when the SoC is critically low. Loadpoints sharing a balancer coordinate through `allocate()` (headroom = `mainBreakerA − max(housePhaseCurrents) + sum(chargerCurrents)`); a balancer-less loadpoint is its own circuit and takes the resolved current budget directly. The balancer is a per-tick allocator, not the loop driver — see [AGENTS.md](../AGENTS.md) → "Smart charging" and "Modules vs. the lifecycle".
 5. **Vehicle polling** — demand-driven and **lifecycle-owned**: the module exposes `refresh()` (one fetch, no timer); the lifecycle polls it on charger-connect and, while charging, at most every `vehiclePollIntervalSec` (default 30 min) — never while idle. SoC is cached to SQLite and estimated forward between polls.
 6. **REST / MQTT** — reflect current loadpoint state to consumers
 7. **Web UI** — subscribes to SSE, renders live state
@@ -90,10 +90,18 @@ Chargers connect over WebSocket to `ws://<host>:<port>/ocpp`. The `ocpp16` modul
 ## Persistence
 
 SQLite at `./data/osc.db`. Tables:
-- `loadpoint_state` — mode, targetSoc, targetTime per loadpoint name
+- `loadpoint_state` — mode, targetSoc, targetTime, targetKWh, **minSoc** (ad-hoc target + safety floor) per loadpoint name
+- `charge_plans` — recurring per-loadpoint plans (days_mask, ready_by, target value+unit, enabled); the resolution layer (`src/core/plans.ts`) in front of the planner
+- `settings` — system-wide key/value (e.g. site `timezone`); `src/core/settings.ts`
 - `transactions` — OCPP transaction records
 - `meter_values` — raw meter value samples per session
 - `tariff_slots` — cached price slots per (zone, slotStart)
-- `vehicle_cache` — per-vehicle: SoC, capacity, odometer, fetchedAt
+- `vehicle_cache` — per-vehicle: SoC, capacity, range, fetchedAt
 
 Migrations run automatically on startup (additive only — no destructive migrations).
+
+**Two timezones (`src/sdk/local-time.ts`, tz always a parameter):** the **site** timezone
+(`settings.timezone`, configurable + auto-detected in setup) drives all user-facing planning — the
+night window, plan ready-by, targets. Tariff providers use their own **market** timezone (Nord Pool =
+`Europe/Stockholm`) for publish windows + per-day price files, which follow the price market regardless
+of where the user lives.

@@ -161,13 +161,21 @@ tariffs:    [{name, type: elering|elprisetjustnu, zone, ...}]   # elprisetjustnu
 balancers:  [{name, type, mainBreakerA, phases, meterTopicPrefix, safeStaticCurrentA, meterStaleAfterSec}]
 vehicles:   [{name, type, ...}]
 chargers:   [{name, type, stationId, maxA, phases}]
-loadpoints: [{name, charger, vehicle?, tariff?, balancer?, defaultMode, targetSoc?, targetTime?, targetKWh?}]
+loadpoints: [{name, charger, vehicle?, tariff?, balancer?, defaultMode, targetSoc?, targetTime?, targetKWh?, minSoc?}]
 mqtt:       {host, port, topicPrefix, homeAssistantDiscovery}
-site:       {name, port, mainBreakerA?}                          # mainBreakerA = fallback fuse for balancer-less loadpoints
+site:       {name, port, mainBreakerA?, timezone?}               # timezone: site/user tz (default Europe/Stockholm); mainBreakerA = fallback fuse
 smartCharging: {controlIntervalSec, deadbandA, nightWindow, nightMarginA, daytimeFraction, historicalDays, vehiclePollIntervalSec, chargingEfficiency}
 ```
 
 Name references enable multiplicity: multiple tariff zones, circuits, and chargers are just more list entries — no code changes required.
+
+**Runtime state vs config.** Recurring charging **plans** (`charge_plans` table, `src/core/plans.ts`) and
+**system settings** (`settings` table, `src/core/settings.ts` — e.g. the site timezone) are managed at
+runtime via the UI/API, NOT `osc.yaml` — they're edited often. Config only *seeds* the ad-hoc loadpoint
+target + defaults; `npm run config:apply` re-asserts config onto the DB. Two timezones, kept distinct in
+`src/sdk/local-time.ts` (tz is always a param): the **site** tz (`getTimezone(db)`) drives planning
+(night window, plan ready-by, targets); tariff providers pass their **market** tz (Nord Pool = CET) for
+publish windows + per-day price files — that follows the price market, not the user.
 
 ---
 
