@@ -2,6 +2,8 @@
 
 Each milestone is independently shippable — M0 gives you docs and a typed skeleton; M1 gives you a working OCPP server; M2 adds pricing; and so on. You do not need all milestones for a useful system.
 
+> **Next up:** the [v0.2.0 UX vision & backend roadmap](docs/vision-0.2.0.md) — a mobile-first redesign (onboarding, recurring plans, km/% targets) and the backend work (config-as-data, charger pairing) it requires.
+
 ## Milestone 0 — Foundation (shipped)
 
 **Goal:** Document the architecture, establish module contracts, wire up the project skeleton so every future milestone drops cleanly into the right slot.
