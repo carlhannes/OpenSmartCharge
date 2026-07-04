@@ -26,7 +26,7 @@ export interface MqttBridgeDeps {
   vehicles: Map<string, Vehicle>
   health: HealthMap
   onModeChange(name: string, mode: ChargeMode): Promise<void>
-  onTargetChange(name: string, soc?: number, time?: string): Promise<void>
+  onTargetChange(name: string, soc?: number, time?: string, kwh?: number): Promise<void>
 }
 
 export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: Logger): void {
@@ -107,9 +107,9 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
         .catch((err) => log.warn({ err }, 'MQTT mode change error'))
     } else if (command === 'target') {
       try {
-        const body = JSON.parse(str) as { soc?: number; time?: string }
+        const body = JSON.parse(str) as { soc?: number; time?: string; kwh?: number }
         deps
-          .onTargetChange(name, body.soc, body.time)
+          .onTargetChange(name, body.soc, body.time, body.kwh)
           .catch((err) => log.warn({ err }, 'MQTT target change error'))
       } catch {
         log.warn({ topic, str }, 'invalid target JSON')

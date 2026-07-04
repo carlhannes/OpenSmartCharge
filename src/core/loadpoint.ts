@@ -110,8 +110,9 @@ export function setLoadpointTarget(
   name: string,
   targetSoc?: number,
   targetTime?: string,
+  targetKWh?: number,
 ): void {
   db.prepare(
-    `UPDATE loadpoint_state SET target_soc = ?, target_time = ?, updated_at = datetime('now') WHERE name = ?`,
-  ).run(targetSoc ?? null, targetTime ?? null, name)
+    `UPDATE loadpoint_state SET target_soc = ?, target_time = ?, target_kwh = ?, updated_at = datetime('now') WHERE name = ?`,
+  ).run(targetSoc ?? null, targetTime ?? null, targetKWh ?? null, name)
 }

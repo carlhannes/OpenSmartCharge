@@ -25,6 +25,7 @@ export default function LoadpointCard({
   const [pendingMode, setPendingMode] = useState<ChargeMode | null>(null)
   const [socInput, setSocInput] = useState(String(lp.targetSoc ?? ''))
   const [timeInput, setTimeInput] = useState(lp.targetTime ?? '')
+  const [kwhInput, setKwhInput] = useState(String(lp.targetKWh ?? ''))
   const [profileAmps, setProfileAmps] = useState('6')
   const [showProfile, setShowProfile] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -42,16 +43,21 @@ export default function LoadpointCard({
     }
   }
 
-  const handleTarget = async () => {
-    const soc = socInput !== '' ? Number(socInput) : undefined
-    const time = timeInput !== '' ? timeInput : undefined
+  // Submit the full target triple. Callers pass explicit values (from the just-changed
+  // control) so we never read stale state; the others default to the current inputs.
+  const submitTarget = async (over: { soc?: number; time?: string; kwh?: number }) => {
     try {
-      const updated = await setTarget(lp.name, soc, time)
-      onUpdate(updated)
+      onUpdate(await setTarget(lp.name, over.soc, over.time, over.kwh))
     } catch (err) {
       console.error('target change failed', err)
     }
   }
+  const currentTargets = () => ({
+    soc: socInput !== '' ? Number(socInput) : undefined,
+    time: timeInput !== '' ? timeInput : undefined,
+    kwh: kwhInput !== '' ? Number(kwhInput) : undefined,
+  })
+  const handleTarget = () => submitTarget(currentTargets())
 
   const handleStart = async () => {
     setBusy(true)
@@ -157,6 +163,23 @@ export default function LoadpointCard({
           onChange={(e) => setTimeInput(e.target.value)}
           onBlur={handleTarget}
         />
+        <span className={styles.targetLabel}>or add</span>
+        <select
+          className={styles.targetInput}
+          value={kwhInput}
+          onChange={(e) => {
+            const v = e.target.value
+            setKwhInput(v)
+            submitTarget({ ...currentTargets(), kwh: v !== '' ? Number(v) : undefined })
+          }}
+        >
+          <option value="">— kWh</option>
+          {[10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map((v) => (
+            <option key={v} value={v}>
+              {v} kWh
+            </option>
+          ))}
+        </select>
       </div>
 
       {(supportsRemoteStart || supportsRemoteStop || supportsProfile) && (

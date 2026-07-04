@@ -280,13 +280,22 @@ async function main() {
     if (circuit) void circuitTick(circuit)
   }
 
-  async function handleTargetChange(name: string, soc?: number, time?: string): Promise<void> {
+  async function handleTargetChange(
+    name: string,
+    soc?: number,
+    time?: string,
+    kwh?: number,
+  ): Promise<void> {
     const state = loadpointStates.get(name)
     if (!state) return
     state.targetSoc = soc
     state.targetTime = time
-    setLoadpointTarget(db, name, soc, time)
-    events.emit('loadpoint.target', { name, targetSoc: soc, targetTime: time })
+    state.targetKWh = kwh
+    setLoadpointTarget(db, name, soc, time, kwh)
+    events.emit('loadpoint.target', { name, targetSoc: soc, targetTime: time, targetKWh: kwh })
+    // A new target changes the plan — tick the circuit now instead of waiting for the interval.
+    const circuit = circuitForLoadpoint(circuits, name)
+    if (circuit) void circuitTick(circuit)
   }
 
   // Last amps value successfully sent to each charger. Keyed by loadpoint name (= LoadpointSnapshot.id).

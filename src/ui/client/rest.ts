@@ -10,6 +10,7 @@ export interface LoadpointStateDto {
   mode: ChargeMode
   targetSoc?: number
   targetTime?: string
+  targetKWh?: number
   connected: boolean
   charging: boolean
   currentA: number
@@ -91,6 +92,7 @@ export interface SiteLoadpointDto {
   autoStart: boolean
   targetSoc?: number
   targetTime?: string
+  targetKWh?: number
 }
 
 export interface SiteChargerDto {
@@ -146,8 +148,8 @@ export const getLoadpoints = () => apiFetch<LoadpointStateDto[]>('/api/loadpoint
 export const getLoadpoint = (name: string) => apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}`)
 export const setMode = (name: string, mode: ChargeMode) =>
   apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/mode`, json({ mode }))
-export const setTarget = (name: string, soc?: number, time?: string) =>
-  apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/target`, json({ soc, time }))
+export const setTarget = (name: string, soc?: number, time?: string, kwh?: number) =>
+  apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/target`, json({ soc, time, kwh }))
 export const remoteStart = (name: string) =>
   apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/start`, { method: 'POST' })
 export const remoteStop = (name: string) =>
