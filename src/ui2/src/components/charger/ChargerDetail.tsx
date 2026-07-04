@@ -1,0 +1,366 @@
+import { useOsc, type Mode } from "@/lib/mock/store";
+import type { Charger } from "@/lib/mock/store";
+import { Timeline24h } from "./Timeline24h";
+import { StatusPill } from "@/components/StatusPill";
+import { modeLabel } from "@/lib/copy";
+import { fmtKW, fmtPct, fmtKm, DAYS, DAY_KEYS, type DayKey } from "@/lib/format";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Switch } from "@/components/ui/switch";
+import { ActionButton } from "@/components/ui/action-button";
+import { InlineStatus } from "@/components/ui/inline-status";
+import { Trash2, Plus, ChevronDown, Sparkles, Zap, Power } from "lucide-react";
+import { useState, useMemo, useRef } from "react";
+
+interface Props {
+  charger: Charger | null;
+  onClose: () => void;
+}
+
+const MODE_ICONS = { off: Power, smart: Sparkles, fast: Zap };
+
+export function ChargerDetail({ charger, onClose }: Props) {
+  const vehicles = useOsc((s) => s.vehicles);
+  const allPlans = useOsc((s) => s.plans);
+  const plans = useMemo(
+    () => allPlans.filter((p) => p.chargerId === charger?.id),
+    [allPlans, charger?.id],
+  );
+  const setMode = useOsc((s) => s.setMode);
+  const setActiveVehicle = useOsc((s) => s.setActiveVehicle);
+  const setGuestTarget = useOsc((s) => s.setGuestTarget);
+  const addPlan = useOsc((s) => s.addPlan);
+  const oneShotAmps = useOsc((s) => s.oneShotAmps);
+  const [advOpen, setAdvOpen] = useState(false);
+  const [amps, setAmps] = useState(charger?.constraintAmps ?? charger?.maxAmps ?? 16);
+  const [ampApplied, setAmpApplied] = useState(false);
+  const [lastCmd, setLastCmd] = useState<string | null>(null);
+  const [showComposite, setShowComposite] = useState(false);
+  const ampTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  if (!charger) return null;
+
+  const commitAmps = () => {
+    oneShotAmps(charger.id, amps);
+    setAmpApplied(true);
+    if (ampTimer.current) clearTimeout(ampTimer.current);
+    ampTimer.current = setTimeout(() => setAmpApplied(false), 1500);
+  };
+  const runCommand = async (label: string) => {
+    // Mock async; maps to the OCPP REST endpoints (/start, /stop, /reset, …) once wired.
+    await new Promise((r) => setTimeout(r, 600));
+    setLastCmd(label);
+  };
+
+  const vehicle = vehicles.find((v) => v.id === charger.activeVehicleId) ?? null;
+  const nextReady = plans.find((p) => p.enabled)?.readyBy;
+  const readyByHour = nextReady ? parseInt(nextReady.split(":")[0], 10) : undefined;
+
+  return (
+    <Sheet open={!!charger} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent
+        side="bottom"
+        className="max-h-[92vh] overflow-y-auto rounded-t-3xl border-none bg-background p-0 md:right-4 md:top-4 md:bottom-4 md:h-auto md:max-h-none md:w-[520px] md:rounded-3xl md:border md:border-border"
+      >
+        <SheetTitle className="sr-only">{charger.name}</SheetTitle>
+
+        <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-border md:hidden" />
+
+        <div className="px-5 pt-4 pb-6">
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div>
+              <div className="text-xs uppercase tracking-widest text-muted-foreground">Charger</div>
+              <h2 className="mt-1 font-display text-2xl font-semibold">{charger.name}</h2>
+            </div>
+            <StatusPill status={charger.status} />
+          </div>
+
+          {/* Mode switch */}
+          <div className="mb-5 grid grid-cols-3 gap-1 rounded-2xl bg-secondary p-1">
+            {(["off", "smart", "fast"] as Mode[]).map((m) => {
+              const Icon = MODE_ICONS[m];
+              const active = charger.mode === m;
+              return (
+                <button
+                  key={m}
+                  onClick={() => setMode(charger.id, m)}
+                  className={`flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+                    active
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  {modeLabel[m]}
+                </button>
+              );
+            })}
+          </div>
+
+          <Timeline24h readyByHour={readyByHour} />
+
+          {/* Vehicle */}
+          <div className="mt-5 rounded-2xl border border-border/60 bg-card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+                Vehicle
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setActiveVehicle(charger.id, null)}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                  !vehicle
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-secondary text-secondary-foreground"
+                }`}
+              >
+                Guest
+              </button>
+              {vehicles.map((v) => (
+                <button
+                  key={v.id}
+                  onClick={() => setActiveVehicle(charger.id, v.id)}
+                  className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                    vehicle?.id === v.id
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-secondary text-secondary-foreground"
+                  }`}
+                >
+                  🚗 {v.name}
+                </button>
+              ))}
+            </div>
+            {vehicle ? (
+              <div className="mt-3 flex items-baseline justify-between">
+                <div className="font-display text-3xl font-semibold">{fmtPct(vehicle.soc)}</div>
+                <div className="text-sm text-muted-foreground">
+                  {fmtKm(vehicle.rangeKm)} range · {fmtKW(charger.currentPowerW)}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3">
+                <label className="mb-1 block text-xs text-muted-foreground">
+                  Target for this session (kWh)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={charger.guestTargetKwh ?? ""}
+                  onChange={(e) =>
+                    setGuestTarget(charger.id, e.target.value ? parseFloat(e.target.value) : null)
+                  }
+                  placeholder="Just charge"
+                  className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring/40"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Plans */}
+          <div className="mt-5">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="font-display text-sm font-semibold uppercase tracking-widest text-muted-foreground">
+                Plans
+              </h3>
+              <button
+                onClick={() => addPlan(charger.id)}
+                className="inline-flex items-center gap-1 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                <Plus className="h-3.5 w-3.5" /> Add plan
+              </button>
+            </div>
+            <div className="space-y-3">
+              {plans.length === 0 && (
+                <div className="rounded-2xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+                  No plans — I'll just charge when plugged in.
+                </div>
+              )}
+              {plans.map((p) => (
+                <PlanRow key={p.id} planId={p.id} />
+              ))}
+            </div>
+          </div>
+
+          {/* Advanced */}
+          <button
+            onClick={() => setAdvOpen((x) => !x)}
+            className="mt-6 flex w-full items-center justify-between rounded-2xl bg-secondary px-4 py-3 text-sm font-medium"
+          >
+            <span>Advanced</span>
+            <ChevronDown className={`h-4 w-4 transition ${advOpen ? "rotate-180" : ""}`} />
+          </button>
+          {advOpen && (
+            <div className="mt-3 space-y-3 rounded-2xl border border-border/60 bg-card p-4 text-sm">
+              <div>
+                <div className="mb-2 flex items-center justify-between">
+                  <label className="text-xs font-medium text-muted-foreground">
+                    One-shot amp limit
+                  </label>
+                  <span className="tabular-nums text-xs">
+                    {amps} A {ampApplied && <span className="text-status-ok">· applied ✓</span>}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={6}
+                  max={32}
+                  value={amps}
+                  onChange={(e) => setAmps(parseInt(e.target.value, 10))}
+                  onMouseUp={commitAmps}
+                  onTouchEnd={commitAmps}
+                  className="w-full accent-primary"
+                />
+                {charger.constraintAmps != null && (
+                  <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-secondary px-3 py-2 text-xs">
+                    <span>
+                      Active limit:{" "}
+                      <span className="font-medium tabular-nums">{charger.constraintAmps} A</span>
+                      <span className="text-muted-foreground"> · shown on the charger card</span>
+                    </span>
+                    <button
+                      onClick={() => oneShotAmps(charger.id, null)}
+                      className="shrink-0 font-medium text-primary hover:underline"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {["Start", "Stop", "Soft reset", "Hard reset", "Clear profile"].map((a) => (
+                  <ActionButton
+                    key={a}
+                    onRun={() => runCommand(a)}
+                    successLabel="Sent"
+                    className="rounded-xl border border-border/60 bg-background px-3 py-2 text-xs font-medium hover:bg-secondary"
+                  >
+                    {a}
+                  </ActionButton>
+                ))}
+                <button
+                  onClick={() => setShowComposite((x) => !x)}
+                  className="rounded-xl border border-border/60 bg-background px-3 py-2 text-xs font-medium hover:bg-secondary"
+                >
+                  View composite
+                </button>
+              </div>
+              {lastCmd && (
+                <InlineStatus state="success">Last command: {lastCmd} · sent</InlineStatus>
+              )}
+              {showComposite && (
+                <div className="rounded-xl border border-border/60 bg-background p-3 text-xs">
+                  <div className="mb-1 font-medium">Composite schedule (next 12 h)</div>
+                  <div className="tabular-nums text-muted-foreground">
+                    <div>00:00–06:00 · {charger.maxAmps} A</div>
+                    <div>06:00–09:00 · 6 A</div>
+                    <div>09:00–24:00 · {charger.maxAmps} A</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function PlanRow({ planId }: { planId: string }) {
+  const plan = useOsc((s) => s.plans.find((p) => p.id === planId)!);
+  const update = useOsc((s) => s.updatePlan);
+  const remove = useOsc((s) => s.removePlan);
+  const vehicles = useOsc((s) => s.vehicles);
+  const veh = vehicles[0];
+  if (!plan) return null;
+
+  const toggleDay = (d: DayKey) => {
+    const set = new Set(plan.days);
+    if (set.has(d)) set.delete(d);
+    else set.add(d);
+    update(plan.id, { days: Array.from(set) });
+  };
+
+  const derivedPct =
+    plan.unit === "km" && veh
+      ? Math.min(100, Math.round((plan.target / (veh.batteryKwh * 6.5)) * 100))
+      : plan.unit === "kwh" && veh
+        ? Math.min(100, Math.round((plan.target / veh.batteryKwh) * 100))
+        : plan.target;
+
+  return (
+    <div
+      className={`rounded-2xl border border-border/60 bg-card p-4 ${plan.enabled ? "" : "opacity-60"}`}
+    >
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Switch checked={plan.enabled} onCheckedChange={(v) => update(plan.id, { enabled: v })} />
+          <span className="text-sm font-medium">Ready by</span>
+          <input
+            type="time"
+            value={plan.readyBy}
+            onChange={(e) => update(plan.id, { readyBy: e.target.value })}
+            className="rounded-lg border border-input bg-background px-2 py-1 text-sm tabular-nums outline-none focus:ring-2 focus:ring-ring/40"
+          />
+        </div>
+        <button
+          onClick={() => remove(plan.id)}
+          className="text-muted-foreground hover:text-destructive"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="mb-3 flex gap-1">
+        {DAY_KEYS.map((d, i) => {
+          const active = plan.days.includes(d);
+          return (
+            <button
+              key={d}
+              onClick={() => toggleDay(d)}
+              className={`grid h-8 flex-1 place-items-center rounded-lg text-xs font-medium transition ${
+                active ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground"
+              }`}
+            >
+              {DAYS[i]}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex items-end gap-2">
+        <div className="flex-1">
+          <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted-foreground">
+            Target
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={0}
+              value={plan.target}
+              onChange={(e) => update(plan.id, { target: parseFloat(e.target.value) || 0 })}
+              className="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm tabular-nums outline-none focus:ring-2 focus:ring-ring/40"
+            />
+            <div className="flex rounded-lg bg-secondary p-0.5">
+              {(["pct", "km", "kwh"] as const).map((u) => (
+                <button
+                  key={u}
+                  onClick={() => update(plan.id, { unit: u })}
+                  className={`rounded-md px-2 py-1 text-[11px] font-medium ${
+                    plan.unit === u ? "bg-background shadow-sm" : "text-muted-foreground"
+                  }`}
+                >
+                  {u === "pct" ? "%" : u}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+      {plan.unit !== "pct" && (
+        <div className="mt-2 text-[11px] text-muted-foreground">
+          ≈ {derivedPct}% {!veh && "· needs a connected car"}
+        </div>
+      )}
+    </div>
+  );
+}

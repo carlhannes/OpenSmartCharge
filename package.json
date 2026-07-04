@@ -7,6 +7,7 @@
     "dev": "tsx watch src/core/lifecycle.ts",
     "dev:ui": "vite --config src/ui/vite.config.ts --host",
     "dev:all": "concurrently -n api,ui -c blue,magenta \"npm:dev\" \"npm:dev:ui\"",
+    "dev:ui2": "npm --prefix src/ui2 run dev",
     "build": "tsc && vite build --config src/ui/vite.config.ts",
     "build:server": "tsc",
     "build:ui": "vite build --config src/ui/vite.config.ts",
