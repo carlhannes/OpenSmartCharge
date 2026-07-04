@@ -68,6 +68,8 @@ OSC has four module types and one core concept:
 
 Each module type has a [TypeScript interface in `src/sdk/`](src/sdk/). Third-party modules drop into the `./plugins/` directory and are loaded at startup — no code changes needed in OSC itself. See [the module authoring guide](docs/modules.md).
 
+Modules stay **minimal mappers** to a single external service — they translate data on demand, actuate when told, and report their own health; they own no timers or scheduling. The **core lifecycle owns all orchestration**: the control loop, when to poll a vehicle, and how the pieces combine. (See [AGENTS.md](AGENTS.md) → "Modules vs. the lifecycle".)
+
 ### Loadpoints
 
 A **loadpoint** is the control unit that wraps a charger and connects it to a circuit, a tariff, and optionally a vehicle. It holds the **charge mode** (`disabled` / `smart` / `fast`) and the departure target.

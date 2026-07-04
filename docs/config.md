@@ -30,6 +30,9 @@ smartCharging:
   nightMarginA: 3          # static night current = mainBreakerA − nightMarginA
   daytimeFraction: 0.5     # static day current   = mainBreakerA × daytimeFraction
   historicalDays: 3        # look-back for the historical price-average and worst-case-load rungs
+  vehiclePollIntervalSec: 1800  # min spacing between vehicle SoC refreshes WHILE charging
+                                # (300–3600 s, default 30 min). Never polled while idle — see vehicles[].
+  chargingEfficiency: 0.92 # AC charge efficiency (0.5–1); tunes the between-poll SoC estimate
 ```
 
 **How the fallbacks work.** Smart charging composes three independent resolvers, each degrading on its own — so nothing has to branch on which combination of dependencies is available:
@@ -109,7 +112,7 @@ balancers:
 
 ### `vehicles[]`
 
-Optional. Enables SoC-aware departure planning.
+Optional. Enables SoC-aware departure planning. When a vehicle is wired to a loadpoint, the energy resolver uses the car's real State of Charge against its battery capacity (the `soc-capacity` rung) instead of the fixed-`targetKWh` fallback.
 
 ```yaml
 vehicles:
@@ -121,6 +124,12 @@ vehicles:
 ```
 
 **Built-in types:** `skoda`
+
+**What it exposes:** State of Charge (%), estimated range, the target SoC set in the car, the car's own plugged-in state (a cross-check of the OCPP status), and whether remote climate/preconditioning is running.
+
+**Polling is demand-driven — the module owns no timer.** The lifecycle refreshes a vehicle **only when its charger reports connected**: once on connect (to anchor SoC/range) and then, while actively charging, at most every `smartCharging.vehiclePollIntervalSec` (default 30 min). It is **never polled while idle or unplugged** — polling MySkoda too often can wake and slowly drain the car, and hammering the account risks a server-side lockout. Between polls, SoC is estimated by carrying the last real reading forward by delivered energy (`chargingEfficiency`). The module honours `429`/`Retry-After` rate-limit responses.
+
+**Finding the VIN:** it's on the MySkoda app vehicle page, the physical car (windscreen / door pillar), or the registration document. It must be the full 17 characters, uppercase.
 
 Credentials are stored in `osc.yaml` which is gitignored. Keep it out of version control.
 

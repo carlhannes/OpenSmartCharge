@@ -43,9 +43,11 @@ src/
   sdk/        — TypeScript interfaces for all four module types + ModuleCtx
   modules/    — first-party reference modules
     charger-ocpp16/
-    tariff-elering/
+    tariff-elering/          (EE/FI/LV/LT)
+    tariff-elprisetjustnu/   (SE1–SE4)
     balancer-mqtt-circuit/
     vehicle-skoda/
+    meter-tibber-pulse/
   server/     — Express HTTP + SSE + MQTT bridge
   ui/         — React 19 + Vite admin app
 plugins/      — third-party modules (auto-loaded at startup, gitignored)
@@ -59,7 +61,7 @@ docs/         — architecture, module authoring, config reference
 | `ChargerModule` / `Charger` | `src/sdk/charger.ts` | Hardware control (`setCurrentLimit`, `onStatus`) |
 | `TariffModule` / `Tariff` | `src/sdk/tariff.ts` | 15-min price slots (`prices(from, to)`) |
 | `BalancerModule` / `Balancer` | `src/sdk/balancer.ts` | Per-tick current allocation (`tick(input)`) |
-| `VehicleModule` / `Vehicle` | `src/sdk/vehicle.ts` | SoC + capacity (`getData()`) |
+| `VehicleModule` / `Vehicle` | `src/sdk/vehicle.ts` | SoC/range/target/plug/climate, on demand (`refresh()`); no timer — the lifecycle drives polling |
 
 All module factories receive a `ModuleCtx` (from `src/sdk/index.ts`) that gives them access to the logger, SQLite, and the internal event bus. **Modules must not import from `src/core/` directly — only from `src/sdk/`.**
 
@@ -97,6 +99,36 @@ a balancer-less loadpoint is its own circuit and takes the resolved current budg
 therefore works with or without a balancer.** Wall-clock reasoning (night window, price hour-of-day) uses
 Europe/Stockholm via `src/sdk/stockholm-time.ts`.
 
+### Modules vs. the lifecycle: who owns what
+
+This is the single most important boundary in the codebase. Get it right and everything stays lean.
+
+**Modules are minimal mappers** to exactly one external service. A module does four things and nothing
+more: authenticate, translate that service's data ⇄ OSC's SDK types *when asked*, actuate when told,
+and report its own `health()`/degradation. A module owns **no orchestration** — no background timers,
+no polling cadence, no decisions about *when* it runs or how its data combines with other modules'.
+`charger-ocpp16`, `tariff-elprisetjustnu`, `tariff-elering`, `vehicle-skoda`, `meter-tibber-pulse`,
+and `balancer-mqtt-circuit` all follow this: each is a thin translation layer over one protocol/API.
+
+**The lifecycle owns orchestration** (`src/core/lifecycle.ts` + the pure helpers in
+`src/core/smart-charging/`): the control-loop tick, *when* to poll a vehicle, the resolver ladders,
+mode/target transitions — and, in 0.3.0, car identification and **car↔charger association** (which is
+*runtime state*, not static config; see the 0.2.0 vision).
+
+Worked examples:
+
+- **Vehicle polling.** The module exposes `refresh()` — *one* live fetch on demand, no timer. The
+  lifecycle decides *when*, via the pure `shouldPollVehicle()` gate (`smart-charging/vehicle-poll.ts`):
+  on charger-connect + at most every `vehiclePollIntervalSec` while charging, **never while idle**
+  (polling a parked car can wake and drain it, and risks an account lockout). The "don't poll a
+  sleeping car" policy is orchestration, so it lives in the lifecycle — not smeared across the module.
+- **Balancing.** The balancer is pure per-tick allocation math (`allocate(input)`); it does not own a
+  loop. The lifecycle's single control tick drives it. Same split: the module computes, the lifecycle
+  decides when and how it composes.
+
+When you're tempted to add a `setInterval`, a "poll every N seconds", or cross-module coordination to a
+module — stop. That belongs in the lifecycle. The module should just expose a pure "do it now" method.
+
 ---
 
 ## Degradation model (core design constraint)
@@ -132,7 +164,7 @@ chargers:   [{name, type, stationId, maxA, phases}]
 loadpoints: [{name, charger, vehicle?, tariff?, balancer?, defaultMode, targetSoc?, targetTime?, targetKWh?}]
 mqtt:       {host, port, topicPrefix, homeAssistantDiscovery}
 site:       {name, port, mainBreakerA?}                          # mainBreakerA = fallback fuse for balancer-less loadpoints
-smartCharging: {controlIntervalSec, deadbandA, nightWindow, nightMarginA, daytimeFraction, historicalDays}
+smartCharging: {controlIntervalSec, deadbandA, nightWindow, nightMarginA, daytimeFraction, historicalDays, vehiclePollIntervalSec, chargingEfficiency}
 ```
 
 Name references enable multiplicity: multiple tariff zones, circuits, and chargers are just more list entries — no code changes required.

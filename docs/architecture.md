@@ -28,13 +28,8 @@
 1. **Config loaded** — YAML parsed, zod-validated, modules instantiated from registry
 2. **Loadpoints created** — one per `loadpoints[]` entry, mode restored from SQLite
 3. **Tariff module** — fetches day-ahead prices (elprisetjustnu for SE1–SE4, Elering for EE/FI/LV/LT), stores in SQLite; exposes `prices(from, to)`
-4. **Balancer tick** (every `intervalSec`):
-   a. Reads live per-phase currents from a `MeterReader` module (in-process `latest()` snapshot) or, if no MeterReader is configured, subscribes to `house/i1_a`, `i2_a`, `i3_a` MQTT topics directly
-   b. Calls `planner.schedule(loadpoint, priceSlots, estimatedSoc)` for each active smart-mode loadpoint
-   c. Computes headroom: `mainBreakerA − max(housePhaseCurrents) + sum(chargerCurrents)`
-   d. Distributes headroom across loadpoints per planner output
-   e. Calls `charger.setCurrentLimit(amps)` for each
-5. **Vehicle polling** (every 15 min) — reads SoC from Skoda API, caches to SQLite
+4. **Control tick** (every `controlIntervalSec`, default 30 s) — one damped loop drives everything. For each smart-mode loadpoint it resolves the three pure ladders (energy / price / current), turns that into a 15-min plan, and commands the charger through a deadband. Loadpoints sharing a balancer coordinate through `allocate()` (headroom = `mainBreakerA − max(housePhaseCurrents) + sum(chargerCurrents)`); a balancer-less loadpoint is its own circuit and takes the resolved current budget directly. The balancer is a per-tick allocator, not the loop driver — see [AGENTS.md](../AGENTS.md) → "Smart charging" and "Modules vs. the lifecycle".
+5. **Vehicle polling** — demand-driven and **lifecycle-owned**: the module exposes `refresh()` (one fetch, no timer); the lifecycle polls it on charger-connect and, while charging, at most every `vehiclePollIntervalSec` (default 30 min) — never while idle. SoC is cached to SQLite and estimated forward between polls.
 6. **REST / MQTT** — reflect current loadpoint state to consumers
 7. **Web UI** — subscribes to SSE, renders live state
 
@@ -85,6 +80,8 @@ interface ModuleCtx {
 ```
 
 First-party modules in `src/modules/*` use the same `ModuleCtx` as third-party plugins — same access, same constraints. The only difference is the registration wrapper (see [docs/modules.md](modules.md)).
+
+**Modules are minimal mappers; the lifecycle owns orchestration.** A module translates one external service ⇄ SDK types on demand, actuates when told, and reports its own health — it owns **no** background timers, polling cadence, or cross-module coordination. Deciding *when* to poll a vehicle, driving the control tick, composing the resolver ladders, and (0.3.0) car↔charger association all live in the lifecycle. This is the codebase's most important boundary; the full statement and worked examples are in [AGENTS.md](../AGENTS.md) → "Modules vs. the lifecycle".
 
 ## OCPP connection model
 
