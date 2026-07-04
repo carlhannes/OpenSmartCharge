@@ -32,7 +32,9 @@ import { plan } from './planner.js'
 import { chargeRateKW, DEFAULT_CHARGING_EFFICIENCY, DUTY_CYCLE_FALLBACK } from './electrical.js'
 import type { Charger } from '../sdk/charger.js'
 import type { Tariff } from '../sdk/tariff.js'
-import type { MeterReader } from '../sdk/meter-reader.js'
+import type { MeterReader, MeterSnapshot } from '../sdk/meter-reader.js'
+import { recordHouseholdLoad, pruneHouseholdLoad } from './smart-charging/rollup.js'
+import { stockholmDateKey } from '../sdk/stockholm-time.js'
 import type { Balancer, LoadpointSnapshot } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import type { LoadpointState } from './loadpoint.js'
@@ -142,10 +144,26 @@ async function main() {
     log.info({ meter: meterCfg.name, type: meterCfg.type }, 'meter reader module created')
   }
 
+  // Track the last Stockholm day we pruned the load rollup, so pruning runs once per day
+  // (on rollover) rather than on the ~1 Hz meter-event path.
+  let lastRollupPruneDay: string | undefined
   events.on('meter.snapshot', (payload) => {
-    const p = payload as { name: string }
+    const p = payload as { name: string; snapshot: MeterSnapshot }
     const r = meterReaders.get(p.name)
     if (r) updateHealth(health, p.name, r.health())
+
+    // Fold whole-house load into the hourly-max rollup (feeds the historical current fallback).
+    const s = p.snapshot
+    const maxPhaseA = Math.max(s.i1A ?? 0, s.i2A ?? 0, s.i3A ?? 0)
+    if (maxPhaseA > 0) {
+      recordHouseholdLoad(db, s.timestamp, maxPhaseA)
+      const dayKey = stockholmDateKey(s.timestamp)
+      if (dayKey !== lastRollupPruneDay) {
+        lastRollupPruneDay = dayKey
+        // Keep a few days beyond the look-back window so the query range is always covered.
+        pruneHouseholdLoad(db, s.timestamp, config.smartCharging.historicalDays + 4)
+      }
+    }
   })
 
   // Instantiate vehicle modules
