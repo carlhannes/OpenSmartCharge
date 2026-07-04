@@ -81,6 +81,29 @@ test('mock charger connects, boots, and StatusNotification flows to onStatus', a
   }
 })
 
+// T6 — A clean disconnect must push `connected: false`. Regression: the disconnect handler
+// evicts the station before pushing its final status, and pushStatus used to read the callback
+// set off the (now-deleted) station and bail — so a dropped charger was reported connected:true
+// forever (commands failed "not connected" while the UI still showed it online).
+test('T6: a clean disconnect reports connected:false to onStatus', async () => {
+  const h = await bootServer()
+  try {
+    const { charger, statuses } = await connectCharger(h, 'DROP01')
+    await charger.boot()
+    await charger.statusNotification('Preparing')
+    await waitFor(() => statuses.some((s) => s.connected === true))
+    await charger.close() // socket drops (e.g. WiFi switch)
+    // A `connected: false` MUST be delivered on disconnect (the bug: it was swallowed because
+    // pushStatus read the just-deleted station). Assert delivery, not "last" — the mock's
+    // RPCClient auto-reconnects, which would push `connected: true` again afterwards.
+    await waitFor(() => statuses.some((s) => s.connected === false))
+    const off = statuses.find((s) => s.connected === false)!
+    expect(off.charging).toBe(false)
+  } finally {
+    await h.cleanup()
+  }
+})
+
 // T1 — Stacked-profile override. A leftover 0 A profile at a HIGH stack level (as evcc's "Off"
 // leaves behind) must not defeat OSC. OSC must install at the charger's max stack level so its
 // limit wins. Fails until C1 (GetConfiguration-driven stack level).

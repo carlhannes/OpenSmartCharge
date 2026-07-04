@@ -197,9 +197,13 @@ export class OcppServer {
   }
 
   private pushStatus(stationId: string, status: ChargerStatus): void {
-    const state = this.stations.get(stationId)
-    if (!state) return
-    for (const cb of state.statusCallbacks) {
+    // Read the PERSISTENT subscription set, not the live station's. The disconnect handler
+    // evicts the station *before* pushing its final `connected: false`, and subscribers (the
+    // loadpoint state + the health map) must still receive it — otherwise a dropped charger
+    // is reported `connected: true` forever. While connected the two are the same Set object.
+    const subs = this.statusSubs.get(stationId)
+    if (!subs) return
+    for (const cb of subs) {
       try {
         cb(status)
       } catch {
