@@ -23,6 +23,7 @@ registerCharger({
       maxA?: number
       autoStart?: boolean
       minWriteIntervalSec?: number
+      phases?: number
     }
 
     const stationId = config.stationId
@@ -34,6 +35,7 @@ registerCharger({
     }
 
     sharedServer.registerStation(stationId, config.autoStart ?? true)
+    sharedServer.setStationPhases(stationId, config.phases ?? 3)
 
     const debouncedSet = createDebouncedSetter({
       minIntervalMs: (config.minWriteIntervalSec ?? 10) * 1000,

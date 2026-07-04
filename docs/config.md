@@ -118,6 +118,7 @@ chargers:
     type: ocpp16
     stationId: MYCHARGER01   # must match the chargepoint identifier configured in the charger
     maxA: 16                 # optional, default 16 — maximum current this charger may deliver
+    phases: 3                # optional, default 3 — physical phases; sent as numberPhases in the charging profile
 ```
 
 **Built-in types:** `ocpp16`

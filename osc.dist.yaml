@@ -69,6 +69,7 @@ chargers:
     type: ocpp16
     stationId: MYCHARGER01   # must match the chargepoint identifier in your charger's settings
     maxA: 16                 # maximum current the charger may deliver — ceiling for smart/fast modes
+    phases: 3                # physical phase count (default 3) — sent as numberPhases in the charging profile
 
 # Loadpoints: the control unit that connects a charger to a circuit + pricing + vehicle.
 # One loadpoint per charger. Multiple loadpoints can share a balancer.

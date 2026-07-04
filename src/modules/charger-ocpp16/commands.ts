@@ -10,6 +10,7 @@ export function buildChargingProfilePayload(
   limitA: number,
   connectorId = 0,
   stackLevel = 1,
+  numberPhases = 3,
 ): SetChargingProfileReq {
   return {
     connectorId,
@@ -25,9 +26,8 @@ export function buildChargingProfilePayload(
         startSchedule: new Date(Date.now() - 60_000).toISOString(),
         chargingRateUnit: 'A',
         // numberPhases: some chargers (Zaptec) offer 0A / stay SuspendedEVSE when it's omitted,
-        // even though OCPP says it defaults to 3. evcc sends it from the loadpoint phase config.
-        // TODO: make this configurable per charger; hardcoded 3 for the 3-phase test bench.
-        chargingSchedulePeriod: [{ startPeriod: 0, limit: limitA, numberPhases: 3 }],
+        // even though OCPP says it defaults to 3. Sourced from the charger's `phases` config.
+        chargingSchedulePeriod: [{ startPeriod: 0, limit: limitA, numberPhases }],
       },
     },
   }
@@ -38,10 +38,11 @@ export async function setCurrentLimit(
   amps: number,
   connectorId = 0,
   stackLevel = 1,
+  numberPhases = 3,
 ): Promise<{ status?: string }> {
   return (await client.call(
     'SetChargingProfile',
-    buildChargingProfilePayload(amps, connectorId, stackLevel),
+    buildChargingProfilePayload(amps, connectorId, stackLevel, numberPhases),
   )) as { status?: string }
 }
 

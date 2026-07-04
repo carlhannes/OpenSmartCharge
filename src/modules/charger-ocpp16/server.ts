@@ -70,6 +70,8 @@ export class OcppServer {
   // re-assert the right limit at the right stack level when a dropped socket returns.
   private readonly lastLimitByStation = new Map<string, number>()
   private readonly maxStackByStation = new Map<string, number>()
+  // Per-charger phase count (from config), sent as numberPhases in the charging profile.
+  private readonly phasesByStation = new Map<string, number>()
 
   constructor(
     private readonly db: DatabaseSync,
@@ -108,6 +110,10 @@ export class OcppServer {
     this._loadpointNames.set(stationId, loadpointName)
   }
 
+  setStationPhases(stationId: string, phases: number): void {
+    this.phasesByStation.set(stationId, phases)
+  }
+
   onStatus(stationId: string, cb: StatusCallback): () => void {
     const set = this.subsFor(stationId)
     set.add(cb)
@@ -132,7 +138,8 @@ export class OcppServer {
     // Target the active connector, at the charger's max stack level so our profile outranks
     // any leftover/default profile (Zaptec stacks profiles; highest stackLevel wins).
     const stackLevel = this.maxStackByStation.get(stationId) ?? 1
-    const res = await setCurrentLimit(state.client, amps, state.connectorId, stackLevel)
+    const numberPhases = this.phasesByStation.get(stationId) ?? 3
+    const res = await setCurrentLimit(state.client, amps, state.connectorId, stackLevel, numberPhases)
     this.log.info(
       { stationId, amps, connectorId: state.connectorId, stackLevel, status: res?.status },
       'SetChargingProfile result',
@@ -273,11 +280,13 @@ export class OcppServer {
       }
     })
 
-    // TEMP raw OCPP frame logging for Zaptec debugging — every inbound/outbound frame.
-    client.on('message', (ev: unknown) => {
-      const { message, outbound } = ev as { message: string; outbound: boolean }
-      this.log.debug({ stationId, dir: outbound ? 'OUT' : 'IN', frame: message }, 'ocpp-frame')
-    })
+    // Opt-in raw OCPP frame logging (set OCPP_TRACE=1) — invaluable for charger bring-up/debug.
+    if (process.env.OCPP_TRACE) {
+      client.on('message', (ev: unknown) => {
+        const { message, outbound } = ev as { message: string; outbound: boolean }
+        this.log.debug({ stationId, dir: outbound ? 'OUT' : 'IN', frame: message }, 'ocpp-frame')
+      })
+    }
 
     // On every (re)connect: mark Operative, discover the max stack level, re-assert the last
     // commanded limit, and refresh status — so a charger that dropped (flaky WiFi / host sleep)
@@ -300,6 +309,7 @@ export class OcppServer {
           this.defaultBootCurrentA,
           state.connectorId,
           this.maxStackByStation.get(stationId) ?? 1,
+          this.phasesByStation.get(stationId) ?? 3,
         )
           .then((res) =>
             this.log.info(
