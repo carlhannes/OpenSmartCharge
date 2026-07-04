@@ -42,6 +42,7 @@ import { resolveEnergyTarget } from './smart-charging/energy.js'
 import { resolvePriceCurve } from './smart-charging/price.js'
 import { resolveCurrentBudget } from './smart-charging/current.js'
 import { decideShouldCharge } from './smart-charging/decide.js'
+import { shouldPollVehicle } from './smart-charging/vehicle-poll.js'
 import {
   buildCircuits,
   circuitForLoadpoint,
@@ -184,7 +185,8 @@ async function main() {
       continue
     }
     const vehicle = mod.create(vCfg, ctx)
-    await vehicle.start()
+    // No start() — the module owns no poll timer. The control loop drives vehicle.refresh()
+    // on charger-connect + during charging (see maybePollVehicle).
     vehicles.set(vCfg.name, vehicle)
     updateHealth(health, vCfg.name, vehicle.health())
     log.info({ vehicle: vCfg.name, type: vCfg.type }, 'vehicle module created')
@@ -302,29 +304,75 @@ async function main() {
   // Used to give the allocator an accurate credit-back during the car's ramp-up period.
   const lastCommandedA = new Map<string, number>()
 
+  // Lifecycle-owned vehicle polling (the module owns no timer). Per loadpoint: when we last polled
+  // + whether we've polled since this connection began; and the SoC "anchor" — a real reading +
+  // the session energy at that moment — so the estimate carries it forward by kWh delivered SINCE,
+  // instead of double-counting the whole session on top of a mid-session reading.
+  const vehiclePollState = new Map<string, { lastPollAt: number; polledThisConnection: boolean }>()
+  const vehicleAnchor = new Map<string, { soc: number; sessionEnergyKWh: number }>()
+
+  // Re-anchored SoC estimate: last real SoC + (session kWh since that reading) × efficiency / capacity.
+  function estimatedSocFor(
+    lpName: string,
+    capacity: number | undefined,
+    sessionEnergyKWh: number,
+  ): number | undefined {
+    const anchor = vehicleAnchor.get(lpName)
+    if (!anchor || !capacity) return undefined
+    const deltaKWh = Math.max(0, sessionEnergyKWh - anchor.sessionEnergyKWh)
+    return estimateSoc(anchor.soc, deltaKWh, capacity, config.smartCharging.chargingEfficiency)
+  }
+
+  // Poll gate: refresh a loadpoint's vehicle on (re)connect + during charging every
+  // vehiclePollIntervalSec; never while idle. Fire-and-forget — the fresh reading + its anchor are
+  // used from the next tick.
+  function maybePollVehicle(lpCfg: LoadpointConfig, state: LoadpointState, nowMs: number): void {
+    if (!lpCfg.vehicle) return
+    const vehicle = vehicles.get(lpCfg.vehicle)
+    if (!vehicle) return
+    const vp = vehiclePollState.get(lpCfg.name) ?? { lastPollAt: 0, polledThisConnection: false }
+    if (!state.connected) {
+      vp.polledThisConnection = false // reset so the next connection re-anchors on its first tick
+      vehiclePollState.set(lpCfg.name, vp)
+      return
+    }
+    const should = shouldPollVehicle({
+      now: nowMs,
+      connected: state.connected,
+      charging: state.charging,
+      lastPollAt: vp.lastPollAt,
+      intervalMs: config.smartCharging.vehiclePollIntervalSec * 1000,
+      polledThisConnection: vp.polledThisConnection,
+    })
+    if (!should) {
+      vehiclePollState.set(lpCfg.name, vp)
+      return
+    }
+    vp.lastPollAt = nowMs
+    vp.polledThisConnection = true
+    vehiclePollState.set(lpCfg.name, vp)
+    const vehicleName = lpCfg.vehicle
+    void vehicle
+      .refresh()
+      .then((data) => {
+        vehicleAnchor.set(lpCfg.name, { soc: data.soc, sessionEnergyKWh: state.sessionEnergyKWh })
+        updateHealth(health, vehicleName, vehicle.health())
+      })
+      .catch((err) => log.warn({ err, vehicle: vehicleName }, 'vehicle refresh failed'))
+  }
+
   // Build a LoadpointSnapshot from live state.
   // shouldChargeNow is pre-computed by the tariff gate for smart-mode loadpoints.
-  async function buildSnapshot(
+  function buildSnapshot(
     state: LoadpointState,
     lpCfgVehicle: string | undefined,
     shouldChargeNow?: boolean,
     pricesAvailable = false,
-  ): Promise<LoadpointSnapshot> {
+  ): LoadpointSnapshot {
     let estimatedSocVal: number | undefined
     if (lpCfgVehicle) {
       const v = vehicles.get(lpCfgVehicle)
-      if (v) {
-        const capacity = v.getCachedCapacity()
-        let lastSoc: number | undefined
-        try {
-          lastSoc = (await v.getData()).soc
-        } catch {
-          // getData throws when no data yet — estimatedSoc stays undefined
-        }
-        if (lastSoc !== undefined) {
-          estimatedSocVal = estimateSoc(lastSoc, state.sessionEnergyKWh, capacity)
-        }
-      }
+      if (v) estimatedSocVal = estimatedSocFor(state.name, v.getCachedCapacity(), state.sessionEnergyKWh)
     }
     return {
       id: state.name,
@@ -411,19 +459,12 @@ async function main() {
     // A balancer carries its own circuit fuse; a bare loadpoint falls back to the site fuse.
     const mainBreakerA = balancerCfg?.mainBreakerA ?? config.site.mainBreakerA
 
-    // Energy: cached/estimated SoC → fixed targetKWh → duty-cycle.
-    let estimatedSocPct: number | undefined
+    // Energy: cached/estimated SoC → fixed targetKWh → duty-cycle. The SoC estimate is
+    // re-anchored to the last real reading (set by maybePollVehicle on connect + during charging).
     let capacity: number | undefined
     const vehicle = lpCfg.vehicle ? vehicles.get(lpCfg.vehicle) : undefined
-    if (vehicle) {
-      capacity = vehicle.getCachedCapacity()
-      try {
-        const soc = (await vehicle.getData()).soc
-        if (soc !== undefined) estimatedSocPct = estimateSoc(soc, state.sessionEnergyKWh, capacity)
-      } catch {
-        // no vehicle data yet
-      }
-    }
+    if (vehicle) capacity = vehicle.getCachedCapacity()
+    const estimatedSocPct = estimatedSocFor(lpCfg.name, capacity, state.sessionEnergyKWh)
     const energy = resolveEnergyTarget({
       estimatedSocPct,
       targetSocPct: state.targetSoc,
@@ -507,6 +548,15 @@ async function main() {
     try {
       const now = new Date()
       const lpCfgs = circuit.kind === 'balancer' ? circuit.loadpoints : [circuit.loadpoint]
+
+      // Lifecycle-owned vehicle polling: refresh on connect + during charging (fire-and-forget;
+      // the fresh reading + its anchor are used from the next tick).
+      const nowMs = now.getTime()
+      for (const lp of lpCfgs) {
+        const st = loadpointStates.get(lp.name)
+        if (st) maybePollVehicle(lp, st, nowMs)
+      }
+
       const resolved = (await Promise.all(lpCfgs.map((lp) => resolveLoadpoint(lp, now)))).filter(
         (r): r is ResolvedLoadpoint => r !== undefined,
       )
@@ -533,12 +583,10 @@ async function main() {
       if (circuit.kind === 'balancer') {
         const balancer = balancers.get(circuit.balancerName)
         if (!balancer) return
-        const snaps = await Promise.all(
-          resolved.map((r) => {
-            const lp = lpCfgs.find((l) => l.name === r.state.name)!
-            return buildSnapshot(r.state, lp.vehicle, r.shouldChargeNow, r.pricesAvailable)
-          }),
-        )
+        const snaps = resolved.map((r) => {
+          const lp = lpCfgs.find((l) => l.name === r.state.name)!
+          return buildSnapshot(r.state, lp.vehicle, r.shouldChargeNow, r.pricesAvailable)
+        })
         const out = await balancer.tick({ loadpoints: snaps, timestamp: now })
         allocations = out.allocations
         const allocRecord = Object.fromEntries(out.allocations)

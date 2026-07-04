@@ -3,10 +3,10 @@ export interface SkodaCfg {
   username: string
   password: string
   vin: string
-  pollIntervalSec: number
-  staleAfterSec: number
 }
 
+// Polling cadence is NOT configured here — the lifecycle owns when to refresh a vehicle
+// (on connect + during charging), via site.smartCharging.vehiclePollIntervalSec.
 export function parseConfig(raw: unknown): SkodaCfg {
   if (!raw || typeof raw !== 'object') throw new Error('vehicle-skoda: invalid config')
   const r = raw as Record<string, unknown>
@@ -20,8 +20,6 @@ export function parseConfig(raw: unknown): SkodaCfg {
     username: r.username,
     password: r.password,
     vin: r.vin.toUpperCase(),
-    pollIntervalSec: typeof r.pollIntervalSec === 'number' ? Math.max(300, r.pollIntervalSec) : 900,
-    staleAfterSec: typeof r.staleAfterSec === 'number' ? r.staleAfterSec : 7200,
   }
 }
 
@@ -43,6 +41,20 @@ export interface SkodaChargingResponse {
       stateOfChargeInPercent?: number
       remainingCruisingRangeInMeters?: number
     }
-    state?: 'CHARGING' | 'READY_FOR_CHARGING' | 'NOT_READY_FOR_CHARGING' | 'CONSERVATION'
+    // Broad string enum (CHARGING | READY_FOR_CHARGING | CONNECT_CABLE | CONSERVING | …) —
+    // kept as string so an unexpected value never breaks parsing.
+    state?: string
+    chargePowerInKw?: number
+    remainingTimeToFullyChargedInMinutes?: number
   }
+  settings?: {
+    targetStateOfChargeInPercent?: number
+  }
+}
+
+// Subset of /v2/air-conditioning/{vin} response we care about (plug + climate state).
+export interface SkodaAirConditioningResponse {
+  state?: string // OFF | HEATING | HEATING_AUXILIARY | COOLING | VENTILATION | ON | …
+  chargerConnectionState?: string // CONNECTED | DISCONNECTED | …
+  chargerLockState?: string
 }

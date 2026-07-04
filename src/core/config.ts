@@ -28,6 +28,13 @@ const smartChargingConfigSchema = z
     daytimeFraction: z.number().min(0).max(1).default(0.5),
     // Look-back window for the historical price-average and worst-case-load rungs.
     historicalDays: z.number().int().min(1).max(30).default(3),
+    // Vehicle telemetry is polled ONLY on charger-connect and during active charging, at most
+    // this often (default 30 min ≈ the price cadence). Never polled while idle — polling MySkoda
+    // too often can wake/drain the car and risk an account lockout.
+    vehiclePollIntervalSec: z.number().min(300).max(3600).default(1800),
+    // AC charging efficiency (energy into battery ÷ energy from grid) — tunes the between-poll
+    // SoC estimate that carries a real reading forward by delivered kWh.
+    chargingEfficiency: z.number().min(0.5).max(1).default(0.92),
   })
   .default({})
 

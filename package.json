@@ -27,7 +27,6 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "cheerio": "^1.0.0",
     "express": "^5.1.0",
     "mqtt": "^5.10.1",
     "ocpp-rpc": "^2.2.1",
