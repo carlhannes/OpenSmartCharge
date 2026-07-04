@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { load } from 'cheerio'
+import { parse as parseYaml } from 'yaml'
 import type { DatabaseSync } from 'node:sqlite'
 import type { Logger } from 'pino'
 import { saveRefreshToken, loadRefreshToken } from './persistence.js'
@@ -75,7 +75,12 @@ async function navigate(
   let contentType: string | undefined = options.contentType
 
   for (let hop = 0; hop < 15; hop++) {
-    const headers: Record<string, string> = { 'User-Agent': 'OpenSmartCharge/1.0' }
+    const headers: Record<string, string> = {
+      // A browser-like UA — VW Group Identity's WAF serves empty/blocked responses to unknown
+      // agents on the signin-service POST endpoints.
+      'User-Agent':
+        'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    }
     const cookie = jar?.header(currentUrl)
     if (cookie) headers['Cookie'] = cookie
     if (contentType) headers['Content-Type'] = contentType
@@ -85,11 +90,16 @@ async function navigate(
 
     const location = resp.headers.get('location')
     if (resp.status >= 300 && resp.status < 400 && location) {
-      // Non-HTTP redirect (e.g. myskoda://): stop and surface the location
-      if (!/^https?:\/\//i.test(location)) {
-        return { body: '', finalUrl: new URL(location, currentUrl).toString() }
+      // Resolve against the current URL so RELATIVE redirects (e.g.
+      // "/signin-service/.../login/authenticate") are followed rather than mistaken for a
+      // scheme change. Only a genuinely non-HTTP scheme — the myskoda:// deep link carrying the
+      // auth code — stops the walk. (The old `!/^https?:/` test wrongly bailed on relative paths,
+      // returning an empty body and breaking the login.)
+      const resolved = new URL(location, currentUrl)
+      if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
+        return { body: '', finalUrl: resolved.toString() }
       }
-      currentUrl = new URL(location, currentUrl).toString()
+      currentUrl = resolved.toString()
       // POST→GET on redirect (standard browser behaviour)
       method = 'GET'
       body = undefined
@@ -107,6 +117,60 @@ function pkce(): { verifier: string; challenge: string } {
   const verifier = randomBytes(32).toString('base64url')
   const challenge = createHash('sha256').update(verifier).digest('base64url')
   return { verifier, challenge }
+}
+
+// Extract the CSRF state (csrf token + hmac + relayState) from a VW Identity login page.
+// The values live in a `window._IDK = { … }` assignment inside a <script> tag. The object uses
+// JS-literal syntax (unquoted top-level keys, nested JSON), so we isolate the balanced { … }
+// (string-aware so braces inside values don't fool us) and parse it as YAML — a superset that
+// tolerates unquoted keys. This mirrors the reference skodaconnect/myskoda CSRFParser. Exported
+// for unit testing against captured HTML.
+export function extractCsrf(
+  html: string,
+  step: string,
+): { csrf: string; hmac: string; relayState: string } {
+  const marker = html.indexOf('window._IDK')
+  if (marker < 0) throw new Error(`Skoda login (${step}): window._IDK not found in page`)
+  const braceStart = html.indexOf('{', marker)
+  if (braceStart < 0) throw new Error(`Skoda login (${step}): window._IDK object not found`)
+
+  let depth = 0
+  let inStr = false
+  let quote = ''
+  let end = -1
+  for (let i = braceStart; i < html.length; i++) {
+    const ch = html[i]
+    if (inStr) {
+      if (ch === '\\') i++ // skip the escaped character
+      else if (ch === quote) inStr = false
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      inStr = true
+      quote = ch
+    } else if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) {
+        end = i + 1
+        break
+      }
+    }
+  }
+  if (end < 0) throw new Error(`Skoda login (${step}): window._IDK object not terminated`)
+
+  let idk: { csrf_token?: string; templateModel?: { hmac?: string; relayState?: string } }
+  try {
+    idk = parseYaml(html.slice(braceStart, end)) as typeof idk
+  } catch {
+    throw new Error(`Skoda login (${step}): failed to parse window._IDK`)
+  }
+  const csrf = idk.csrf_token
+  const hmac = idk.templateModel?.hmac
+  const relayState = idk.templateModel?.relayState
+  if (!csrf || !hmac || !relayState)
+    throw new Error(`Skoda login (${step}): window._IDK missing csrf/hmac/relayState`)
+  return { csrf, hmac, relayState }
 }
 
 export function createAuthClient(
@@ -172,142 +236,61 @@ export function createAuthClient(
     return parseCode(finalUrl)
   }
 
-  // New login flow (VW Group Identity 2023+): single POST with username+password+state.
-  // Ported from evcc vwidentity/endpoint.go loginNew().
-  async function loginNew(
-    html: string,
-    username: string,
-    password: string,
-    jar: CookieJar,
-  ): Promise<string> {
-    const $ = load(html)
-    const stateVal = $('input[name="state"]').first().attr('value')
-    if (!stateVal) throw new Error('Skoda login (new flow): no state input found in page')
-
-    const formBody = new URLSearchParams({ username, password, state: stateVal }).toString()
-    const { finalUrl } = await navigate(
-      `${IDENTITY_BASE}/u/login?state=${encodeURIComponent(stateVal)}`,
-      {
-        method: 'POST',
-        body: formBody,
-        contentType: 'application/x-www-form-urlencoded',
-        jar,
-      },
-    )
-
-    if (finalUrl.includes('/consent/marketing/')) return skipMarketingConsent(finalUrl, jar)
-    return parseCode(finalUrl)
-  }
-
-  // Legacy login flow (older VW Group Identity): separate identifier + authenticate steps.
-  // Parses the window._IDK JavaScript variable to extract CSRF token and form action.
-  // Ported from evcc vwidentity/endpoint.go loginLegacy() + forms.go parseCredentials().
-  async function loginLegacy(
-    html: string,
-    username: string,
-    password: string,
-    jar: CookieJar,
-  ): Promise<string> {
-    const $ = load(html)
-    const form = $('form#emailPasswordForm').first()
-    const action = form.attr('action') ?? ''
-    const inputs: Record<string, string> = {}
-    form.find('input').each((_, el) => {
-      const name = $(el).attr('name')
-      if (name) inputs[name] = $(el).attr('value') ?? ''
-    })
-
-    // Step 1: POST email to identifier endpoint
-    const idUrl = /^https?:\/\//i.test(action) ? action : `${IDENTITY_BASE}${action}`
-    const idBody = new URLSearchParams({ ...inputs, email: username }).toString()
-    const { body: credHtml } = await navigate(idUrl, {
-      method: 'POST',
-      body: idBody,
-      contentType: 'application/x-www-form-urlencoded',
-      jar,
-    })
-
-    // Step 2: Extract window._IDK JSON for CSRF token and form action
-    const idkMatch = /window\._IDK\s*=\s*(.*?)[;<]/s.exec(credHtml)
-    if (!idkMatch)
-      throw new Error('Skoda login (legacy): window._IDK not found in credentials page')
-
-    let idkJson = idkMatch[1].replace(/'/g, '"')
-    idkJson = idkJson.replace(/\s(\w+)\s*:/g, ' "$1":')
-    idkJson = idkJson.replace(/,\s+}/g, '}')
-
-    let idk: {
-      templateModel?: { hmac?: string; relayState?: string; postAction?: string; error?: string }
-      csrf_token?: string
-    }
-    try {
-      idk = JSON.parse(idkJson) as typeof idk
-    } catch {
-      throw new Error('Skoda login (legacy): failed to parse window._IDK')
-    }
-
-    if (idk.templateModel?.error) throw new Error(`Skoda login: ${idk.templateModel.error}`)
-
-    const pwdInputs: Record<string, string> = {
-      _csrf: idk.csrf_token ?? '',
-      relayState: idk.templateModel?.relayState ?? '',
-      hmac: idk.templateModel?.hmac ?? '',
-      email: username,
-      password,
-    }
-
-    // Step 3: POST password to authenticate endpoint
-    const postAction = idk.templateModel?.postAction ?? ''
-    const authUrl = /^https?:\/\//i.test(postAction) ? postAction : `${IDENTITY_BASE}${postAction}`
-    const { finalUrl } = await navigate(authUrl, {
-      method: 'POST',
-      body: new URLSearchParams(pwdInputs).toString(),
-      contentType: 'application/x-www-form-urlencoded',
-      jar,
-    })
-
-    if (finalUrl.includes('/consent/marketing/')) return skipMarketingConsent(finalUrl, jar)
-    return parseCode(finalUrl)
-  }
-
-  // Full OAuth2+PKCE login → returns authorization code.
+  // Full OAuth2 + PKCE login against VW Group Identity → returns the authorization code.
+  // Mirrors the current skodaconnect/myskoda flow: authorize → read CSRF from window._IDK →
+  // POST the email to /login/identifier → read CSRF again → POST the password to
+  // /login/authenticate → follow redirects to the myskoda:// deep link carrying the code.
+  // (The old flow omitted prompt=login and added a state param, which made VW take a
+  // session-reuse path that 303'd the email step to an empty /authenticate page.)
   async function loginFlow(username: string, password: string, challenge: string): Promise<string> {
     const jar = new CookieJar()
-    const nonce = randomBytes(22).toString('base64url')
-    const state = randomBytes(8).toString('hex')
-
     const params = new URLSearchParams({
-      response_type: 'code',
       client_id: CLIENT_ID,
+      nonce: randomBytes(16).toString('base64url'),
       redirect_uri: REDIRECT_URI,
+      response_type: 'code',
       scope: SCOPE,
-      nonce,
-      state,
       code_challenge: challenge,
-      code_challenge_method: 'S256',
+      code_challenge_method: 's256',
+      prompt: 'login',
     })
 
-    const { body: html, finalUrl } = await navigate(
+    // 1. Authorize → the email login page.
+    const { body: loginHtml, finalUrl: authUrl } = await navigate(
       `${IDENTITY_BASE}/oidc/v1/authorize?${params.toString()}`,
       { jar },
     )
+    if (authUrl.includes('/consent/marketing/')) return skipMarketingConsent(authUrl, jar)
+    const emailCsrf = extractCsrf(loginHtml, 'email page')
 
-    // Marketing consent can interject immediately on the authorize URL
-    if (finalUrl.includes('/consent/marketing/')) return skipMarketingConsent(finalUrl, jar)
-
-    const $ = load(html)
-
-    // New flow: single-step login (current VW Group Identity servers, 2023+)
-    if ($('input[name="state"]').length > 0) return loginNew(html, username, password, jar)
-
-    // Legacy flow: two-step login (older servers)
-    if ($('form#emailPasswordForm').length > 0) return loginLegacy(html, username, password, jar)
-
-    ctx.log.debug({ finalUrl }, 'skoda: login page not recognised')
-    throw new Error(
-      'Skoda: login page format not recognised — the VW Group Identity flow may have changed. ' +
-        'Open a GitHub issue and run with LOG_LEVEL=debug to capture the offending URL locally.',
+    // 2. POST the email → the password page (carries a fresh CSRF state).
+    const idBody = new URLSearchParams({
+      relayState: emailCsrf.relayState,
+      email: username,
+      hmac: emailCsrf.hmac,
+      _csrf: emailCsrf.csrf,
+    }).toString()
+    const { body: pwHtml } = await navigate(
+      `${IDENTITY_BASE}/signin-service/v1/${CLIENT_ID}/login/identifier`,
+      { method: 'POST', body: idBody, contentType: 'application/x-www-form-urlencoded', jar },
     )
+    const pwCsrf = extractCsrf(pwHtml, 'password page')
+
+    // 3. POST the password → redirect chain → myskoda://…?code=…
+    const authBody = new URLSearchParams({
+      relayState: pwCsrf.relayState,
+      email: username,
+      password,
+      hmac: pwCsrf.hmac,
+      _csrf: pwCsrf.csrf,
+    }).toString()
+    const { finalUrl } = await navigate(
+      `${IDENTITY_BASE}/signin-service/v1/${CLIENT_ID}/login/authenticate`,
+      { method: 'POST', body: authBody, contentType: 'application/x-www-form-urlencoded', jar },
+    )
+
+    if (finalUrl.includes('/consent/marketing/')) return skipMarketingConsent(finalUrl, jar)
+    return parseCode(finalUrl)
   }
 
   // --- Token management ---
