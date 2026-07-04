@@ -7,6 +7,8 @@ export interface PlannerInput {
   maxCurrentA: number
   phases: number
   priceSlots?: TariffSlot[]
+  /** Current instant; defaults to `new Date()`. Injectable so callers/tests are deterministic. */
+  now?: Date
 }
 
 export interface PlannedSlot {
@@ -20,7 +22,7 @@ export interface PlannedSlot {
 // Without price data: charges as late as possible (latest start that still finishes on time).
 export function plan(input: PlannerInput): PlannedSlot[] {
   const { requiredKWh, targetTime, maxCurrentA, phases, priceSlots } = input
-  const now = new Date()
+  const now = input.now ?? new Date()
 
   const rateKW = chargeRateKW(maxCurrentA, phases)
   const requiredSlots = Math.ceil((requiredKWh / rateKW) * 4) // 4 slots per hour
