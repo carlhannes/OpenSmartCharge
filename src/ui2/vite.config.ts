@@ -8,6 +8,10 @@ import viteReact from "@vitejs/plugin-react";
 
 const projectDir = dirname(fileURLToPath(import.meta.url));
 
+// Backend the dev proxy targets. Override to point ui2 at another backend (e.g. the mock):
+//   OSC_BACKEND=http://localhost:9099 npm run dev:ui2   (or: npm run dev:ui2:mock)
+const backend = process.env.OSC_BACKEND ?? "http://localhost:8080";
+
 // Plain TanStack Start config, hand-written to replace the generated build-config
 // wrapper this project originally shipped with — reproducing only its standard plugins
 // and dropping the editor-only ones (component tagger, HMR gate, dev-server bridge,
@@ -20,9 +24,9 @@ export default defineConfig({
     port: 5174,
     strictPort: true,
     proxy: {
-      "/api": { target: "http://localhost:8080", changeOrigin: true },
+      "/api": { target: backend, changeOrigin: true },
       // SSE: http-proxy streams by default (no buffering).
-      "/events": { target: "http://localhost:8080", changeOrigin: true },
+      "/events": { target: backend, changeOrigin: true },
     },
   },
   resolve: {
