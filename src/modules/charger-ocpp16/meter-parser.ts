@@ -1,4 +1,4 @@
-import type { MeterValue } from './types.js'
+import type { MeterValue, MeterValuesReq } from './types.js'
 
 export interface ParsedMeterValue {
   energyKwh?: number
@@ -32,4 +32,31 @@ export function parseMeterValue(mv: MeterValue): ParsedMeterValue {
     voltageV: num(get('Voltage')),
     socPct: num(get('SoC')),
   }
+}
+
+export interface LatestReadings {
+  currentA?: number
+  powerW?: number
+}
+
+/**
+ * Latest live current/power across a whole MeterValues payload (which may carry several
+ * MeterValue samples). Current is the max across phases (parseMeterValue only sees the first
+ * phase); power is the most recent value. Used to surface live current to the loadpoint/UI.
+ */
+export function latestReadings(params: MeterValuesReq): LatestReadings {
+  const out: LatestReadings = {}
+  for (const mv of params.meterValue) {
+    const currents = mv.sampledValue
+      .filter((s) => s.measurand === 'Current.Import')
+      .map((s) => parseFloat(s.value))
+      .filter((n) => !isNaN(n))
+    if (currents.length > 0) out.currentA = Math.max(...currents)
+    const powerRaw = mv.sampledValue.find((s) => s.measurand === 'Power.Active.Import')?.value
+    if (powerRaw !== undefined) {
+      const p = parseFloat(powerRaw)
+      if (!isNaN(p)) out.powerW = p
+    }
+  }
+  return out
 }

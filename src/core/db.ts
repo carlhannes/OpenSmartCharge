@@ -27,6 +27,7 @@ function runMigrations(db: DatabaseSync): void {
       start_time     TEXT NOT NULL,
       end_time       TEXT,
       energy_kwh     REAL,
+      meter_start    REAL,
       id_tag         TEXT
     );
 
@@ -71,4 +72,15 @@ function runMigrations(db: DatabaseSync): void {
       value TEXT NOT NULL
     );
   `)
+
+  // Additive migrations for pre-existing DBs — `CREATE TABLE IF NOT EXISTS` won't add a
+  // column to an already-created table.
+  addColumnIfMissing(db, 'transactions', 'meter_start', 'REAL')
+}
+
+function addColumnIfMissing(db: DatabaseSync, table: string, column: string, type: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`)
+  }
 }

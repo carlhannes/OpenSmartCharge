@@ -9,12 +9,13 @@ type Client = { call(method: string, params: unknown): Promise<unknown> }
 export function buildChargingProfilePayload(
   limitA: number,
   connectorId = 0,
+  stackLevel = 1,
 ): SetChargingProfileReq {
   return {
     connectorId,
     csChargingProfiles: {
       chargingProfileId: 1,
-      stackLevel: 1,
+      stackLevel,
       chargingProfilePurpose: 'TxDefaultProfile',
       chargingProfileKind: 'Absolute',
       chargingSchedule: {
@@ -36,10 +37,11 @@ export async function setCurrentLimit(
   client: Client,
   amps: number,
   connectorId = 0,
+  stackLevel = 1,
 ): Promise<{ status?: string }> {
   return (await client.call(
     'SetChargingProfile',
-    buildChargingProfilePayload(amps, connectorId),
+    buildChargingProfilePayload(amps, connectorId, stackLevel),
   )) as { status?: string }
 }
 
@@ -101,4 +103,25 @@ export async function getCompositeSchedule(
     connectorId,
     duration,
   })) as CompositeScheduleResp
+}
+
+export interface ConfigurationResp {
+  configurationKey?: Array<{ key: string; readonly?: boolean; value?: string }>
+  unknownKey?: string[]
+}
+
+export async function getConfiguration(client: Client, keys?: string[]): Promise<ConfigurationResp> {
+  return (await client.call('GetConfiguration', keys ? { key: keys } : {})) as ConfigurationResp
+}
+
+// Ask the charger to (re)send a message, e.g. StatusNotification after a reconnect — chargers
+// don't re-send BootNotification/StatusNotification on a bare WS reconnect.
+export async function triggerMessage(
+  client: Client,
+  requestedMessage: string,
+  connectorId?: number,
+): Promise<{ status?: string }> {
+  const params: Record<string, unknown> = { requestedMessage }
+  if (connectorId !== undefined) params.connectorId = connectorId
+  return (await client.call('TriggerMessage', params)) as { status?: string }
 }

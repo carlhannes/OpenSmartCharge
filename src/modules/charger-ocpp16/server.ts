@@ -41,9 +41,12 @@ import {
   changeAvailability,
   clearChargingProfile as cmdClearChargingProfile,
   getCompositeSchedule as cmdGetCompositeSchedule,
+  getConfiguration as cmdGetConfiguration,
+  triggerMessage as cmdTriggerMessage,
   type CompositeScheduleResp,
 } from './commands.js'
 import { computeConnectionState, shouldAutoStart, computeHealth } from './status.js'
+import { latestReadings } from './meter-parser.js'
 
 type StatusCallback = (status: ChargerStatus) => void
 
@@ -60,7 +63,13 @@ export class OcppServer {
   readonly handleUpgrade: RPCServer['handleUpgrade']
   private readonly stations = new Map<string, StationState>()
   private readonly _pendingAutoStart = new Map<string, boolean>()
-  private readonly _pendingCallbacks = new Map<string, StatusCallback[]>()
+  // Status subscriptions persist across reconnects (keyed by stationId) so a charger that
+  // drops + reconnects keeps notifying the loadpoint.
+  private readonly statusSubs = new Map<string, Set<StatusCallback>>()
+  // Last commanded amps + discovered max stack level per station — survive reconnects so we
+  // re-assert the right limit at the right stack level when a dropped socket returns.
+  private readonly lastLimitByStation = new Map<string, number>()
+  private readonly maxStackByStation = new Map<string, number>()
 
   constructor(
     private readonly db: DatabaseSync,
@@ -100,32 +109,32 @@ export class OcppServer {
   }
 
   onStatus(stationId: string, cb: StatusCallback): () => void {
-    const state = this.stations.get(stationId)
-    if (state) {
-      state.statusCallbacks.add(cb)
-      return () => state.statusCallbacks.delete(cb)
+    const set = this.subsFor(stationId)
+    set.add(cb)
+    return () => set.delete(cb)
+  }
+
+  /** Persistent per-station subscription set — reused across reconnects. */
+  private subsFor(stationId: string): Set<StatusCallback> {
+    let set = this.statusSubs.get(stationId)
+    if (!set) {
+      set = new Set()
+      this.statusSubs.set(stationId, set)
     }
-    // Station not connected yet — queue the callback
-    const list = this._pendingCallbacks.get(stationId) ?? []
-    list.push(cb)
-    this._pendingCallbacks.set(stationId, list)
-    return () => {
-      const current = this._pendingCallbacks.get(stationId) ?? []
-      this._pendingCallbacks.set(
-        stationId,
-        current.filter((c) => c !== cb),
-      )
-    }
+    return set
   }
 
   async setLimit(stationId: string, amps: number): Promise<void> {
+    // Remember the commanded limit even if disconnected, so onConnect() can re-assert it.
+    this.lastLimitByStation.set(stationId, amps)
     const state = this.stations.get(stationId)
-    if (!state) return // Not connected — limit will be applied on BootNotification
-    // Target the active connector (Zaptec and most chargers ignore TxDefaultProfile on
-    // connectorId 0 for a running transaction; evcc likewise sends on the connector).
-    const res = await setCurrentLimit(state.client, amps, state.connectorId)
+    if (!state) return // Not connected — re-asserted on reconnect via onConnect()
+    // Target the active connector, at the charger's max stack level so our profile outranks
+    // any leftover/default profile (Zaptec stacks profiles; highest stackLevel wins).
+    const stackLevel = this.maxStackByStation.get(stationId) ?? 1
+    const res = await setCurrentLimit(state.client, amps, state.connectorId, stackLevel)
     this.log.info(
-      { stationId, amps, connectorId: state.connectorId, status: res?.status },
+      { stationId, amps, connectorId: state.connectorId, stackLevel, status: res?.status },
       'SetChargingProfile result',
     )
   }
@@ -192,6 +201,46 @@ export class OcppServer {
     }
   }
 
+  /**
+   * Runs on every socket (re)connect. All best-effort — a flaky reconnect must never throw:
+   * mark Operative, discover ChargeProfileMaxStackLevel, re-assert the last commanded limit at
+   * that stack level, and ask for a fresh StatusNotification (chargers don't re-send Boot/Status
+   * on a bare WS reconnect, so connection state would otherwise go stale).
+   */
+  private async onConnect(stationId: string, state: StationState): Promise<void> {
+    try {
+      const res = await changeAvailability(state.client, 0, 'Operative')
+      this.log.info({ stationId, status: res?.status }, 'ChangeAvailability(Operative) result')
+    } catch (err) {
+      this.log.warn({ err, stationId }, 'ChangeAvailability failed')
+    }
+    try {
+      const cfg = await cmdGetConfiguration(state.client, ['ChargeProfileMaxStackLevel'])
+      const raw = cfg.configurationKey?.find((k) => k.key === 'ChargeProfileMaxStackLevel')?.value
+      const max = raw != null ? parseInt(raw, 10) : NaN
+      if (!Number.isNaN(max)) this.maxStackByStation.set(stationId, max)
+    } catch (err) {
+      this.log.debug({ err, stationId }, 'GetConfiguration failed')
+    }
+    const last = this.lastLimitByStation.get(stationId)
+    if (last !== undefined) {
+      await this.setLimit(stationId, last).catch((err) =>
+        this.log.warn({ err, stationId }, 're-assert limit on connect failed'),
+      )
+    }
+    try {
+      await cmdTriggerMessage(state.client, 'StatusNotification', state.connectorId)
+    } catch {
+      // TriggerMessage unsupported — at least mark connected so the loadpoint isn't stale-offline.
+      this.pushStatus(stationId, {
+        connectorId: state.connectorId,
+        status: 'Available',
+        connected: true,
+        charging: false,
+      })
+    }
+  }
+
   private async attachClient(client: OcppClient): Promise<void> {
     const stationId = client.handshake.identity
 
@@ -201,10 +250,9 @@ export class OcppServer {
     const state: StationState = {
       client,
       connectorId: 1,
-      statusCallbacks: new Set(this._pendingCallbacks.get(stationId) ?? []),
+      statusCallbacks: this.subsFor(stationId), // persistent set — survives reconnects
       autoStart,
     }
-    this._pendingCallbacks.delete(stationId)
     this.stations.set(stationId, state)
 
     client.on('disconnect', () => {
@@ -231,16 +279,10 @@ export class OcppServer {
       this.log.debug({ stationId, dir: outbound ? 'OUT' : 'IN', frame: message }, 'ocpp-frame')
     })
 
-    // Mirror evcc's connect handshake: explicitly mark the charge point Operative. Some
-    // chargers accept charging profiles but won't deliver current for a newly-connected
-    // central system until told they are Operative (connectorId 0 = whole charge point).
-    setImmediate(() => {
-      void changeAvailability(state.client, 0, 'Operative')
-        .then((res) =>
-          this.log.info({ stationId, status: res?.status }, 'ChangeAvailability(Operative) result'),
-        )
-        .catch((err) => this.log.warn({ err, stationId }, 'ChangeAvailability failed'))
-    })
+    // On every (re)connect: mark Operative, discover the max stack level, re-assert the last
+    // commanded limit, and refresh status — so a charger that dropped (flaky WiFi / host sleep)
+    // returns with the correct limit and a fresh status without needing a power cycle.
+    setImmediate(() => void this.onConnect(stationId, state))
 
     // ── Inbound handlers ──────────────────────────────────────────────────
 
@@ -253,7 +295,12 @@ export class OcppServer {
 
       // Issue safe default current immediately so charger is never at an unknown limit
       setImmediate(() => {
-        void setCurrentLimit(state.client, this.defaultBootCurrentA, state.connectorId)
+        void setCurrentLimit(
+          state.client,
+          this.defaultBootCurrentA,
+          state.connectorId,
+          this.maxStackByStation.get(stationId) ?? 1,
+        )
           .then((res) =>
             this.log.info(
               { stationId, amps: this.defaultBootCurrentA, connectorId: state.connectorId, status: res?.status },
@@ -316,11 +363,14 @@ export class OcppServer {
 
       if (state.activeTransactionId) {
         const energyKwh = latestEnergyKwh(this.db, state.activeTransactionId)
+        const { currentA, powerW } = latestReadings(p)
         this.pushStatus(stationId, {
           connectorId: p.connectorId,
           status: 'Charging',
           connected: true,
           charging: true,
+          currentA,
+          powerW,
           sessionEnergyKWh: energyKwh,
         })
       }
