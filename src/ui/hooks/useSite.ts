@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getSite, type SiteDto } from '../api/rest.js'
+import { getSite, type SiteDto } from '../client/rest.js'
 
 export function useSite() {
   const [site, setSite] = useState<SiteDto | null>(null)

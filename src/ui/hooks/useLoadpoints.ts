@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { getLoadpoints, type LoadpointStateDto } from '../api/rest.js'
-import { subscribe } from '../api/sse.js'
+import { getLoadpoints, type LoadpointStateDto } from '../client/rest.js'
+import { subscribe } from '../client/sse.js'
 
 export function useLoadpoints() {
   const [loadpoints, setLoadpoints] = useState<LoadpointStateDto[]>([])

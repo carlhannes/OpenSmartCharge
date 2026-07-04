@@ -59,7 +59,7 @@ Opens (or creates) `./data/osc.db` via `node:sqlite` (Node.js v22.5+ built-in). 
 State machine per configured loadpoint. Holds `mode`, `targetSoc`, `targetTime`, `sessionEnergyKWh`. Mode is read from SQLite on boot and written back on every change.
 
 ### `src/core/planner.ts`
-Given a set of 15-min price slots and a required kWh amount, returns a binary on/off schedule for each slot that minimizes cost while finishing by `targetTime`. Falls back to a greedy "start as late as possible" if no price data is available.
+Given a set of price slots (hourly from Elering) and a required kWh amount, returns a binary on/off schedule for each slot that minimizes cost while finishing by `targetTime`. Falls back to a greedy "start as late as possible" if no price data is available.
 
 ### `src/core/estimator.ts`
 Computes estimated SoC from `lastKnownSoc + (sessionKWhDelivered × chargingEfficiency / batteryCapacity)`. Accepts `batteryCapacity = undefined` and returns `undefined` in that case (caller handles).

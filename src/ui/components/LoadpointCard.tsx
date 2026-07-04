@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import type { LoadpointStateDto, ChargeMode, SiteLoadpointDto } from '../api/rest.js'
-import { setMode, setTarget, remoteStart, remoteStop, setProfile } from '../api/rest.js'
+import type { LoadpointStateDto, ChargeMode, SiteLoadpointDto } from '../client/rest.js'
+import { setMode, setTarget, remoteStart, remoteStop, setProfile } from '../client/rest.js'
 import styles from './LoadpointCard.module.css'
 
 interface Props {

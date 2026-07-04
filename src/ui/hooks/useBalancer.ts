@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { getBalancer, type BalancerStateDto } from '../api/rest.js'
-import { subscribe } from '../api/sse.js'
+import { getBalancer, type BalancerStateDto } from '../client/rest.js'
+import { subscribe } from '../client/sse.js'
 
 export function useBalancer(name: string) {
   const [state, setState] = useState<BalancerStateDto | null>(null)

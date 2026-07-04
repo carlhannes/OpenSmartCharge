@@ -1,4 +1,4 @@
-import type { ModuleHealth } from '../api/rest.js'
+import type { ModuleHealth } from '../client/rest.js'
 
 const colors: Record<ModuleHealth, string> = {
   ok: 'var(--color-ok)',

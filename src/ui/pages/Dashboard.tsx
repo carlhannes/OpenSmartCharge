@@ -2,7 +2,7 @@ import { useLoadpoints } from '../hooks/useLoadpoints.js'
 import { useHealth } from '../hooks/useHealth.js'
 import { useSite } from '../hooks/useSite.js'
 import HealthBadge from '../components/HealthBadge.js'
-import type { ModuleHealth } from '../api/rest.js'
+import type { ModuleHealth } from '../client/rest.js'
 import styles from './Dashboard.module.css'
 
 function worstHealth(health: Record<string, ModuleHealth>): ModuleHealth {

@@ -193,6 +193,7 @@ async function main() {
       name: lp.name,
       maxCurrentA: (chargerCfg as { maxA?: number } | undefined)?.maxA ?? 16,
       autoStart: lp.autoStart,
+      defaultMode: lp.defaultMode,
     }
   })
 

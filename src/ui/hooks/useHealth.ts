@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getHealth, type ModuleHealth } from '../api/rest.js'
+import { getHealth, type ModuleHealth } from '../client/rest.js'
 
 export function useHealth() {
   const [health, setHealth] = useState<Record<string, ModuleHealth>>({})

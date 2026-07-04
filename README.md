@@ -9,7 +9,7 @@ If you want something that handles solar, batteries, heat pumps, and 300 EV mode
 ## Features
 
 - **OCPP 1.6J server** — any charger speaking OCPP 1.6J connects to it directly on your LAN
-- **Day-ahead pricing** — Elering API covers SE1–SE4 (Swedish Nordpool zones) with no API key required. 15-minute slot resolution.
+- **Day-ahead pricing** — Elering API covers SE1–SE4 (Swedish Nordpool zones) with no API key required. Hourly (Nord Pool day-ahead) slot resolution.
 - **Household load balancing** — reads live per-phase currents from your Tibber Pulse natively (no Python sidecar required) or any DSMR/OBIS meter bridged to MQTT, distributes the available headroom between chargers
 - **Vehicle SoC** — reads state-of-charge from Skoda/VW vehicles; plans charging to hit your target by departure time
 - **Charge modes per charger** — `disabled` / `smart` / `fast`, changeable via UI, REST, or MQTT
@@ -62,7 +62,7 @@ OSC has four module types and one core concept:
 | Type | What it does | Built-in |
 |---|---|---|
 | **Charger** | Speaks to hardware — sends `SetChargingProfile`, reads meter values | OCPP 1.6J |
-| **Tariff** | Provides 15-min spot price slots | Elering (SE1–SE4) |
+| **Tariff** | Provides hourly spot price slots | Elering (SE1–SE4) |
 | **Balancer** | Decides how many amps each charger gets per tick | MQTT circuit |
 | **Vehicle** | Reads state-of-charge | Skoda / VW |
 

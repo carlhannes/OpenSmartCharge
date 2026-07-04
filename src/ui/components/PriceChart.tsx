@@ -1,5 +1,5 @@
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
-import type { TariffSlotDto } from '../api/rest.js'
+import type { TariffSlotDto } from '../client/rest.js'
 
 interface Props {
   slots: TariffSlotDto[]

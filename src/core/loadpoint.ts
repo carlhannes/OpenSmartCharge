@@ -27,20 +27,21 @@ export interface LoadpointInit {
   name: string
   maxCurrentA?: number
   autoStart?: boolean
+  defaultMode?: ChargeMode
 }
 
 export function loadLoadpointStates(
   db: DatabaseSync,
   inits: LoadpointInit[],
 ): Map<string, LoadpointState> {
-  const insert = db.prepare(
-    `INSERT OR IGNORE INTO loadpoint_state (name, mode) VALUES (?, 'smart')`,
-  )
+  // INSERT OR IGNORE: seed a new loadpoint with its configured defaultMode; an existing
+  // (persisted) row is left untouched, so a saved mode still wins on restart.
+  const insert = db.prepare(`INSERT OR IGNORE INTO loadpoint_state (name, mode) VALUES (?, ?)`)
   const read = db.prepare(`SELECT * FROM loadpoint_state WHERE name = ?`)
 
   const states = new Map<string, LoadpointState>()
-  for (const { name, maxCurrentA = 16, autoStart = true } of inits) {
-    insert.run(name)
+  for (const { name, maxCurrentA = 16, autoStart = true, defaultMode = 'smart' } of inits) {
+    insert.run(name, defaultMode)
     const row = read.get(name) as unknown as DbRow
     states.set(name, {
       name,

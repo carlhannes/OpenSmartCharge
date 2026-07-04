@@ -31,6 +31,14 @@ export interface ApiDeps {
 export function createApiRouter(deps: ApiDeps): Router {
   const router = createRouter()
 
+  // Resolve the charger for a loadpoint route param. The `chargers` map is keyed by CHARGER
+  // name, not loadpoint name, so look up the loadpoint's `charger` ref first — otherwise these
+  // commands 404 whenever the loadpoint and charger are named differently.
+  const chargerForLoadpoint = (loadpointName: string) => {
+    const lp = deps.config.loadpoints.find((l) => l.name === loadpointName)
+    return lp ? deps.chargers.get(lp.charger) : undefined
+  }
+
   // GET /api/loadpoints
   router.get('/loadpoints', (_req: Request, res: Response) => {
     res.json([...deps.loadpoints.values()])
@@ -165,7 +173,7 @@ export function createApiRouter(deps: ApiDeps): Router {
   // POST /api/loadpoints/:name/start
   router.post('/loadpoints/:name/start', async (req: Request, res: Response) => {
     const name = String(req.params.name)
-    const charger = deps.chargers.get(name)
+    const charger = chargerForLoadpoint(name)
     if (!charger) {
       res.status(404).json({ error: 'loadpoint not found' })
       return
@@ -181,7 +189,7 @@ export function createApiRouter(deps: ApiDeps): Router {
   // POST /api/loadpoints/:name/stop
   router.post('/loadpoints/:name/stop', async (req: Request, res: Response) => {
     const name = String(req.params.name)
-    const charger = deps.chargers.get(name)
+    const charger = chargerForLoadpoint(name)
     if (!charger) {
       res.status(404).json({ error: 'loadpoint not found' })
       return
@@ -197,7 +205,7 @@ export function createApiRouter(deps: ApiDeps): Router {
   // POST /api/loadpoints/:name/reset  body { type?: 'Soft' | 'Hard' }
   router.post('/loadpoints/:name/reset', async (req: Request, res: Response) => {
     const name = String(req.params.name)
-    const charger = deps.chargers.get(name)
+    const charger = chargerForLoadpoint(name)
     if (!charger) {
       res.status(404).json({ error: 'loadpoint not found' })
       return
@@ -215,7 +223,7 @@ export function createApiRouter(deps: ApiDeps): Router {
   // POST /api/loadpoints/:name/clear-profile — clears all installed charging profiles
   router.post('/loadpoints/:name/clear-profile', async (req: Request, res: Response) => {
     const name = String(req.params.name)
-    const charger = deps.chargers.get(name)
+    const charger = chargerForLoadpoint(name)
     if (!charger?.clearChargingProfile) {
       res.status(404).json({ error: 'loadpoint not found or unsupported' })
       return
@@ -226,7 +234,7 @@ export function createApiRouter(deps: ApiDeps): Router {
   // GET /api/loadpoints/:name/composite-schedule?duration=<sec> — charger's computed limit
   router.get('/loadpoints/:name/composite-schedule', async (req: Request, res: Response) => {
     const name = String(req.params.name)
-    const charger = deps.chargers.get(name)
+    const charger = chargerForLoadpoint(name)
     if (!charger?.getCompositeSchedule) {
       res.status(404).json({ error: 'loadpoint not found or unsupported' })
       return
@@ -238,7 +246,7 @@ export function createApiRouter(deps: ApiDeps): Router {
   // POST /api/loadpoints/:name/profile  body { amps: number }
   router.post('/loadpoints/:name/profile', async (req: Request, res: Response) => {
     const name = String(req.params.name)
-    const charger = deps.chargers.get(name)
+    const charger = chargerForLoadpoint(name)
     if (!charger) {
       res.status(404).json({ error: 'loadpoint not found' })
       return
