@@ -27,7 +27,7 @@
 
 1. **Config loaded** — YAML parsed, zod-validated, modules instantiated from registry
 2. **Loadpoints created** — one per `loadpoints[]` entry, mode restored from SQLite
-3. **Tariff module** — fetches day-ahead prices from Elering, stores in SQLite; exposes `prices(from, to)`
+3. **Tariff module** — fetches day-ahead prices (elprisetjustnu for SE1–SE4, Elering for EE/FI/LV/LT), stores in SQLite; exposes `prices(from, to)`
 4. **Balancer tick** (every `intervalSec`):
    a. Reads live per-phase currents from a `MeterReader` module (in-process `latest()` snapshot) or, if no MeterReader is configured, subscribes to `house/i1_a`, `i2_a`, `i3_a` MQTT topics directly
    b. Calls `planner.schedule(loadpoint, priceSlots, estimatedSoc)` for each active smart-mode loadpoint
@@ -59,7 +59,7 @@ Opens (or creates) `./data/osc.db` via `node:sqlite` (Node.js v22.5+ built-in). 
 State machine per configured loadpoint. Holds `mode`, `targetSoc`, `targetTime`, `sessionEnergyKWh`. Mode is read from SQLite on boot and written back on every change.
 
 ### `src/core/planner.ts`
-Given a set of price slots (hourly from Elering) and a required kWh amount, returns a binary on/off schedule for each slot that minimizes cost while finishing by `targetTime`. Falls back to a greedy "start as late as possible" if no price data is available.
+Given a set of price slots (hourly or 15-minute) and a required kWh amount, returns a binary on/off schedule for each slot that minimizes cost while finishing by `targetTime`. Falls back to a greedy "start as late as possible" if no price data is available.
 
 ### `src/core/estimator.ts`
 Computes estimated SoC from `lastKnownSoc + (sessionKWhDelivered × chargingEfficiency / batteryCapacity)`. Accepts `batteryCapacity = undefined` and returns `undefined` in that case (caller handles).

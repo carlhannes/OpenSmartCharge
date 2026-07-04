@@ -72,17 +72,30 @@ A **loadpoint** (`src/core/loadpoint.ts`) is the control unit:
 
 The Balancer reads loadpoint state; the Charger provides hardware execution. Neither knows about the other.
 
-### Planner and Estimator (core, not modules)
+### Smart charging: resolvers, planner, control loop (core, not modules)
 
-`src/core/planner.ts` converts `targetSoc + targetTime + available price curve` into a charging schedule. It works under degradation:
-- With prices: picks cheapest slots that get to target by departure
-- Without prices: falls back to "latest start that still completes by departure time"
+Smart charging is built from **pure resolver ladders** (`src/core/smart-charging/`). Each planner
+input is produced by a resolver that *always* returns a usable value tagged with which rung it used,
+so no code branches on "is dependency X degraded" — degradation lives inside each ladder:
 
-`src/core/estimator.ts` derives `estimatedSoc` when the vehicle API is down:
-```
-estimatedSoc = lastKnownSoc + (sessionKWhDelivered × chargingEfficiency / batteryCapacity)
-```
-Battery capacity is cached per-VIN — it's stable, so a single successful vehicle read is enough to enable planning indefinitely.
+- **Energy** (`energy.ts`): live/estimated SoC + `targetSoc` → fixed `targetKWh` → duty-cycle heuristic.
+- **Price** (`price.ts`): live tariff → last-N-day average per hour-of-day → static "cheap 23–05" curve.
+  Always a non-empty curve (night priced strictly cheaper than day — equal prices would charge ASAP).
+- **Current** (`current.ts`): live meter headroom (n=1 `allocate()`) → historical worst-case per hour →
+  time-of-day static (`mainBreakerA − nightMargin` at night, `× daytimeFraction` by day). Clamped to
+  `maxA`, floored `<6 A ⇒ 0`.
+
+`src/core/planner.ts` turns `{requiredKWh, priceCurve, planRateA, targetTime}` into a 15-min schedule
+(cheapest slots; or latest-start when there are genuinely no prices). `src/core/estimator.ts` derives
+`estimatedSoc = lastKnownSoc + sessionKWh×η/capacity` (capacity cached per-VIN — one read enables
+planning indefinitely).
+
+`src/core/control-loop.ts` + the tick in `lifecycle.ts` drive it: ONE damped tick (default 30 s, since
+a charger/car takes 15–30 s to react) resolves every loadpoint and commands its charger through a
+deadband. Loadpoints group into **circuits** — those sharing a balancer coordinate through `allocate()`;
+a balancer-less loadpoint is its own circuit and takes the resolved current budget directly. **Smart mode
+therefore works with or without a balancer.** Wall-clock reasoning (night window, price hour-of-day) uses
+Europe/Stockholm via `src/sdk/stockholm-time.ts`.
 
 ---
 
@@ -94,26 +107,32 @@ The system is split into two tiers:
 
 **Tier 2 (internet-enhanced):** Tariff (Elering), Vehicle (Skoda API).
 
-Every module reports `health(): 'ok' | 'degraded' | 'unavailable'`. The balancer *always* produces a valid allocation:
-1. Live meter + tariff + SoC → full optimization
-2. Live meter + stale tariff + estimated SoC → slightly less precise
-3. Stale meter → `safeStaticCurrentA` per circuit
-4. Never exceed `mainBreakerA`
+Every module reports `health(): 'ok' | 'degraded' | 'unavailable'`. The control loop *always* commands
+a safe current via the resolver ladders — the top rung uses the best data; each lower rung degrades
+independently (no combinatorial branching):
+1. Live meter + live tariff + SoC → full optimization
+2. Stale tariff → last-N-day average, then a static night-cheap curve
+3. No meter/balancer → time-of-day static current (night `mainBreakerA − margin`, day `× fraction`)
+4. No vehicle → fixed `targetKWh`, else a duty-cycle heuristic
+5. Never exceed `maxA` / `mainBreakerA`; a sub-6 A budget resolves to 0 (never rounded up)
 
-**Critical rule:** No internet-dependent code path may sit between a charger and a safe current limit. Degraded modules must return their best available stale data, not throw.
+**Critical rule:** No internet-dependent code path may sit between a charger and a safe current limit.
+Degraded modules must return their best available stale data, not throw. Smart mode requires neither a
+balancer, a tariff, nor a vehicle — each is an enhancement, not a prerequisite.
 
 ---
 
 ## Config schema
 
 ```yaml
-tariffs:    [{name, type, ...}]
+tariffs:    [{name, type: elering|elprisetjustnu, zone, ...}]   # elprisetjustnu = SE1–SE4; elering = EE/FI/LV/LT
 balancers:  [{name, type, mainBreakerA, phases, meterTopicPrefix, safeStaticCurrentA, meterStaleAfterSec}]
 vehicles:   [{name, type, ...}]
-chargers:   [{name, type, stationId}]
-loadpoints: [{name, charger, vehicle?, tariff, balancer, defaultMode, targetSoc?, targetTime?}]
+chargers:   [{name, type, stationId, maxA, phases}]
+loadpoints: [{name, charger, vehicle?, tariff?, balancer?, defaultMode, targetSoc?, targetTime?, targetKWh?}]
 mqtt:       {host, port, topicPrefix, homeAssistantDiscovery}
-site:       {name, port}
+site:       {name, port, mainBreakerA?}                          # mainBreakerA = fallback fuse for balancer-less loadpoints
+smartCharging: {controlIntervalSec, deadbandA, nightWindow, nightMarginA, daytimeFraction, historicalDays}
 ```
 
 Name references enable multiplicity: multiple tariff zones, circuits, and chargers are just more list entries — no code changes required.

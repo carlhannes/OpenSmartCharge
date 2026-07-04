@@ -9,7 +9,7 @@ If you want something that handles solar, batteries, heat pumps, and 300 EV mode
 ## Features
 
 - **OCPP 1.6J server** — any charger speaking OCPP 1.6J connects to it directly on your LAN
-- **Day-ahead pricing** — Elering API covers SE1–SE4 (Swedish Nordpool zones) with no API key required. Hourly (Nord Pool day-ahead) slot resolution.
+- **Day-ahead pricing** — Swedish zones (SE1–SE4) via elprisetjustnu.se at 15-minute resolution; the Baltics + Finland (EE/FI/LV/LT) via the Elering API. No API key required.
 - **Household load balancing** — reads live per-phase currents from your Tibber Pulse natively (no Python sidecar required) or any DSMR/OBIS meter bridged to MQTT, distributes the available headroom between chargers
 - **Vehicle SoC** — reads state-of-charge from Skoda/VW vehicles; plans charging to hit your target by departure time
 - **Charge modes per charger** — `disabled` / `smart` / `fast`, changeable via UI, REST, or MQTT
@@ -62,7 +62,7 @@ OSC has four module types and one core concept:
 | Type | What it does | Built-in |
 |---|---|---|
 | **Charger** | Speaks to hardware — sends `SetChargingProfile`, reads meter values | OCPP 1.6J |
-| **Tariff** | Provides hourly spot price slots | Elering (SE1–SE4) |
+| **Tariff** | Provides day-ahead spot price slots | elprisetjustnu (SE1–SE4), Elering (EE/FI/LV/LT) |
 | **Balancer** | Decides how many amps each charger gets per tick | MQTT circuit |
 | **Vehicle** | Reads state-of-charge | Skoda / VW |
 
@@ -92,7 +92,7 @@ OSC is designed around a two-tier model so that a bad internet day doesn't stop 
 OCPP server, MQTT broker, balancer circuit math, web UI, SQLite.
 
 **Tier 2 — internet-enhanced (optional):**
-Day-ahead tariffs (Elering), vehicle SoC (Skoda API).
+Day-ahead tariffs (elprisetjustnu / Elering), vehicle SoC (Skoda API).
 
 Every module reports a health status: `ok` / `degraded` / `unavailable`. The system keeps running under degradation:
 

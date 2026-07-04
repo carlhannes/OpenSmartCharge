@@ -43,12 +43,13 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 ---
 
-## Milestone 2 — Tariff: Elering (SE1–SE4) (shipped)
+## Milestone 2 — Tariff: Nord Pool day-ahead (shipped)
 
-**Goal:** Fetch and cache day-ahead prices from the Elering API, expose them to the planner and UI.
+**Goal:** Fetch and cache day-ahead prices, expose them to the planner and UI.
 
-- [x] `src/modules/tariff-elering/` — smart daily fetch anchored to 13:15 Stockholm, exponential backoff on failure
-- [x] Hourly slot storage in SQLite keyed by `(zone, slot_start)` — survives restart and internet outages
+- [x] `src/modules/tariff-elering/` — **Baltics + Finland (EE/FI/LV/LT)**. Smart daily fetch anchored to 13:15 Stockholm, exponential backoff on failure
+- [x] `src/modules/tariff-elprisetjustnu/` — **Sweden (SE1–SE4)**, 15-minute resolution, SEK/kWh, no API key. (Elering does *not* publish Swedish zones.) Both providers share the Nord Pool schedule/persistence/health factory in `src/sdk/nordpool-tariff.ts`
+- [x] Slot storage in SQLite keyed by `(zone, slot_start)` (hourly or 15-min) — survives restart and internet outages
 - [x] Health: `ok` → `degraded` (past publish window, no tomorrow data) → `unavailable` (no future slots cached)
 - [x] `GET /api/tariffs/:name/prices?from=&to=` endpoint — returns `TariffSlot[]` in EUR/kWh
 - [x] `osc/tariffs/<name>/now` MQTT (retained) — re-published on new data and at the top of each hour
@@ -189,9 +190,20 @@ Bugs and doc discrepancies found bringing up a real charger. The set below was w
 
 Covered by tests: `src/modules/charger-ocpp16/server.integration.test.ts` (mock charger — 5 scenarios), `src/server/api.test.ts`, `src/core/loadpoint.test.ts`.
 
+### Smart charging: graceful degradation (shipped 2026-07-04)
+
+Smart mode now works with **any subset of dependencies degraded**, via pure resolver ladders (`src/core/smart-charging/`) driven by a single control loop — no combinatorial `if (X degraded)` branching. Each input resolver returns `{value, source, degraded}`; consumers read only `.value`.
+
+- [x] **Swedish prices** via `tariff-elprisetjustnu` (SE1–SE4, 15-min, SEK); shared Nord Pool factory + `sdk/stockholm-time.ts` (DST-safe local time).
+- [x] **Energy / price / current resolver ladders** — SoC→fixed-kWh→duty-cycle; live→3-day-avg→static-night; live-meter→worst-case→time-of-day-static. Unit-tested incl. the ASAP-price trap and the 6 A floor.
+- [x] **Control-loop inversion** (`control-loop.ts`): one damped 30 s tick (configurable, deadband-gated) drives every circuit; **smart mode works with no balancer** (the old no-balancer path applied max, price-blind). Balancer circuits still coordinate through the untouched, test-pinned `allocate()`.
+- [x] **New config:** `site.mainBreakerA`, a `smartCharging` block (interval/deadband/night-window/margins/historicalDays), loadpoint `targetKWh` (surfaced in API/MQTT/UI); config `targetSoc`/`targetTime`/`targetKWh` now seed the DB.
+- [x] **Household-load hourly rollup** (`smart-charging/rollup.ts`) feeds the worst-case-current fallback; `parseTargetTime` + night-window are now Stockholm-local (were server-local).
+- [x] Verified live on the real Zaptec (no balancer, no vehicle): resolved `{energy: duty-cycle, price: live-tariff, current: static-tod}`, gated on the SE4 price.
+
 ### Remaining / nice-to-have
 
 - [ ] Exclude `*.test.ts` + `mock-charger.ts` from the production build (they currently compile into `dist/` — harmless dead weight). Add to `tsconfig.json`/build config.
 - [ ] Unify the typed test **mock charger** (`src/modules/charger-ocpp16/mock-charger.ts`) with the `.mjs` sim (`scripts/lib/fake-charger.mjs`) to remove transport duplication.
 - [ ] `powerW` is on `ChargerStatus` but not surfaced on `LoadpointState`/UI — add a field + bridge if a power readout is wanted.
-- [ ] Optionally consume Elering's 15-minute price series (Nord Pool moved to 15-min settlement) instead of hourly.
+- [ ] Surface each loadpoint's resolver `sources` (energy/price/current rung) on `/api/loadpoints/:name` for UI observability (currently debug-logged only).

@@ -10,7 +10,35 @@ Copy `osc.dist.yaml` to `osc.yaml` and edit. The file is gitignored.
 site:
   name: "My Home"   # displayed in UI
   port: 8080        # HTTP server port (default: 8080)
+  mainBreakerA: 16  # optional — main fuse per phase (amps). Circuit ceiling for loadpoints
+                    # WITHOUT a balancer; the smart-charging static current fallback sizes
+                    # against it. A balancer, when configured, carries its own mainBreakerA.
 ```
+
+### `smartCharging`
+
+Optional. Tunes the control loop and the graceful-degradation fallbacks. Every field has a default, so the whole section can be omitted.
+
+```yaml
+smartCharging:
+  controlIntervalSec: 30   # control-loop tick interval (5–60 s). Kept slow because a charger/car
+                           # takes 15–30 s to act on a new limit; ticking faster just oscillates.
+  deadbandA: 1             # only re-command the charger when the target moves ≥ this many amps
+  nightWindow:             # assumed-cheap window (local Stockholm hours), used by the price and
+    startHour: 23          # current fallbacks when no live/historical data is available
+    endHour: 5
+  nightMarginA: 3          # static night current = mainBreakerA − nightMarginA
+  daytimeFraction: 0.5     # static day current   = mainBreakerA × daytimeFraction
+  historicalDays: 3        # look-back for the historical price-average and worst-case-load rungs
+```
+
+**How the fallbacks work.** Smart charging composes three independent resolvers, each degrading on its own — so nothing has to branch on which combination of dependencies is available:
+
+- **Energy** (how much to add): live/estimated vehicle SoC → a fixed `targetKWh` → a duty-cycle heuristic.
+- **Price** (when it's cheap): live day-ahead tariff → last-`historicalDays` average per hour-of-day → the static night window above.
+- **Current** (how many amps): live meter headroom → worst-case household load per hour over the last `historicalDays` → a time-of-day static (night `mainBreakerA − nightMarginA`, day `mainBreakerA × daytimeFraction`), clamped to the charger's `maxA` and floored to 0 below the 6 A IEC minimum.
+
+Because of this, **smart mode works with no balancer, no tariff, and no vehicle** — each is an enhancement, not a requirement.
 
 ### `mqtt`
 
@@ -155,21 +183,24 @@ loadpoints:
                               # app/RFID start on the charger itself.
                               # On by default because many cheap OCPP chargers won't initiate
                               # a transaction without it.
-    targetSoc: 80             # default charge target (%)
-    targetTime: "07:00"       # daily departure time (HH:MM, local time)
+    targetSoc: 80             # default charge target (%) — used when a vehicle SoC is available
+    targetTime: "07:00"       # daily departure time (HH:MM, Stockholm local)
                               # if omitted, smart mode charges as cheaply as possible
                               # without a time constraint
+    targetKWh: 40             # optional — fixed energy to add per session (kWh). The energy
+                              # fallback when there's no vehicle SoC (guest car / no app).
+                              # UI offers 10–100 in steps of 10.
 ```
 
 **Charge modes:**
 
 | Mode | Behaviour |
 |---|---|
-| `disabled` | No charging. Balancer sets current to 0. |
-| `smart` | Charges in the cheapest hours to reach `targetSoc` by `targetTime`. Falls back gracefully when data is missing. |
-| `fast` | Charges at the maximum current allowed by the circuit, ignoring tariff and SoC target. |
+| `disabled` | No charging. Current is set to 0. |
+| `smart` | Charges in the cheapest hours to reach the energy target by `targetTime`. Works **with or without a balancer**, and falls back gracefully when tariff/vehicle/meter data is missing (see [`smartCharging`](#smartcharging)). |
+| `fast` | Charges at the maximum current the circuit budget allows, ignoring tariff and SoC target. |
 
-The mode can be changed at any time via the UI, REST, or MQTT — it takes effect on the next balancer tick.
+The mode can be changed at any time via the UI, REST, or MQTT — it takes effect immediately (an on-demand control-loop tick) and otherwise on the next tick (default 30 s).
 
 ## Multiple grids and chargers
 
