@@ -2,7 +2,7 @@ import { test, expect } from 'vitest'
 import { parseMeterValue } from './meter-parser.js'
 import type { MeterValue, SampledValue } from './types.js'
 
-function mv(samples: Array<{ measurand?: string; value: string }>): MeterValue {
+function mv(samples: Array<{ measurand?: string; value: string; unit?: string }>): MeterValue {
   return { timestamp: '2026-01-01T00:00:00Z', sampledValue: samples as SampledValue[] }
 }
 
@@ -56,4 +56,12 @@ test('energy Wh→kWh conversion is exact for common values', () => {
   expect(e('1000')).toBe(1)
   expect(e('500')).toBe(0.5)
   expect(e('999')).toBe(0.999)
+})
+
+test('respects the declared energy unit: kWh is kept, Wh (or absent) is divided by 1000', () => {
+  const energy = (value: string, unit?: string) =>
+    parseMeterValue(mv([{ measurand: 'Energy.Active.Import.Register', value, unit }])).energyKwh
+  expect(energy('12.5', 'kWh')).toBe(12.5) // already kWh — do NOT divide (would be 1000× too small)
+  expect(energy('12500', 'Wh')).toBe(12.5) // Wh → kWh
+  expect(energy('12500')).toBe(12.5) // absent unit defaults to Wh
 })

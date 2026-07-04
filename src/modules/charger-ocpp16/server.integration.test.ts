@@ -231,3 +231,34 @@ test('T5: session energy is (latest register − meterStart), not the lifetime r
     await h.cleanup()
   }
 })
+
+// T7 — Transaction tracking must survive a mid-session restart/reconnect. `activeTransactionId`
+// lives only in memory; on a bare WS reconnect the charger does NOT re-send StartTransaction, so
+// without rehydration live current/energy zero out (MeterValues get dropped) and remoteStop breaks.
+// A fresh mock has transactionId=null → its MeterValues carry none, so only DB rehydration
+// (findOpenTransaction) can re-attribute them — the realistic OSC-restart case. Fails until the fix.
+test('T7: live current/energy resume after a mid-session reconnect, and remoteStop works', async () => {
+  const h = await bootServer()
+  try {
+    const { charger, statuses } = await connectCharger(h, 'RESUME01')
+    await charger.boot()
+    await charger.statusNotification('Preparing')
+    await charger.startTransaction('mock', 1_000_000) // opens a tx (persisted, end_time NULL)
+    await charger.close()
+    // Fresh socket, same identity — OSC rebuilds StationState and must rehydrate the open tx.
+    const c2 = createMockCharger('RESUME01', `ws://localhost:${h.port}/ocpp`)
+    await c2.connect()
+    await waitFor(() => c2.countReceived('GetConfiguration') > 0) // OSC re-attached + rehydrated
+    await c2.meterValues({ energyWh: 1_005_000, currentA: 8, powerW: 5520 })
+    await waitFor(() => statuses.some((s) => (s.sessionEnergyKWh ?? 0) > 0))
+    const last = statuses.filter((s) => (s.sessionEnergyKWh ?? 0) > 0).at(-1)!
+    expect(last.currentA).toBeCloseTo(8, 1)
+    expect(last.sessionEnergyKWh).toBeCloseTo(5, 2) // (1_005_000 − 1_000_000)/1000
+    // remoteStop must not throw "no active transaction" — the id was rehydrated from the DB.
+    await h.ocpp.remoteStop('RESUME01')
+    await waitFor(() => c2.countReceived('RemoteStopTransaction') > 0)
+    await c2.close()
+  } finally {
+    await h.cleanup()
+  }
+})

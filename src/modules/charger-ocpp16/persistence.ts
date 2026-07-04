@@ -18,17 +18,27 @@ export function insertTransaction(
   transactionId: number,
   params: StartTransactionReq,
 ): void {
+  // Insert the pre-allocated OCPP transaction id as the PRIMARY KEY directly. (This previously
+  // inserted with the AUTOINCREMENT rowid then UPDATE'd the id to match — fragile, because the
+  // separate `ocpp_tx_counter` sequence could diverge from the AUTOINCREMENT sequence and the
+  // UPDATE would then collide with an existing PK or rewrite the wrong row.)
   db.prepare(
     `INSERT INTO transactions
-       (loadpoint_name, station_id, start_time, id_tag, meter_start)
-     VALUES (?, ?, ?, ?, ?)`,
-  ).run(loadpointName, stationId, params.timestamp, params.idTag, params.meterStart)
-  // Store the OCPP tx id in a mapping row — we re-use the rowid implicitly,
-  // but we need to find this transaction later by OCPP transactionId.
-  // Simplest: update the row we just inserted with the OCPP id.
-  db.prepare(
-    `UPDATE transactions SET id = ? WHERE loadpoint_name = ? AND start_time = ? AND id_tag = ?`,
-  ).run(transactionId, loadpointName, params.timestamp, params.idTag)
+       (id, loadpoint_name, station_id, start_time, id_tag, meter_start)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(transactionId, loadpointName, stationId, params.timestamp, params.idTag, params.meterStart)
+}
+
+// Find the id of the currently-open transaction for a station (end_time still NULL), if any.
+// Used to rehydrate in-memory transaction state after an OSC restart or a bare charger WS
+// reconnect, so live meter values keep flowing to the right session and remoteStop works.
+export function findOpenTransaction(db: DatabaseSync, stationId: string): number | undefined {
+  const row = db
+    .prepare(
+      `SELECT id FROM transactions WHERE station_id = ? AND end_time IS NULL ORDER BY id DESC LIMIT 1`,
+    )
+    .get(stationId) as { id: number } | undefined
+  return row?.id
 }
 
 export function finishTransaction(

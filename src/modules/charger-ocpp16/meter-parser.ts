@@ -24,9 +24,19 @@ export function parseMeterValue(mv: MeterValue): ParsedMeterValue {
     return isNaN(n) ? undefined : n
   }
 
-  const energyWh = num(get('Energy.Active.Import.Register'))
+  // The energy register is Wh by default (OCPP), but some chargers report kWh and say so via
+  // `unit`. Respect the declared unit instead of always dividing by 1000 (a kWh reading divided
+  // by 1000 would be 1000× too small and corrupt the session-energy delta).
+  const energySample = mv.sampledValue.find((s) => s.measurand === 'Energy.Active.Import.Register')
+  const energyRaw = num(energySample?.value)
+  const energyKwh =
+    energyRaw === undefined
+      ? undefined
+      : energySample?.unit === 'kWh'
+        ? energyRaw
+        : energyRaw / 1000
   return {
-    energyKwh: energyWh === undefined ? undefined : energyWh / 1000,
+    energyKwh,
     powerW: num(get('Power.Active.Import')),
     currentA: num(get('Current.Import')),
     voltageV: num(get('Voltage')),

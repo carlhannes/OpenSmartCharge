@@ -339,16 +339,25 @@ export function createApiRouter(deps: ApiDeps): Router {
       res.status(400).json({ error: 'id must be a positive integer' })
       return
     }
-    const tx = deps.db.prepare('SELECT * FROM transactions WHERE id = ?').get(id)
+    const tx = deps.db.prepare('SELECT * FROM transactions WHERE id = ?').get(id) as
+      | { meter_start: number | null }
+      | undefined
     if (!tx) {
       res.status(404).json({ error: 'transaction not found' })
       return
     }
+    // meter_values.energy_kwh is the charger's absolute lifetime register; report each sample as
+    // the session-relative delta from meter_start (Wh→kWh), matching latestEnergyKwh + the session
+    // list. Without this a cumulative-energy chart would be offset by the whole lifetime register.
+    const startKwh = tx.meter_start != null ? tx.meter_start / 1000 : 0
     const samples = deps.db
       .prepare(
-        'SELECT measured_at, energy_kwh, power_w, current_a, soc FROM meter_values WHERE transaction_id = ? ORDER BY measured_at ASC',
+        `SELECT measured_at,
+                CASE WHEN energy_kwh IS NULL THEN NULL ELSE MAX(0, energy_kwh - ?) END AS energy_kwh,
+                power_w, current_a, soc
+         FROM meter_values WHERE transaction_id = ? ORDER BY measured_at ASC`,
       )
-      .all(id)
+      .all(startKwh, id)
     res.json({ transaction: tx, samples })
   })
 

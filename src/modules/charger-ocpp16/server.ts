@@ -32,6 +32,7 @@ import {
   finishTransaction,
   insertMeterValues,
   latestEnergyKwh,
+  findOpenTransaction,
 } from './persistence.js'
 import {
   setCurrentLimit,
@@ -269,6 +270,11 @@ export class OcppServer {
       connectorId: 1,
       statusCallbacks: this.subsFor(stationId), // persistent set — survives reconnects
       autoStart,
+      // Rehydrate any in-progress transaction from SQLite: on an OSC restart or a bare WS
+      // reconnect the charger does NOT re-send StartTransaction, so without this the in-memory id
+      // is lost (remoteStop breaks, meter values get dropped). MeterValues below re-adopt the
+      // charger's own transactionId if it ever disagrees (e.g. a stale open row).
+      activeTransactionId: findOpenTransaction(this.db, stationId),
     }
     this.stations.set(stationId, state)
 
@@ -384,6 +390,10 @@ export class OcppServer {
 
     client.handle('MeterValues', async ({ params }) => {
       const p = params as MeterValuesReq
+      // The charger names the transaction these samples belong to — trust it as the authority.
+      // This keeps live current/energy attributed across an OSC restart or bare WS reconnect
+      // (when the in-memory id was lost, since StartTransaction isn't re-sent on reconnect).
+      if (p.transactionId != null) state.activeTransactionId = p.transactionId
       insertMeterValues(this.db, state.activeTransactionId, p)
 
       if (state.activeTransactionId) {
