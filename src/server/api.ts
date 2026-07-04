@@ -13,6 +13,18 @@ import type { Vehicle } from '../sdk/vehicle.js'
 import type { Charger } from '../sdk/charger.js'
 import { getTimezone, setTimezone } from '../core/settings.js'
 import { isValidTimeZone } from '../sdk/local-time.js'
+import {
+  listPlans,
+  createPlan,
+  updatePlan,
+  deletePlan,
+  getPlan,
+  DAY_KEYS,
+  type Plan,
+  type PlanPatch,
+  type PlanUnit,
+  type DayKey,
+} from '../core/plans.js'
 
 export interface ApiDeps {
   db: DatabaseSync
@@ -28,6 +40,39 @@ export interface ApiDeps {
   lastTickByBalancer: Map<string, { allocations: Record<string, number>; freeAmps: number }>
   onModeChange(name: string, mode: ChargeMode): Promise<void>
   onTargetChange(name: string, soc?: number, time?: string, kwh?: number): Promise<void>
+  /** Called after any plan create/update/delete so the lifecycle can emit SSE + re-tick. */
+  onPlansChanged(loadpointName: string): void
+}
+
+const HHMM = /^\d{2}:\d{2}$/
+const DAY_SET = new Set<string>(DAY_KEYS)
+
+function parsePlanDays(v: unknown): DayKey[] | null {
+  if (!Array.isArray(v) || v.length === 0) return null
+  const ok = v.every((d) => typeof d === 'string' && DAY_SET.has(d))
+  return ok ? (v as DayKey[]) : null
+}
+
+function parsePlanUnit(v: unknown): PlanUnit | null {
+  return v === 'pct' || v === 'km' || v === 'kwh' ? v : null
+}
+
+// pct is a 0–100 SoC; km/kWh just need to be positive.
+function validPlanTarget(unit: PlanUnit, target: number): boolean {
+  return unit === 'pct' ? target > 0 && target <= 100 : target > 0
+}
+
+// DTO for ui2: id as a string, loadpointName (ui2 maps → chargerId), rest pass through.
+function toPlanDto(p: Plan) {
+  return {
+    id: String(p.id),
+    loadpointName: p.loadpointName,
+    days: p.days,
+    readyBy: p.readyBy,
+    target: p.target,
+    unit: p.unit,
+    enabled: p.enabled,
+  }
 }
 
 export function createApiRouter(deps: ApiDeps): Router {
@@ -73,6 +118,127 @@ export function createApiRouter(deps: ApiDeps): Router {
     setTimezone(deps.db, timezone)
     deps.events.emit('settings.changed', { timezone })
     res.json({ timezone })
+  })
+
+  // ── Charging plans (per loadpoint) ──────────────────────────────────────────
+
+  // GET /api/loadpoints/:name/plans
+  router.get('/loadpoints/:name/plans', (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    if (!deps.loadpoints.has(name)) {
+      res.status(404).json({ error: 'loadpoint not found' })
+      return
+    }
+    res.json(listPlans(deps.db, name).map(toPlanDto))
+  })
+
+  // POST /api/loadpoints/:name/plans — create a plan
+  router.post('/loadpoints/:name/plans', (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    if (!deps.loadpoints.has(name)) {
+      res.status(404).json({ error: 'loadpoint not found' })
+      return
+    }
+    const b = req.body as {
+      days?: unknown
+      readyBy?: unknown
+      target?: unknown
+      unit?: unknown
+      enabled?: unknown
+    }
+    const days = parsePlanDays(b.days)
+    const unit = parsePlanUnit(b.unit)
+    const readyBy = typeof b.readyBy === 'string' && HHMM.test(b.readyBy) ? b.readyBy : null
+    const target = typeof b.target === 'number' ? b.target : null
+    if (!days || !unit || !readyBy || target === null || !validPlanTarget(unit, target)) {
+      res.status(400).json({
+        error: 'invalid plan: need days[] (mon..sun), readyBy "HH:MM", unit pct|km|kwh, target > 0',
+      })
+      return
+    }
+    const enabled = typeof b.enabled === 'boolean' ? b.enabled : true
+    const plan = createPlan(deps.db, name, { days, readyBy, target, unit, enabled })
+    deps.onPlansChanged(name)
+    res.status(201).json(toPlanDto(plan))
+  })
+
+  // PUT /api/loadpoints/:name/plans/:id — partial update (only provided fields change)
+  router.put('/loadpoints/:name/plans/:id', (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    const id = Number(req.params.id)
+    const existing = getPlan(deps.db, id)
+    if (!existing || existing.loadpointName !== name) {
+      res.status(404).json({ error: 'plan not found' })
+      return
+    }
+    const b = req.body as {
+      days?: unknown
+      readyBy?: unknown
+      target?: unknown
+      unit?: unknown
+      enabled?: unknown
+    }
+    const patch: PlanPatch = {}
+    if (b.days !== undefined) {
+      const d = parsePlanDays(b.days)
+      if (!d) {
+        res.status(400).json({ error: 'days must be a non-empty subset of mon..sun' })
+        return
+      }
+      patch.days = d
+    }
+    if (b.readyBy !== undefined) {
+      if (typeof b.readyBy !== 'string' || !HHMM.test(b.readyBy)) {
+        res.status(400).json({ error: 'readyBy must be "HH:MM"' })
+        return
+      }
+      patch.readyBy = b.readyBy
+    }
+    if (b.unit !== undefined) {
+      const u = parsePlanUnit(b.unit)
+      if (!u) {
+        res.status(400).json({ error: 'unit must be pct|km|kwh' })
+        return
+      }
+      patch.unit = u
+    }
+    if (b.target !== undefined) {
+      if (typeof b.target !== 'number') {
+        res.status(400).json({ error: 'target must be a number' })
+        return
+      }
+      patch.target = b.target
+    }
+    if (b.enabled !== undefined) {
+      if (typeof b.enabled !== 'boolean') {
+        res.status(400).json({ error: 'enabled must be a boolean' })
+        return
+      }
+      patch.enabled = b.enabled
+    }
+    const effUnit = patch.unit ?? existing.unit
+    const effTarget = patch.target ?? existing.target
+    if (!validPlanTarget(effUnit, effTarget)) {
+      res.status(400).json({ error: 'target out of range for unit' })
+      return
+    }
+    const updated = updatePlan(deps.db, id, patch)
+    deps.onPlansChanged(name)
+    res.json(toPlanDto(updated!))
+  })
+
+  // DELETE /api/loadpoints/:name/plans/:id
+  router.delete('/loadpoints/:name/plans/:id', (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    const id = Number(req.params.id)
+    const existing = getPlan(deps.db, id)
+    if (!existing || existing.loadpointName !== name) {
+      res.status(404).json({ error: 'plan not found' })
+      return
+    }
+    deletePlan(deps.db, id)
+    deps.onPlansChanged(name)
+    res.status(204).end()
   })
 
   // POST /api/loadpoints/:name/mode

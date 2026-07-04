@@ -90,6 +90,22 @@ function runMigrations(db: DatabaseSync): void {
       max_phase_a REAL NOT NULL,
       PRIMARY KEY (date, hour)
     );
+
+    -- Recurring charging plans, per loadpoint. Weekday-recurring (days_mask, bit i = weekday i,
+    -- 0=Mon..6=Sun) + a local ready-by time + a target (value + unit: 'pct'|'km'|'kwh'). The
+    -- lifecycle resolves the governing plan each tick (see core/plans.ts) into the single target
+    -- the planner already consumes. Runtime/UI-managed (not seeded from config).
+    CREATE TABLE IF NOT EXISTS charge_plans (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      loadpoint_name TEXT NOT NULL,
+      days_mask      INTEGER NOT NULL,
+      ready_by       TEXT NOT NULL,
+      target_value   REAL NOT NULL,
+      target_unit    TEXT NOT NULL,
+      enabled        INTEGER NOT NULL DEFAULT 1,
+      updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_charge_plans_lp ON charge_plans (loadpoint_name);
   `)
 
   // Additive migrations for pre-existing DBs — `CREATE TABLE IF NOT EXISTS` won't add a

@@ -35,6 +35,13 @@ import type { MeterReader, MeterSnapshot } from '../sdk/meter-reader.js'
 import { recordHouseholdLoad, pruneHouseholdLoad, worstCaseLoadA } from './smart-charging/rollup.js'
 import { localDateKey, localHour, msUntilLocalTime } from '../sdk/local-time.js'
 import { getTimezone, seedSettings } from './settings.js'
+import {
+  listPlans,
+  selectActivePlan,
+  planTargetTime,
+  planEnergyTarget,
+  type PlanVehicleReading,
+} from './plans.js'
 import type { Balancer, LoadpointSnapshot } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import type { LoadpointState } from './loadpoint.js'
@@ -300,6 +307,13 @@ async function main() {
     if (circuit) void circuitTick(circuit)
   }
 
+  // Plans changed via the API → emit for SSE + re-tick so the new/removed plan takes effect now.
+  function handlePlansChanged(name: string): void {
+    events.emit('loadpoint.plans', { name })
+    const circuit = circuitForLoadpoint(circuits, name)
+    if (circuit) void circuitTick(circuit)
+  }
+
   // Last amps value successfully sent to each charger. Keyed by loadpoint name (= LoadpointSnapshot.id).
   // Used to give the allocator an accurate credit-back during the car's ramp-up period.
   const lastCommandedA = new Map<string, number>()
@@ -452,9 +466,33 @@ async function main() {
     const nightWindow = sc.nightWindow
     const tz = getTimezone(db) // site timezone — all wall-clock planning this tick uses it
 
-    const targetTime = state.targetTime
-      ? parseTargetTime(state.targetTime, tz)
-      : new Date(now.getTime() + 24 * 3600_000)
+    // Vehicle handle (battery capacity + km-plan conversion).
+    const vehicle = lpCfg.vehicle ? vehicles.get(lpCfg.vehicle) : undefined
+    const capacity = vehicle?.getCachedCapacity()
+
+    // A recurring plan that governs NOW takes precedence over the ad-hoc loadpoint target; with no
+    // active plan we fall back to state.target* (guest / manual one-off). Plans are read live each
+    // tick — no reload (see core/plans.ts for the resolution rule).
+    const activePlan = selectActivePlan(listPlans(db, lpCfg.name), now, tz)
+    let planTarget: { targetSocPct?: number; targetKWh?: number } | undefined
+    if (activePlan) {
+      let veh: PlanVehicleReading = {}
+      if (activePlan.unit === 'km' && vehicle) {
+        const data = await vehicle.getData().catch(() => undefined)
+        veh = { range: data?.range, soc: data?.soc }
+      }
+      planTarget = planEnergyTarget(activePlan, veh)
+      log.debug(
+        { loadpoint: lpCfg.name, plan: activePlan.id, readyBy: activePlan.readyBy },
+        'active plan governs',
+      )
+    }
+
+    const targetTime = activePlan
+      ? planTargetTime(activePlan, now, tz)
+      : state.targetTime
+        ? parseTargetTime(state.targetTime, tz)
+        : new Date(now.getTime() + 24 * 3600_000)
     const hoursUntilTarget = Math.max(0.25, (targetTime.getTime() - now.getTime()) / 3_600_000)
 
     const balancerCfg = lpCfg.balancer
@@ -467,17 +505,13 @@ async function main() {
     // A balancer carries its own circuit fuse; a bare loadpoint falls back to the site fuse.
     const mainBreakerA = balancerCfg?.mainBreakerA ?? config.site.mainBreakerA
 
-    // Energy: cached/estimated SoC → fixed targetKWh → duty-cycle. The SoC estimate is
-    // re-anchored to the last real reading (set by maybePollVehicle on connect + during charging).
-    let capacity: number | undefined
-    const vehicle = lpCfg.vehicle ? vehicles.get(lpCfg.vehicle) : undefined
-    if (vehicle) capacity = vehicle.getCachedCapacity()
+    // Energy target: active plan → ad-hoc loadpoint target → duty-cycle (all one resolved value).
     const estimatedSocPct = estimatedSocFor(lpCfg.name, capacity, state.sessionEnergyKWh)
     const energy = resolveEnergyTarget({
       estimatedSocPct,
-      targetSocPct: state.targetSoc,
+      targetSocPct: planTarget ? planTarget.targetSocPct : state.targetSoc,
       batteryCapacityKWh: capacity,
-      targetKWh: state.targetKWh,
+      targetKWh: planTarget ? planTarget.targetKWh : state.targetKWh,
       sessionEnergyKWh: state.sessionEnergyKWh,
       hoursUntilTarget,
       maxCurrentA: state.maxCurrentA,
@@ -669,6 +703,7 @@ async function main() {
     lastTickByBalancer,
     onModeChange: handleModeChange,
     onTargetChange: handleTargetChange,
+    onPlansChanged: handlePlansChanged,
   })
   log.info({ port: config.site.port }, 'HTTP server listening')
 

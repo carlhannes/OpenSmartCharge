@@ -79,3 +79,92 @@ test('GET /api/transactions/:id returns per-sample energy as delta from meterSta
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+function planDeps(db: ReturnType<typeof openDb>, changed: { n: number }): ApiDeps {
+  return {
+    db,
+    events: { emit() {} },
+    config: { loadpoints: [{ name: 'garage', charger: 'garage' }] },
+    chargers: new Map(),
+    loadpoints: new Map([['garage', { name: 'garage' }]]),
+    onPlansChanged: () => {
+      changed.n++
+    },
+  } as unknown as ApiDeps
+}
+
+test('plan CRUD endpoints: create → list → update → delete', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-plans-'))
+  const db = openDb(dir)
+  const changed = { n: 0 }
+  try {
+    await withApi(planDeps(db, changed), async (baseUrl) => {
+      const cr = await fetch(`${baseUrl}/api/loadpoints/garage/plans`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days: ['mon', 'fri'], readyBy: '07:00', target: 80, unit: 'pct' }),
+      })
+      expect(cr.status).toBe(201)
+      const plan = (await cr.json()) as { id: string; days: string[]; enabled: boolean }
+      expect(typeof plan.id).toBe('string') // ui2 wants a string id
+      expect(plan.days).toEqual(['mon', 'fri'])
+      expect(plan.enabled).toBe(true)
+
+      const list = (await (
+        await fetch(`${baseUrl}/api/loadpoints/garage/plans`)
+      ).json()) as unknown[]
+      expect(list).toHaveLength(1)
+
+      const up = await fetch(`${baseUrl}/api/loadpoints/garage/plans/${plan.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: false }), // partial: only enabled
+      })
+      expect(up.status).toBe(200)
+      const upBody = (await up.json()) as { enabled: boolean; days: string[] }
+      expect(upBody.enabled).toBe(false)
+      expect(upBody.days).toEqual(['mon', 'fri']) // untouched
+
+      const del = await fetch(`${baseUrl}/api/loadpoints/garage/plans/${plan.id}`, {
+        method: 'DELETE',
+      })
+      expect(del.status).toBe(204)
+      expect(await (await fetch(`${baseUrl}/api/loadpoints/garage/plans`)).json()).toEqual([])
+      expect(changed.n).toBe(3) // create + update + delete each notified the lifecycle
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('POST plan rejects invalid input with 400', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-plans-'))
+  const db = openDb(dir)
+  try {
+    await withApi(planDeps(db, { n: 0 }), async (baseUrl) => {
+      const post = (body: unknown) =>
+        fetch(`${baseUrl}/api/loadpoints/garage/plans`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+      expect((await post({ days: [], readyBy: '07:00', target: 80, unit: 'pct' })).status).toBe(400)
+      expect((await post({ days: ['xx'], readyBy: '07:00', target: 80, unit: 'pct' })).status).toBe(
+        400,
+      )
+      expect((await post({ days: ['mon'], readyBy: '7am', target: 80, unit: 'pct' })).status).toBe(
+        400,
+      )
+      expect((await post({ days: ['mon'], readyBy: '07:00', target: 80, unit: 'x' })).status).toBe(
+        400,
+      )
+      expect(
+        (await post({ days: ['mon'], readyBy: '07:00', target: 150, unit: 'pct' })).status,
+      ).toBe(400) // pct > 100
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
