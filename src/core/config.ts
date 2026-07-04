@@ -110,6 +110,11 @@ export type LoadpointConfig = z.infer<typeof loadpointConfigSchema>
 export type ChargeMode = z.infer<typeof chargeModeSchema>
 export type SmartChargingConfig = z.infer<typeof smartChargingConfigSchema>
 
+// Runtime paths (env-overridable). Single-sourced here so the server (lifecycle.ts) and the
+// config-apply CLI resolve the same osc.yaml + data dir.
+export const CONFIG_PATH = process.env.OSC_CONFIG ?? './osc.yaml'
+export const DATA_DIR = process.env.OSC_DATA_DIR ?? './data'
+
 export function loadConfig(path: string): Config {
   const raw = readFileSync(path, 'utf8')
   const parsed = parse(raw)

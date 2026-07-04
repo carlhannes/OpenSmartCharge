@@ -3,7 +3,14 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDb } from './db.js'
-import { loadLoadpointStates, foldChargerStatus, type LoadpointLiveFields } from './loadpoint.js'
+import {
+  loadLoadpointStates,
+  foldChargerStatus,
+  setLoadpointTarget,
+  setLoadpointMode,
+  applyConfigToLoadpoints,
+  type LoadpointLiveFields,
+} from './loadpoint.js'
 import type { ChargerStatus } from '../sdk/charger.js'
 
 test('defaultMode seeds a new loadpoint; a persisted mode wins on restart', () => {
@@ -96,6 +103,59 @@ test('config targets (soc/time/kWh) seed a new loadpoint; persisted targets surv
     s = states.get('bare')!
     expect(s.targetSoc).toBeUndefined()
     expect(s.targetKWh).toBeUndefined()
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('setLoadpointTarget partial update leaves the other targets unchanged', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-lp-'))
+  const db = openDb(dir)
+  try {
+    loadLoadpointStates(db, [
+      { name: 'lp', defaultMode: 'smart', targetSoc: 80, targetTime: '07:00', targetKWh: 40 },
+    ])
+    // Update only targetSoc — targetTime/targetKWh must survive (they were NULLed before the fix).
+    setLoadpointTarget(db, 'lp', 55, undefined, undefined)
+    const row = db
+      .prepare('SELECT target_soc, target_time, target_kwh FROM loadpoint_state WHERE name = ?')
+      .get('lp') as { target_soc: number; target_time: string; target_kwh: number }
+    expect(row.target_soc).toBe(55)
+    expect(row.target_time).toBe('07:00')
+    expect(row.target_kwh).toBe(40)
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('applyConfigToLoadpoints declaratively overwrites persisted mode + targets from config', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-lp-'))
+  const db = openDb(dir)
+  try {
+    // Seed, then diverge the DB from config the way runtime UI/API changes would.
+    loadLoadpointStates(db, [{ name: 'lp', defaultMode: 'disabled', targetSoc: 80, targetKWh: 40 }])
+    setLoadpointMode(db, 'lp', 'fast')
+    setLoadpointTarget(db, 'lp', 55, undefined, undefined)
+    // Declaratively re-apply config: the DB must match the file again (overwrite, not merge).
+    applyConfigToLoadpoints(db, [
+      { name: 'lp', defaultMode: 'smart', targetSoc: 70, targetTime: '06:00' },
+    ])
+    const row = db
+      .prepare(
+        'SELECT mode, target_soc, target_time, target_kwh FROM loadpoint_state WHERE name = ?',
+      )
+      .get('lp') as {
+      mode: string
+      target_soc: number | null
+      target_time: string | null
+      target_kwh: number | null
+    }
+    expect(row.mode).toBe('smart')
+    expect(row.target_soc).toBe(70)
+    expect(row.target_time).toBe('06:00')
+    expect(row.target_kwh).toBeNull() // omitted in config → cleared (declarative, unlike a partial update)
   } finally {
     db.close()
     rmSync(dir, { recursive: true, force: true })

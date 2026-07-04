@@ -176,7 +176,7 @@ The frontend needs these backend contracts to exist. Summarized; detailed in Par
 | **Automatic car detection** (0.3.0) | ❌ | Correlation heuristic; needs connector/plug state — Skoda gives a coarse `state` enum currently **discarded** (`vehicle-skoda/index.ts` keeps only `=== 'CHARGING'`); re-expose it |
 | **Climate-triggered charging** (0.3.0) | ❌ **Zero** climate support anywhere (grep confirms) | Skoda climatisation endpoint (port from evcc); extend **Vehicle interface** with climate/precondition + connector state; loadpoint trigger rule + guardrail |
 | **Estimated cost in history** | ⚠️ `transactions` + `meter_values` stored (`db.ts`); no cost | Join session energy × tariff price-at-time → cost; small aggregation endpoint |
-| **Trustworthy live values** | ⚠️ Known bugs: `currentA:0` while charging, `sessionEnergy`=lifetime register, `defaultMode` ignored, hourly (not 15-min) price resolution (`ROADMAP.md` follow-ups) | Fix as **foundation** before redesign lands (some partially fixed) |
+| **Trustworthy live values** | ✅ Resolved (2026-07-04, see `ROADMAP.md`): live `currentA`/`sessionEnergy` now survive restart/reconnect; session energy is the delta; `defaultMode`/targets seed the DB with a declarative `config:apply` escape hatch | Foundation done — redesign can rely on `/api/loadpoints` live values |
 
 **Headline:** the single biggest gap is that **config is immutable at runtime** — onboarding + live plan/charger editing is net-new architecture, not a UI skin. The single biggest *pleasant surprise* is that **capacity-based durability already works**, so km/% offline behavior mostly reuses the existing estimator.
 
@@ -209,7 +209,7 @@ The frontend needs these backend contracts to exist. Summarized; detailed in Par
 
 **W5 — Cost in history.** Aggregation endpoint joining `meter_values`/`transactions` energy with `tariff_slots` price-at-time → estimated cost. Read-only; no schema change beyond a query.
 
-**W6 — Foundation fixes (do first).** Clear the known ROADMAP bugs the redesign will expose: `currentA:0` while charging, `sessionEnergy` = session delta (not lifetime register), honor `defaultMode`, 15-min (not hourly) price resolution, `dev:ui` blank page, reconnect health refresh (see `ROADMAP.md` follow-ups).
+**W6 — Foundation fixes.** ✅ Done (2026-07-04, see `ROADMAP.md` "Resolved"): live `currentA`/`sessionEnergy` survive restart/reconnect, session energy is the delta, `defaultMode`/targets seed the DB (+ declarative `config:apply`), `dev:ui` blank page, reconnect health refresh, and the off-boundary smart-charge price bug. (Note: Swedish `elprisetjustnu` prices are genuinely 15-min; the "hourly" note applied to Elering/Nord Pool day-ahead.)
 
 ## 0.3.0 workstreams
 

@@ -211,6 +211,18 @@ loadpoints:
 
 The mode can be changed at any time via the UI, REST, or MQTT — it takes effect immediately (an on-demand control-loop tick) and otherwise on the next tick (default 30 s).
 
+### Config vs. runtime state (persist-wins + `config:apply`)
+
+`defaultMode` and the `targetSoc`/`targetTime`/`targetKWh` fields are **seeds**, not live bindings. The database is the source of truth at runtime: a loadpoint's mode and targets are persisted, and changes you make via the UI/REST/MQTT **survive restarts and win over the config file**. So config values only take effect the *first* time a loadpoint is seen (a fresh DB); editing them in `osc.yaml` afterwards does nothing on its own.
+
+To declaratively re-apply the config file onto the database — overwriting the persisted mode + targets (a target omitted in config is cleared) — run:
+
+```bash
+npm run config:apply    # reads osc.yaml (OSC_CONFIG) → writes data/osc.db (OSC_DATA_DIR)
+```
+
+It prints a before→after diff per loadpoint and exits; it does not start the server. Use it after editing `osc.yaml`, or to reset runtime tweaks back to the declared config. (`maxA` and `autoStart` are re-read from config on every boot and are not persisted.)
+
 ## Multiple grids and chargers
 
 All sections are lists. Add more entries to support multiple tariff zones, circuits, or chargers:

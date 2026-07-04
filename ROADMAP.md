@@ -201,6 +201,14 @@ Smart mode now works with **any subset of dependencies degraded**, via pure reso
 - [x] **Household-load hourly rollup** (`smart-charging/rollup.ts`) feeds the worst-case-current fallback; `parseTargetTime` + night-window are now Stockholm-local (were server-local).
 - [x] Verified live on the real Zaptec (no balancer, no vehicle): resolved `{energy: duty-cycle, price: live-tariff, current: static-tod}`, gated on the SE4 price.
 
+### Resolved (correctness pass, 2026-07-04)
+
+- [x] **Smart mode ignored price when a control tick landed off a 15-min boundary.** `decideShouldCharge` found no planned slot covering "now" (plan slots start at the *next* boundary) and defaulted to charge — so smart mode charged ~14 of every 15 minutes regardless of price. Now falls back to the imminent slot's decision. (`f77674e`)
+- [x] **Live current/energy zeroed on OSC restart or a bare charger WS reconnect.** `activeTransactionId` was in-memory only; now rehydrated from the open transaction on connect (`findOpenTransaction`) + MeterValues trust the charger's own `transactionId`. Also repairs `remoteStop` after a reconnect.
+- [x] **Setting one target NULLed the others.** `POST /target {soc}` wiped `targetTime`/`targetKWh`; `setLoadpointTarget` + `handleTargetChange` now merge (undefined = leave unchanged).
+- [x] **Declarative `config:apply` CLI.** `npm run config:apply` overwrites persisted loadpoint mode/targets from `osc.yaml` (the DB remains the runtime source of truth; boot still persist-wins). See `docs/config.md`.
+- [x] **Latent hardening:** transactions insert with the OCPP id as PK directly (no fragile insert-then-UPDATE remap); `parseMeterValue` honours `sampledValue.unit` (kWh vs Wh); `/api/transactions/:id` per-sample energy is the session delta, not the lifetime register.
+
 ### Remaining / nice-to-have
 
 - [ ] Exclude `*.test.ts` + `mock-charger.ts` from the production build (they currently compile into `dist/` — harmless dead weight). Add to `tsconfig.json`/build config.

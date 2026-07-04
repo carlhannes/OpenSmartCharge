@@ -13,6 +13,7 @@
     "build:ui": "vite build --config src/ui/vite.config.ts",
     "preview:ui": "vite preview --config src/ui/vite.config.ts",
     "start": "node dist/core/lifecycle.js",
+    "config:apply": "tsx src/cli/apply-config.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/ui/tsconfig.json",
     "lint": "eslint src",
     "format": "prettier --write src",

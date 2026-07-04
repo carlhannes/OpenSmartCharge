@@ -6,12 +6,13 @@ import '../modules/meter-tibber-pulse/index.js'
 import '../modules/balancer-mqtt-circuit/index.js'
 import '../modules/vehicle-skoda/index.js'
 
-import { loadConfig } from './config.js'
+import { loadConfig, CONFIG_PATH, DATA_DIR } from './config.js'
 import { openDb } from './db.js'
 import { createLogger } from './logger.js'
 import { loadPlugins } from './plugin-loader.js'
 import {
   loadLoadpointStates,
+  configToLoadpointInits,
   setLoadpointMode,
   setLoadpointTarget,
   foldChargerStatus,
@@ -51,8 +52,6 @@ import {
   type LpDecision,
 } from './control-loop.js'
 
-const CONFIG_PATH = process.env.OSC_CONFIG ?? './osc.yaml'
-const DATA_DIR = process.env.OSC_DATA_DIR ?? './data'
 const PLUGINS_DIR = process.env.OSC_PLUGINS_DIR ?? './plugins'
 
 async function main() {
@@ -221,21 +220,8 @@ async function main() {
     log.info({ balancer: balancerCfg.name, type: balancerCfg.type }, 'balancer module created')
   }
 
-  // Determine maxA per loadpoint from the charger config
-  const loadpointInits = config.loadpoints.map((lp) => {
-    const chargerCfg = config.chargers.find((c) => c.name === lp.charger)
-    return {
-      name: lp.name,
-      maxCurrentA: (chargerCfg as { maxA?: number } | undefined)?.maxA ?? 16,
-      autoStart: lp.autoStart,
-      defaultMode: lp.defaultMode,
-      targetSoc: lp.targetSoc,
-      targetTime: lp.targetTime,
-      targetKWh: lp.targetKWh,
-    }
-  })
-
-  const loadpointStates = loadLoadpointStates(db, loadpointInits)
+  // maxA per loadpoint comes from the referenced charger config (see configToLoadpointInits).
+  const loadpointStates = loadLoadpointStates(db, configToLoadpointInits(config))
   log.info({ loadpoints: [...loadpointStates.keys()] }, 'loadpoints initialized')
 
   // Group loadpoints into circuits once (balancer-shared vs bare). The single control loop
@@ -290,11 +276,18 @@ async function main() {
   ): Promise<void> {
     const state = loadpointStates.get(name)
     if (!state) return
-    state.targetSoc = soc
-    state.targetTime = time
-    state.targetKWh = kwh
+    // Merge: undefined = "leave unchanged", so a partial update (e.g. just soc) doesn't wipe the
+    // other targets. Mirrors setLoadpointTarget's COALESCE in the DB.
+    if (soc !== undefined) state.targetSoc = soc
+    if (time !== undefined) state.targetTime = time
+    if (kwh !== undefined) state.targetKWh = kwh
     setLoadpointTarget(db, name, soc, time, kwh)
-    events.emit('loadpoint.target', { name, targetSoc: soc, targetTime: time, targetKWh: kwh })
+    events.emit('loadpoint.target', {
+      name,
+      targetSoc: state.targetSoc,
+      targetTime: state.targetTime,
+      targetKWh: state.targetKWh,
+    })
     // A new target changes the plan — tick the circuit now instead of waiting for the interval.
     const circuit = circuitForLoadpoint(circuits, name)
     if (circuit) void circuitTick(circuit)

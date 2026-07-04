@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import type { ChargeMode } from './config.js'
+import type { ChargeMode, Config } from './config.js'
 import type { ChargerStatus } from '../sdk/charger.js'
 
 export interface LoadpointState {
@@ -105,12 +105,59 @@ export function loadLoadpointStates(
   return states
 }
 
+// Map the parsed config into loadpoint seed/init records (maxA comes from the referenced charger).
+// Single-sourced so lifecycle boot and the config-apply CLI build identical inits.
+export function configToLoadpointInits(config: Config): LoadpointInit[] {
+  return config.loadpoints.map((lp) => {
+    const chargerCfg = config.chargers.find((c) => c.name === lp.charger)
+    return {
+      name: lp.name,
+      maxCurrentA: (chargerCfg as { maxA?: number } | undefined)?.maxA ?? 16,
+      autoStart: lp.autoStart,
+      defaultMode: lp.defaultMode,
+      targetSoc: lp.targetSoc,
+      targetTime: lp.targetTime,
+      targetKWh: lp.targetKWh,
+    }
+  })
+}
+
+// Declaratively push config defaults (mode + targets) into loadpoint_state, OVERWRITING the
+// persisted values. This is the deliberate escape hatch for the persist-wins boot semantics
+// (loadLoadpointStates leaves existing rows untouched): the DB is the runtime source of truth, and
+// this is how you re-assert osc.yaml onto it — run via the `config:apply` CLI, never on boot.
+// Declarative: a target omitted in config is cleared (set to NULL), so the DB matches the file.
+export function applyConfigToLoadpoints(db: DatabaseSync, inits: LoadpointInit[]): void {
+  const upsert = db.prepare(
+    `INSERT INTO loadpoint_state (name, mode, target_soc, target_time, target_kwh)
+       VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(name) DO UPDATE SET
+       mode        = excluded.mode,
+       target_soc  = excluded.target_soc,
+       target_time = excluded.target_time,
+       target_kwh  = excluded.target_kwh,
+       updated_at  = datetime('now')`,
+  )
+  for (const init of inits) {
+    upsert.run(
+      init.name,
+      init.defaultMode ?? 'smart',
+      init.targetSoc ?? null,
+      init.targetTime ?? null,
+      init.targetKWh ?? null,
+    )
+  }
+}
+
 export function setLoadpointMode(db: DatabaseSync, name: string, mode: ChargeMode): void {
   db.prepare(
     `UPDATE loadpoint_state SET mode = ?, updated_at = datetime('now') WHERE name = ?`,
   ).run(mode, name)
 }
 
+// Partial update: an `undefined` field is left unchanged (COALESCE keeps the existing value), so
+// setting one target — e.g. just `targetSoc` — no longer NULLs out `targetTime`/`targetKWh`.
+// (Explicit clearing of a target is out of scope; use the config-apply CLI or a fresh DB for that.)
 export function setLoadpointTarget(
   db: DatabaseSync,
   name: string,
@@ -119,6 +166,11 @@ export function setLoadpointTarget(
   targetKWh?: number,
 ): void {
   db.prepare(
-    `UPDATE loadpoint_state SET target_soc = ?, target_time = ?, target_kwh = ?, updated_at = datetime('now') WHERE name = ?`,
+    `UPDATE loadpoint_state
+       SET target_soc  = COALESCE(?, target_soc),
+           target_time = COALESCE(?, target_time),
+           target_kwh  = COALESCE(?, target_kwh),
+           updated_at  = datetime('now')
+     WHERE name = ?`,
   ).run(targetSoc ?? null, targetTime ?? null, targetKWh ?? null, name)
 }
