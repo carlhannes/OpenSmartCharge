@@ -28,18 +28,27 @@ import {
 import { getOcppServer } from '../modules/charger-ocpp16/index.js'
 import { startServer } from '../server/index.js'
 import { startMqttBridge } from '../server/mqtt-bridge.js'
-import { plan } from './planner.js'
-import { chargeRateKW, DEFAULT_CHARGING_EFFICIENCY, DUTY_CYCLE_FALLBACK } from './electrical.js'
 import type { Charger } from '../sdk/charger.js'
-import type { Tariff } from '../sdk/tariff.js'
+import type { Tariff, TariffSlot } from '../sdk/tariff.js'
 import type { MeterReader, MeterSnapshot } from '../sdk/meter-reader.js'
-import { recordHouseholdLoad, pruneHouseholdLoad } from './smart-charging/rollup.js'
-import { stockholmDateKey } from '../sdk/stockholm-time.js'
+import { recordHouseholdLoad, pruneHouseholdLoad, worstCaseLoadA } from './smart-charging/rollup.js'
+import { stockholmDateKey, stockholmHour, msUntilStockholmTime } from '../sdk/stockholm-time.js'
 import type { Balancer, LoadpointSnapshot } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import type { LoadpointState } from './loadpoint.js'
-import type { ChargeMode } from './config.js'
+import type { ChargeMode, LoadpointConfig } from './config.js'
 import { estimateSoc } from './estimator.js'
+import { resolveEnergyTarget } from './smart-charging/energy.js'
+import { resolvePriceCurve } from './smart-charging/price.js'
+import { resolveCurrentBudget } from './smart-charging/current.js'
+import { decideShouldCharge } from './smart-charging/decide.js'
+import {
+  buildCircuits,
+  circuitForLoadpoint,
+  planCircuit,
+  type Circuit,
+  type LpDecision,
+} from './control-loop.js'
 
 const CONFIG_PATH = process.env.OSC_CONFIG ?? './osc.yaml'
 const DATA_DIR = process.env.OSC_DATA_DIR ?? './data'
@@ -227,6 +236,10 @@ async function main() {
   const loadpointStates = loadLoadpointStates(db, loadpointInits)
   log.info({ loadpoints: [...loadpointStates.keys()] }, 'loadpoints initialized')
 
+  // Group loadpoints into circuits once (balancer-shared vs bare). The single control loop
+  // ticks every circuit regardless of whether a balancer is configured.
+  const circuits = buildCircuits(config)
+
   // Wire charger status events → loadpoint state → event bus
   for (const lpCfg of config.loadpoints) {
     const charger = chargers.get(lpCfg.charger)
@@ -259,20 +272,12 @@ async function main() {
     setLoadpointMode(db, name, mode)
     events.emit('loadpoint.mode', { name, mode })
 
-    // Trigger an immediate balancer tick so the charger responds within ~1 s
-    // rather than waiting up to intervalSec
-    const lpCfg = config.loadpoints.find((l) => l.name === name)
-    if (lpCfg?.balancer) {
-      void runBalancerTick(lpCfg.balancer)
-    } else if (mode === 'disabled') {
-      // No balancer configured; apply 0 directly
-      const charger = chargers.get(lpCfg?.charger ?? '')
-      if (charger) await charger.setCurrentLimit(0).catch(() => {})
-    } else {
-      // No balancer: apply max for smart/fast
-      const charger = chargers.get(lpCfg?.charger ?? '')
-      if (charger) await charger.setCurrentLimit(state.maxCurrentA).catch(() => {})
-    }
+    // Tick this loadpoint's circuit immediately so the charger responds within ~1 s rather
+    // than waiting for the next control interval. The tick governs current for ALL modes —
+    // there is no longer a no-balancer "just apply max" path (which made smart mode ignore
+    // price whenever no balancer was configured).
+    const circuit = circuitForLoadpoint(circuits, name)
+    if (circuit) void circuitTick(circuit)
   }
 
   async function handleTargetChange(name: string, soc?: number, time?: string): Promise<void> {
@@ -329,136 +334,242 @@ async function main() {
     }
   }
 
-  // Decide whether a smart-mode loadpoint should be charging in the current slot.
-  // Uses the planner to pick cheapest slots; degrades to true when no tariff data.
-  async function computeShouldChargeNow(lpName: string): Promise<boolean> {
-    const state = loadpointStates.get(lpName)
-    if (!state) return true
-    const lpCfg = config.loadpoints.find((l) => l.name === lpName)
-    if (!lpCfg?.tariff) return true
-    const tariff = tariffs.get(lpCfg.tariff)
-    if (!tariff || tariff.health() === 'unavailable') return true
-
-    const now = new Date()
-    const targetTime = state.targetTime
-      ? parseTargetTime(state.targetTime)
-      : new Date(Date.now() + 24 * 3600_000)
-    const hoursUntilTarget = Math.max(0.25, (targetTime.getTime() - now.getTime()) / 3_600_000)
-
-    let priceSlots
-    try {
-      priceSlots = await tariff.prices(now, targetTime)
-    } catch {
-      return true
-    }
-    if (!priceSlots || priceSlots.length === 0) return true
-
-    // Charge rate depends on the loadpoint's circuit phase count (1–3); fall back to
-    // 3-phase (the balancer schema default) when no balancer is wired.
-    const phases = config.balancers.find((b) => b.name === lpCfg.balancer)?.phases ?? 3
-
-    // Use real SoC if a vehicle is wired and data is available; fall back to duty-cycle heuristic
-    let requiredKWh: number
-    const vehicle = lpCfg.vehicle ? vehicles.get(lpCfg.vehicle) : undefined
-    const capacity = vehicle?.getCachedCapacity()
-    let currentSoc: number | undefined
-    if (vehicle && capacity) {
-      try {
-        currentSoc = (await vehicle.getData()).soc
-      } catch {
-        // no data yet
+  // Freshest household load (max phase current) from any meter reader with a recent snapshot.
+  // Feeds the current resolver's live rung — independent of whether a balancer is configured.
+  function freshMeterMaxPhaseA(now: Date): number | undefined {
+    for (const r of meterReaders.values()) {
+      const s = r.latest()
+      if (s && now.getTime() - s.timestamp.getTime() < 60_000) {
+        return Math.max(s.i1A ?? 0, s.i2A ?? 0, s.i3A ?? 0)
       }
     }
-    if (currentSoc !== undefined && capacity && state.targetSoc) {
-      const remaining = Math.max(0, state.targetSoc - currentSoc)
-      requiredKWh = ((remaining / 100) * capacity) / DEFAULT_CHARGING_EFFICIENCY
-      ctx.log.debug(
-        { lpName, currentSoc, targetSoc: state.targetSoc, capacity, requiredKWh },
-        'skoda SoC-based requiredKWh',
-      )
-    } else {
-      // Fallback: duty-cycle heuristic when vehicle API unavailable
-      const rateKW = chargeRateKW(state.maxCurrentA, phases)
-      requiredKWh = Math.max(1, hoursUntilTarget * rateKW * DUTY_CYCLE_FALLBACK)
-    }
-
-    // Already at target SoC — no need to charge
-    if (requiredKWh <= 0) return false
-
-    const planned = plan({
-      requiredKWh,
-      targetTime,
-      maxCurrentA: state.maxCurrentA,
-      phases,
-      priceSlots,
-    })
-    const currentSlot = planned.find((s) => s.start <= now && s.end > now)
-    return currentSlot?.shouldCharge ?? true
+    return undefined
   }
 
-  // Tick function for a specific balancer — called on the interval and on mode changes.
+  // Average price per Stockholm hour-of-day over the last N days (price fallback rung). Reuses
+  // the tariff's own cache via prices() — no zone plumbing needed. Only computed when live
+  // prices are missing.
+  async function historicalPriceAvg(
+    tariff: Tariff,
+    now: Date,
+    days: number,
+  ): Promise<Map<number, number> | undefined> {
+    const from = new Date(now.getTime() - days * 24 * 3600_000)
+    const past = await tariff.prices(from, now).catch(() => [] as TariffSlot[])
+    if (past.length === 0) return undefined
+    const acc = new Map<number, { sum: number; n: number }>()
+    for (const s of past) {
+      const h = stockholmHour(s.start)
+      const cur = acc.get(h) ?? { sum: 0, n: 0 }
+      cur.sum += s.pricePerKWh
+      cur.n += 1
+      acc.set(h, cur)
+    }
+    return new Map([...acc].map(([h, { sum, n }]) => [h, sum / n]))
+  }
+
+  interface ResolvedLoadpoint {
+    state: LoadpointState
+    shouldChargeNow?: boolean
+    budgetA: number
+    pricesAvailable: boolean
+    sources: { energy: string; price: string; current: string }
+  }
+
+  // Resolve a loadpoint's charge decision + current budget through the degradation ladders.
+  // Every input comes back as a guaranteed value, so nothing here branches on "is X degraded".
+  async function resolveLoadpoint(
+    lpCfg: LoadpointConfig,
+    now: Date,
+  ): Promise<ResolvedLoadpoint | undefined> {
+    const state = loadpointStates.get(lpCfg.name)
+    if (!state) return undefined
+    const sc = config.smartCharging
+    const nightWindow = sc.nightWindow
+
+    const targetTime = state.targetTime
+      ? parseTargetTime(state.targetTime)
+      : new Date(now.getTime() + 24 * 3600_000)
+    const hoursUntilTarget = Math.max(0.25, (targetTime.getTime() - now.getTime()) / 3_600_000)
+
+    const balancerCfg = lpCfg.balancer
+      ? config.balancers.find((b) => b.name === lpCfg.balancer)
+      : undefined
+    const chargerCfg = config.chargers.find((c) => c.name === lpCfg.charger) as
+      | { phases?: number }
+      | undefined
+    const phases = balancerCfg?.phases ?? chargerCfg?.phases ?? 3
+    // A balancer carries its own circuit fuse; a bare loadpoint falls back to the site fuse.
+    const mainBreakerA = balancerCfg?.mainBreakerA ?? config.site.mainBreakerA
+
+    // Energy: cached/estimated SoC → fixed targetKWh → duty-cycle.
+    let estimatedSocPct: number | undefined
+    let capacity: number | undefined
+    const vehicle = lpCfg.vehicle ? vehicles.get(lpCfg.vehicle) : undefined
+    if (vehicle) {
+      capacity = vehicle.getCachedCapacity()
+      try {
+        const soc = (await vehicle.getData()).soc
+        if (soc !== undefined) estimatedSocPct = estimateSoc(soc, state.sessionEnergyKWh, capacity)
+      } catch {
+        // no vehicle data yet
+      }
+    }
+    const energy = resolveEnergyTarget({
+      estimatedSocPct,
+      targetSocPct: state.targetSoc,
+      batteryCapacityKWh: capacity,
+      targetKWh: state.targetKWh,
+      sessionEnergyKWh: state.sessionEnergyKWh,
+      hoursUntilTarget,
+      maxCurrentA: state.maxCurrentA,
+      phases,
+    })
+
+    // Price: live tariff → historical average → static night window.
+    const tariff = lpCfg.tariff ? tariffs.get(lpCfg.tariff) : undefined
+    let livePrices: TariffSlot[] | undefined
+    if (tariff && tariff.health() !== 'unavailable') {
+      livePrices = await tariff.prices(now, targetTime).catch(() => undefined)
+    }
+    const historicalAvgByHour =
+      (!livePrices || livePrices.length === 0) && tariff
+        ? await historicalPriceAvg(tariff, now, sc.historicalDays)
+        : undefined
+    const price = resolvePriceCurve({ livePrices, historicalAvgByHour, now, targetTime, nightWindow })
+
+    // Current budget: live meter headroom → historical worst-case → time-of-day static.
+    const current = resolveCurrentBudget({
+      now,
+      maxCurrentA: state.maxCurrentA,
+      mainBreakerA,
+      liveMaxPhaseA: freshMeterMaxPhaseA(now),
+      ownDrawA: Math.max(state.currentA, lastCommandedA.get(lpCfg.name) ?? 0),
+      worstCaseLoadA:
+        mainBreakerA != null ? (worstCaseLoadA(db, now, sc.historicalDays) ?? undefined) : undefined,
+      nightWindow,
+      nightMarginA: sc.nightMarginA,
+      daytimeFraction: sc.daytimeFraction,
+    })
+
+    let shouldChargeNow: boolean | undefined
+    if (state.mode === 'smart') {
+      shouldChargeNow = decideShouldCharge({
+        requiredKWh: energy.value,
+        now,
+        targetTime,
+        planRateA: Math.min(state.maxCurrentA, current.value),
+        phases,
+        priceSlots: price.value,
+      })
+    }
+
+    return {
+      state,
+      shouldChargeNow,
+      budgetA: current.value,
+      pricesAvailable: !price.degraded,
+      sources: { energy: energy.source, price: price.source, current: current.source },
+    }
+  }
+
+  // Latest balancer output (for the REST balancer view) + per-circuit concurrency guards.
   const lastTickByBalancer = new Map<
     string,
     { allocations: Record<string, number>; freeAmps: number }
   >()
   const tickSlots = new Map<string, { running: boolean; rerun: boolean }>()
 
-  async function runBalancerTick(balancerName: string): Promise<void> {
-    // Concurrency guard: if a tick is already running for this balancer, mark a rerun and
-    // return. The in-flight tick will re-invoke on completion so the latest state is applied.
-    const slot = tickSlots.get(balancerName) ?? { running: false, rerun: false }
+  // Tick one circuit: resolve each loadpoint, coordinate the applied amps through the balancer
+  // if the circuit has one (else use the resolved budget directly), then command each charger
+  // through the deadband. Runs on the control interval and on mode changes.
+  async function circuitTick(circuit: Circuit): Promise<void> {
+    // Concurrency guard keyed by circuit id: a slow tick marks a rerun instead of overlapping,
+    // so the newest state is applied without two ticks racing on the same charger.
+    const slot = tickSlots.get(circuit.id) ?? { running: false, rerun: false }
     if (slot.running) {
       slot.rerun = true
-      tickSlots.set(balancerName, slot)
+      tickSlots.set(circuit.id, slot)
       return
     }
     slot.running = true
-    tickSlots.set(balancerName, slot)
+    tickSlots.set(circuit.id, slot)
 
     try {
-      const balancer = balancers.get(balancerName)
-      if (!balancer) return
-
-      const lpCfgs = config.loadpoints.filter((l) => l.balancer === balancerName)
-      const snaps = await Promise.all(
-        lpCfgs.map(async (lpCfg) => {
-          const state = loadpointStates.get(lpCfg.name)!
-          const should =
-            state.mode === 'smart' ? await computeShouldChargeNow(lpCfg.name) : undefined
-          const tariff = lpCfg.tariff ? tariffs.get(lpCfg.tariff) : undefined
-          const pricesAvailable = !!tariff && tariff.health() !== 'unavailable'
-          return buildSnapshot(state, lpCfg.vehicle, should, pricesAvailable)
-        }),
+      const now = new Date()
+      const lpCfgs = circuit.kind === 'balancer' ? circuit.loadpoints : [circuit.loadpoint]
+      const resolved = (await Promise.all(lpCfgs.map((lp) => resolveLoadpoint(lp, now)))).filter(
+        (r): r is ResolvedLoadpoint => r !== undefined,
       )
+      if (resolved.length === 0) return
 
-      const out = await balancer.tick({ loadpoints: snaps, timestamp: new Date() })
+      // Surface WHY each loadpoint decided as it did — the key question in a degradation-first
+      // system (which rung of each ladder produced the value).
+      for (const r of resolved) {
+        log.debug(
+          {
+            loadpoint: r.state.name,
+            mode: r.state.mode,
+            shouldChargeNow: r.shouldChargeNow,
+            budgetA: r.budgetA,
+            sources: r.sources,
+          },
+          'circuit resolve',
+        )
+      }
 
-      for (const [lpId, amps] of out.allocations) {
+      // Balancer circuits coordinate the applied amps across their loadpoints via allocate();
+      // bare circuits take the resolved budget directly (planCircuit).
+      let allocations: Map<string, number> | null = null
+      if (circuit.kind === 'balancer') {
+        const balancer = balancers.get(circuit.balancerName)
+        if (!balancer) return
+        const snaps = await Promise.all(
+          resolved.map((r) => {
+            const lp = lpCfgs.find((l) => l.name === r.state.name)!
+            return buildSnapshot(r.state, lp.vehicle, r.shouldChargeNow, r.pricesAvailable)
+          }),
+        )
+        const out = await balancer.tick({ loadpoints: snaps, timestamp: now })
+        allocations = out.allocations
+        const allocRecord = Object.fromEntries(out.allocations)
+        const freeAmps = out.freeAmps ?? 0
+        lastTickByBalancer.set(circuit.balancerName, { allocations: allocRecord, freeAmps })
+        events.emit('balancer.tick', {
+          name: circuit.balancerName,
+          allocations: allocRecord,
+          freeAmps,
+          health: balancer.health(),
+        })
+        updateHealth(health, circuit.balancerName, balancer.health())
+      }
+
+      const decisions: LpDecision[] = resolved.map((r) => ({
+        loadpointName: r.state.name,
+        mode: r.state.mode,
+        shouldChargeNow: r.shouldChargeNow,
+        budgetA: r.budgetA,
+        lastCommandedA: lastCommandedA.get(r.state.name),
+      }))
+      const { writes } = planCircuit(decisions, allocations, config.smartCharging.deadbandA)
+      for (const [lpId, amps] of writes) {
         const charger = chargerLimitMap.get(lpId)
         if (charger) {
           await charger.setCurrentLimit(amps).catch(() => {})
-          lastCommandedA.set(lpId, amps)
+          lastCommandedA.set(lpId, amps) // record only actual writes → allocator credit-back stays honest
         }
       }
-
-      const allocRecord = Object.fromEntries(out.allocations)
-      const freeAmps = out.freeAmps ?? 0
-      lastTickByBalancer.set(balancerName, { allocations: allocRecord, freeAmps })
-
-      events.emit('balancer.tick', {
-        name: balancerName,
-        allocations: allocRecord,
-        freeAmps,
-        health: balancer.health(),
-      })
-      updateHealth(health, balancerName, balancer.health())
     } finally {
       slot.running = false
       if (slot.rerun) {
         slot.rerun = false
-        void runBalancerTick(balancerName)
+        void circuitTick(circuit)
       }
     }
+  }
+
+  async function runAllCircuits(): Promise<void> {
+    await Promise.all(circuits.map((c) => circuitTick(c)))
   }
 
   // HTTP server (REST + SSE)
@@ -526,25 +637,24 @@ async function main() {
     log.info({ host: config.mqtt.host }, 'MQTT bridge starting')
   }
 
-  // Start per-balancer tick loops
-  const balancerIntervals: ReturnType<typeof setInterval>[] = []
-  for (const balancerCfg of config.balancers) {
-    if (!balancers.has(balancerCfg.name)) continue
-    void runBalancerTick(balancerCfg.name) // immediate first tick
-    balancerIntervals.push(
-      setInterval(() => void runBalancerTick(balancerCfg.name), balancerCfg.intervalSec * 1000),
-    )
-    log.info(
-      { balancer: balancerCfg.name, intervalSec: balancerCfg.intervalSec },
-      'balancer tick loop started',
-    )
-  }
+  // Single control loop: one damped tick drives every circuit (balancer-backed or bare), so
+  // smart mode works with or without a balancer. Interval is kept slow (default 30 s) because a
+  // charger/car takes 15–30 s to act on a new limit — ticking faster just makes it oscillate.
+  void runAllCircuits() // immediate first tick
+  const controlInterval = setInterval(
+    () => void runAllCircuits(),
+    config.smartCharging.controlIntervalSec * 1000,
+  )
+  log.info(
+    { intervalSec: config.smartCharging.controlIntervalSec, circuits: circuits.length },
+    'control loop started',
+  )
 
   log.info('OpenSmartCharge ready')
 
   const shutdown = () => {
     log.info('shutting down gracefully')
-    for (const t of balancerIntervals) clearInterval(t)
+    clearInterval(controlInterval)
     httpServer.close()
     if (ocppServer) void ocppServer.close()
     for (const b of balancers.values()) void b.stop()
@@ -559,13 +669,13 @@ async function main() {
   process.once('SIGTERM', shutdown)
 }
 
-// Parse "HH:MM" into the next occurrence of that local time (today or tomorrow).
+// Parse "HH:MM" into the next occurrence of that time in Stockholm-local wall-clock (today or
+// tomorrow) — matching how Nord Pool prices and the night window are reasoned about. Previously
+// used server-local setHours, which was only correct when the host TZ happened to be Stockholm.
 function parseTargetTime(hhmm: string): Date {
   const [h, m] = hhmm.split(':').map(Number)
-  const d = new Date()
-  d.setHours(h, m, 0, 0)
-  if (d <= new Date()) d.setDate(d.getDate() + 1)
-  return d
+  const now = new Date()
+  return new Date(now.getTime() + msUntilStockholmTime(now, h, m))
 }
 
 main().catch((err) => {
