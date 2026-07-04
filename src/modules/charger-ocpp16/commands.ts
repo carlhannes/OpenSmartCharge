@@ -111,7 +111,10 @@ export interface ConfigurationResp {
   unknownKey?: string[]
 }
 
-export async function getConfiguration(client: Client, keys?: string[]): Promise<ConfigurationResp> {
+export async function getConfiguration(
+  client: Client,
+  keys?: string[],
+): Promise<ConfigurationResp> {
   return (await client.call('GetConfiguration', keys ? { key: keys } : {})) as ConfigurationResp
 }
 

@@ -10,11 +10,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { ModuleCtx, ModuleHealth } from './types.js'
 import type { Tariff, TariffSlot } from './tariff.js'
-import {
-  stockholmParts,
-  msUntilStockholmTime,
-  msUntilStockholmMidnight,
-} from './stockholm-time.js'
+import { stockholmParts, msUntilStockholmTime, msUntilStockholmMidnight } from './stockholm-time.js'
 
 // Nord Pool day-ahead prices publish ~13:00 CET; wait until 13:15 Stockholm to fetch.
 const PUBLISH_HOUR = 13
@@ -41,7 +37,13 @@ export function upsertSlots(db: DatabaseSync, zone: string, slots: TariffSlot[])
   )
   db.exec('BEGIN')
   for (const slot of slots) {
-    stmt.run(zone, slot.start.toISOString(), slot.end.toISOString(), slot.pricePerKWh, slot.currency)
+    stmt.run(
+      zone,
+      slot.start.toISOString(),
+      slot.end.toISOString(),
+      slot.pricePerKWh,
+      slot.currency,
+    )
   }
   db.exec('COMMIT')
 }
@@ -193,7 +195,10 @@ export function createNordpoolDayAheadTariff(ctx: ModuleCtx, opts: NordpoolTarif
     } catch (err) {
       if (err instanceof ZoneNotFoundError) {
         // Permanent: wrong zone configured — don't retry, just log.
-        ctx.log.error({ err, zone, provider }, 'nordpool tariff: zone not found — check your config')
+        ctx.log.error(
+          { err, zone, provider },
+          'nordpool tariff: zone not found — check your config',
+        )
         health = computeTariffHealth(ctx.db, zone)
         return
       }

@@ -30,9 +30,14 @@ export function buildCircuits(config: Config): Circuit[] {
 }
 
 /** The circuit a given loadpoint belongs to (for an on-demand tick after a mode/target change). */
-export function circuitForLoadpoint(circuits: Circuit[], loadpointName: string): Circuit | undefined {
+export function circuitForLoadpoint(
+  circuits: Circuit[],
+  loadpointName: string,
+): Circuit | undefined {
   return circuits.find((c) =>
-    c.kind === 'bare' ? c.loadpoint.name === loadpointName : c.loadpoints.some((l) => l.name === loadpointName),
+    c.kind === 'bare'
+      ? c.loadpoint.name === loadpointName
+      : c.loadpoints.some((l) => l.name === loadpointName),
   )
 }
 

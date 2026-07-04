@@ -27,7 +27,14 @@ test('charges now when the current slot is among the cheapest needed', () => {
   const targetTime = new Date('2026-07-04T23:00:00Z')
   // Large requirement + a 1h window → all slots needed → current slot charges.
   expect(
-    decideShouldCharge({ requiredKWh: 100, now, targetTime, planRateA: 16, phases: 3, priceSlots: [hour(22, 0.1)] }),
+    decideShouldCharge({
+      requiredKWh: 100,
+      now,
+      targetTime,
+      planRateA: 16,
+      phases: 3,
+      priceSlots: [hour(22, 0.1)],
+    }),
   ).toBe(true)
 })
 
@@ -36,7 +43,9 @@ test('defers when the current slot is expensive and a cheaper later slot suffice
   const targetTime = new Date('2026-07-04T22:00:00Z')
   const priceSlots = [hour(18, 2), hour(19, 2), hour(20, 2), hour(21, 0.1)]
   // Only ~15 min needed → planner picks the cheap 21:00 slot, so 18:00 (now) must not charge.
-  expect(decideShouldCharge({ requiredKWh: 2, now, targetTime, planRateA: 16, phases: 3, priceSlots })).toBe(false)
+  expect(
+    decideShouldCharge({ requiredKWh: 2, now, targetTime, planRateA: 16, phases: 3, priceSlots }),
+  ).toBe(false)
 })
 
 test('shouldWrite: first write always; then only when |delta| ≥ deadband', () => {

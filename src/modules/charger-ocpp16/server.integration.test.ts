@@ -113,7 +113,13 @@ test('T1: OSC wins over a leftover high-stack 0A profile (composite = commanded)
     const { charger } = await connectCharger(h, 'STACK01', {
       maxStackLevel: 8,
       seedProfiles: [
-        { connectorId: 0, stackLevel: 8, purpose: 'TxDefaultProfile', chargingProfileId: 99, limit: 0 },
+        {
+          connectorId: 0,
+          stackLevel: 8,
+          purpose: 'TxDefaultProfile',
+          chargingProfileId: 99,
+          limit: 0,
+        },
       ],
     })
     await charger.boot()
@@ -176,7 +182,9 @@ test('T3: OSC re-asserts limit + refreshes status on reconnect', async () => {
     const lastProfile = [...c2.received].reverse().find((r) => r.method === 'SetChargingProfile')
     const limit = (
       lastProfile?.params as {
-        csChargingProfiles?: { chargingSchedule?: { chargingSchedulePeriod?: Array<{ limit?: number }> } }
+        csChargingProfiles?: {
+          chargingSchedule?: { chargingSchedulePeriod?: Array<{ limit?: number }> }
+        }
       }
     )?.csChargingProfiles?.chargingSchedule?.chargingSchedulePeriod?.[0]?.limit
     expect(limit).toBe(9)

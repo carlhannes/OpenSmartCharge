@@ -67,6 +67,8 @@ test('planCircuit (balancer): uses coordinated allocations; deadband still appli
 })
 
 test('planCircuit deadband suppresses a sub-1A change', () => {
-  const decisions: LpDecision[] = [{ loadpointName: 'a', mode: 'fast', budgetA: 10.4, lastCommandedA: 10 }]
+  const decisions: LpDecision[] = [
+    { loadpointName: 'a', mode: 'fast', budgetA: 10.4, lastCommandedA: 10 },
+  ]
   expect(planCircuit(decisions, null, 1).writes.has('a')).toBe(false)
 })

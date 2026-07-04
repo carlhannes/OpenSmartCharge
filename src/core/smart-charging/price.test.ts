@@ -7,7 +7,12 @@ const NIGHT = { startHour: 23, endHour: 5 }
 
 test('live-tariff rung: live prices pass through unchanged', () => {
   const live: TariffSlot[] = [
-    { start: new Date('2026-07-04T10:00:00Z'), end: new Date('2026-07-04T11:00:00Z'), pricePerKWh: 0.5, currency: 'SEK' },
+    {
+      start: new Date('2026-07-04T10:00:00Z'),
+      end: new Date('2026-07-04T11:00:00Z'),
+      pricePerKWh: 0.5,
+      currency: 'SEK',
+    },
   ]
   const r = resolvePriceCurve({
     livePrices: live,

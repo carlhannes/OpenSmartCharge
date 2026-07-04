@@ -40,15 +40,27 @@ test('upsertSlots/getSlots round-trip; getSlots windows by slot_start; upsert re
       slot('2026-07-04T02:00:00Z', '2026-07-04T03:00:00Z', 0.7),
     ])
     // Window read excludes slots starting outside [from, to).
-    const mid = getSlots(db, 'SE4', new Date('2026-07-04T01:00:00Z'), new Date('2026-07-04T02:00:00Z'))
+    const mid = getSlots(
+      db,
+      'SE4',
+      new Date('2026-07-04T01:00:00Z'),
+      new Date('2026-07-04T02:00:00Z'),
+    )
     expect(mid.map((s) => s.pricePerKWh)).toEqual([0.6])
     // Re-upsert same slot_start overwrites (INSERT OR REPLACE).
     upsertSlots(db, 'SE4', [slot('2026-07-04T01:00:00Z', '2026-07-04T02:00:00Z', 0.99)])
-    const again = getSlots(db, 'SE4', new Date('2026-07-04T01:00:00Z'), new Date('2026-07-04T02:00:00Z'))
+    const again = getSlots(
+      db,
+      'SE4',
+      new Date('2026-07-04T01:00:00Z'),
+      new Date('2026-07-04T02:00:00Z'),
+    )
     expect(again[0].pricePerKWh).toBe(0.99)
     expect(latestSlotEnd(db, 'SE4')?.toISOString()).toBe('2026-07-04T03:00:00.000Z')
     // Zones are isolated.
-    expect(getSlots(db, 'SE1', new Date('2026-07-04T00:00:00Z'), new Date('2026-07-05T00:00:00Z'))).toEqual([])
+    expect(
+      getSlots(db, 'SE1', new Date('2026-07-04T00:00:00Z'), new Date('2026-07-05T00:00:00Z')),
+    ).toEqual([])
   })
 })
 

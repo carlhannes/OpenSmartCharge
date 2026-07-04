@@ -75,7 +75,9 @@ export function msUntilStockholmTime(now: Date, hour: number, minute: number): n
   // Build the target treating Stockholm-local parts as UTC ("fake UTC"), then subtract
   // the Stockholm offset to get the real UTC timestamp. Safe for the times we use it
   // (13:15 publish window, 00:00 midnight) — none fall in the 02:00–03:00 DST window.
-  const fakeUTC = new Date(`${p.year}-${pad(p.month)}-${pad(p.day)}T${pad(hour)}:${pad(minute)}:00Z`)
+  const fakeUTC = new Date(
+    `${p.year}-${pad(p.month)}-${pad(p.day)}T${pad(hour)}:${pad(minute)}:00Z`,
+  )
   const target = new Date(fakeUTC.getTime() + getStockholmOffsetMs(fakeUTC))
 
   if (target.getTime() > now.getTime()) return target.getTime() - now.getTime()

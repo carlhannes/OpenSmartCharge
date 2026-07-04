@@ -50,7 +50,8 @@ function dataFetch(bodies: { charging?: unknown; aircon?: unknown; details?: unk
       if (bodies.aircon === undefined) return new Response('', { status: 500 })
       return new Response(JSON.stringify(bodies.aircon), { status: 200 })
     }
-    if (u.includes('/charging/')) return new Response(JSON.stringify(bodies.charging), { status: 200 })
+    if (u.includes('/charging/'))
+      return new Response(JSON.stringify(bodies.charging), { status: 200 })
     if (u.includes('/garage/vehicles/'))
       return new Response(JSON.stringify(bodies.details ?? {}), { status: 200 })
     return new Response('', { status: 404 })
@@ -65,7 +66,9 @@ function makeCtx(db: DatabaseSync, ctxFetch: typeof globalThis.fetch): ModuleCtx
 function stubTokenRefresh() {
   globalThis.fetch = (async (url: string | URL) => {
     if (String(url).includes('/authentication/refresh-token'))
-      return new Response(JSON.stringify({ accessToken: 'at', refreshToken: 'rt2' }), { status: 200 })
+      return new Response(JSON.stringify({ accessToken: 'at', refreshToken: 'rt2' }), {
+        status: 200,
+      })
     return new Response('', { status: 404 })
   }) as unknown as typeof globalThis.fetch
 }
@@ -82,7 +85,10 @@ test('refresh() maps SoC/range/state/target/power + plug + climate, and caches i
       details: { specification: { battery: { capacityInKWh: 77 } } },
     }),
   )
-  const v = getVehicleModule('skoda')!.create({ name: 'enyaq', username: 'u', password: 'p', vin: VIN }, ctx)
+  const v = getVehicleModule('skoda')!.create(
+    { name: 'enyaq', username: 'u', password: 'p', vin: VIN },
+    ctx,
+  )
 
   const data = await v.refresh()
   expect(data.soc).toBe(60)
@@ -102,9 +108,11 @@ test('refresh() maps SoC/range/state/target/power + plug + climate, and caches i
   expect((await v.getData()).soc).toBe(60)
 
   // Persisted to vehicle_cache.
-  const row = db.prepare('SELECT soc, battery_capacity_kwh, is_charging FROM vehicle_cache WHERE vehicle_name = ?').get('enyaq') as
-    | { soc: number; battery_capacity_kwh: number; is_charging: number }
-    | undefined
+  const row = db
+    .prepare(
+      'SELECT soc, battery_capacity_kwh, is_charging FROM vehicle_cache WHERE vehicle_name = ?',
+    )
+    .get('enyaq') as { soc: number; battery_capacity_kwh: number; is_charging: number } | undefined
   expect(row).toMatchObject({ soc: 60, battery_capacity_kwh: 77, is_charging: 1 })
 })
 
@@ -115,12 +123,17 @@ test('idle car: not charging, cable out, climate off → flags map to false', as
   const ctx = makeCtx(
     db,
     dataFetch({
-      charging: { status: { battery: { stateOfChargeInPercent: 42 }, state: 'READY_FOR_CHARGING' } },
+      charging: {
+        status: { battery: { stateOfChargeInPercent: 42 }, state: 'READY_FOR_CHARGING' },
+      },
       aircon: { state: 'OFF', chargerConnectionState: 'DISCONNECTED' },
       details: { specification: { battery: { capacityInKWh: 77 } } },
     }),
   )
-  const v = getVehicleModule('skoda')!.create({ name: 'enyaq', username: 'u', password: 'p', vin: VIN }, ctx)
+  const v = getVehicleModule('skoda')!.create(
+    { name: 'enyaq', username: 'u', password: 'p', vin: VIN },
+    ctx,
+  )
   const data = await v.refresh()
   expect(data.isCharging).toBe(false)
   expect(data.pluggedIn).toBe(false)
@@ -134,9 +147,16 @@ test('air-conditioning endpoint failure degrades gracefully (plug/climate undefi
   stubTokenRefresh()
   const ctx = makeCtx(
     db,
-    dataFetch({ charging: CHARGING, aircon: undefined, details: { specification: { battery: { capacityInKWh: 77 } } } }),
+    dataFetch({
+      charging: CHARGING,
+      aircon: undefined,
+      details: { specification: { battery: { capacityInKWh: 77 } } },
+    }),
   )
-  const v = getVehicleModule('skoda')!.create({ name: 'enyaq', username: 'u', password: 'p', vin: VIN }, ctx)
+  const v = getVehicleModule('skoda')!.create(
+    { name: 'enyaq', username: 'u', password: 'p', vin: VIN },
+    ctx,
+  )
   const data = await v.refresh()
   expect(data.soc).toBe(60) // primary read still succeeds
   expect(data.pluggedIn).toBeUndefined()
@@ -147,7 +167,13 @@ test('refresh() throws when the charging response has no SoC', async () => {
   const db = freshDb()
   saveRefreshToken(db, 'enyaq', 'seed')
   stubTokenRefresh()
-  const ctx = makeCtx(db, dataFetch({ charging: { status: { state: 'CONNECT_CABLE' } }, aircon: { state: 'OFF' } }))
-  const v = getVehicleModule('skoda')!.create({ name: 'enyaq', username: 'u', password: 'p', vin: VIN }, ctx)
+  const ctx = makeCtx(
+    db,
+    dataFetch({ charging: { status: { state: 'CONNECT_CABLE' } }, aircon: { state: 'OFF' } }),
+  )
+  const v = getVehicleModule('skoda')!.create(
+    { name: 'enyaq', username: 'u', password: 'p', vin: VIN },
+    ctx,
+  )
   await expect(v.refresh()).rejects.toThrow(/no SoC/)
 })

@@ -80,7 +80,13 @@ export function loadLoadpointStates(
   const states = new Map<string, LoadpointState>()
   for (const init of inits) {
     const { name, maxCurrentA = 16, autoStart = true, defaultMode = 'smart' } = init
-    insert.run(name, defaultMode, init.targetSoc ?? null, init.targetTime ?? null, init.targetKWh ?? null)
+    insert.run(
+      name,
+      defaultMode,
+      init.targetSoc ?? null,
+      init.targetTime ?? null,
+      init.targetKWh ?? null,
+    )
     const row = read.get(name) as unknown as DbRow
     states.set(name, {
       name,

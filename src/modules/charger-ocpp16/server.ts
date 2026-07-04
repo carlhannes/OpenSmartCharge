@@ -139,7 +139,13 @@ export class OcppServer {
     // any leftover/default profile (Zaptec stacks profiles; highest stackLevel wins).
     const stackLevel = this.maxStackByStation.get(stationId) ?? 1
     const numberPhases = this.phasesByStation.get(stationId) ?? 3
-    const res = await setCurrentLimit(state.client, amps, state.connectorId, stackLevel, numberPhases)
+    const res = await setCurrentLimit(
+      state.client,
+      amps,
+      state.connectorId,
+      stackLevel,
+      numberPhases,
+    )
     this.log.info(
       { stationId, amps, connectorId: state.connectorId, stackLevel, status: res?.status },
       'SetChargingProfile result',
@@ -317,7 +323,12 @@ export class OcppServer {
         )
           .then((res) =>
             this.log.info(
-              { stationId, amps: this.defaultBootCurrentA, connectorId: state.connectorId, status: res?.status },
+              {
+                stationId,
+                amps: this.defaultBootCurrentA,
+                connectorId: state.connectorId,
+                status: res?.status,
+              },
               'boot default SetChargingProfile result',
             ),
           )

@@ -141,7 +141,8 @@ export function extractCsrf(
   for (let i = braceStart; i < html.length; i++) {
     const ch = html[i]
     if (inStr) {
-      if (ch === '\\') i++ // skip the escaped character
+      if (ch === '\\')
+        i++ // skip the escaped character
       else if (ch === quote) inStr = false
       continue
     }

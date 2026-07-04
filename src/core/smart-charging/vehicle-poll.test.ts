@@ -37,7 +37,7 @@ test('charging + too soon → do not wake the car', () => {
 test('connected + idle (not charging), already polled → do not poll', () => {
   // The idle case: cable plugged, car not drawing — we already anchored on connect, so stay quiet
   // no matter how much wall-clock has passed (only charging drives periodic re-anchoring).
-  expect(shouldPollVehicle({ ...base, charging: false, now: base.now + 10 * base.intervalMs })).toBe(
-    false,
-  )
+  expect(
+    shouldPollVehicle({ ...base, charging: false, now: base.now + 10 * base.intervalMs }),
+  ).toBe(false)
 })

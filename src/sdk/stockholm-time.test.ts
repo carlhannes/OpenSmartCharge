@@ -1,10 +1,5 @@
 import { test, expect } from 'vitest'
-import {
-  stockholmHour,
-  stockholmDateKey,
-  isNight,
-  msUntilStockholmTime,
-} from './stockholm-time.js'
+import { stockholmHour, stockholmDateKey, isNight, msUntilStockholmTime } from './stockholm-time.js'
 
 // All helpers pin Europe/Stockholm via Intl, so results are independent of the host TZ.
 
@@ -37,7 +32,11 @@ test('isNight covers the wrapping 23:00–05:00 window in local time', () => {
 
 test('msUntilStockholmTime targets the next 13:15 Stockholm occurrence', () => {
   // Before today's window: 09:00Z = 11:00 CEST → next 13:15 local (11:15Z) is 2h15m away.
-  expect(msUntilStockholmTime(new Date('2026-07-04T09:00:00Z'), 13, 15)).toBe(2 * 3600_000 + 15 * 60_000)
+  expect(msUntilStockholmTime(new Date('2026-07-04T09:00:00Z'), 13, 15)).toBe(
+    2 * 3600_000 + 15 * 60_000,
+  )
   // After today's window: 12:00Z = 14:00 CEST → aim for tomorrow 13:15 local (23h15m away).
-  expect(msUntilStockholmTime(new Date('2026-07-04T12:00:00Z'), 13, 15)).toBe(23 * 3600_000 + 15 * 60_000)
+  expect(msUntilStockholmTime(new Date('2026-07-04T12:00:00Z'), 13, 15)).toBe(
+    23 * 3600_000 + 15 * 60_000,
+  )
 })

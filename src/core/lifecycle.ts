@@ -377,7 +377,8 @@ async function main() {
     let estimatedSocVal: number | undefined
     if (lpCfgVehicle) {
       const v = vehicles.get(lpCfgVehicle)
-      if (v) estimatedSocVal = estimatedSocFor(state.name, v.getCachedCapacity(), state.sessionEnergyKWh)
+      if (v)
+        estimatedSocVal = estimatedSocFor(state.name, v.getCachedCapacity(), state.sessionEnergyKWh)
     }
     return {
       id: state.name,
@@ -491,7 +492,13 @@ async function main() {
       (!livePrices || livePrices.length === 0) && tariff
         ? await historicalPriceAvg(tariff, now, sc.historicalDays)
         : undefined
-    const price = resolvePriceCurve({ livePrices, historicalAvgByHour, now, targetTime, nightWindow })
+    const price = resolvePriceCurve({
+      livePrices,
+      historicalAvgByHour,
+      now,
+      targetTime,
+      nightWindow,
+    })
 
     // Current budget: live meter headroom → historical worst-case → time-of-day static.
     const current = resolveCurrentBudget({
@@ -501,7 +508,9 @@ async function main() {
       liveMaxPhaseA: freshMeterMaxPhaseA(now),
       ownDrawA: Math.max(state.currentA, lastCommandedA.get(lpCfg.name) ?? 0),
       worstCaseLoadA:
-        mainBreakerA != null ? (worstCaseLoadA(db, now, sc.historicalDays) ?? undefined) : undefined,
+        mainBreakerA != null
+          ? (worstCaseLoadA(db, now, sc.historicalDays) ?? undefined)
+          : undefined,
       nightWindow,
       nightMarginA: sc.nightMarginA,
       daytimeFraction: sc.daytimeFraction,

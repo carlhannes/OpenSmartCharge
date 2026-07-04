@@ -35,7 +35,12 @@ test('foldChargerStatus keeps live current across bare status frames, clears it 
     charging: true,
     ...over,
   })
-  let live: LoadpointLiveFields = { connected: false, charging: false, currentA: 0, sessionEnergyKWh: 0 }
+  let live: LoadpointLiveFields = {
+    connected: false,
+    charging: false,
+    currentA: 0,
+    sessionEnergyKWh: 0,
+  }
 
   // MeterValues while charging → live current + energy recorded.
   live = foldChargerStatus(live, status({ currentA: 9.7, sessionEnergyKWh: 0.1 }))
@@ -50,7 +55,10 @@ test('foldChargerStatus keeps live current across bare status frames, clears it 
 
   // StopTransaction pushes charging:false with no currentA → current must clear to 0
   // (the stale-"9.7 A after stop" bug), even though currentA is absent from the update.
-  live = foldChargerStatus(live, status({ status: 'Finishing', charging: false, sessionEnergyKWh: 0 }))
+  live = foldChargerStatus(
+    live,
+    status({ status: 'Finishing', charging: false, sessionEnergyKWh: 0 }),
+  )
   expect(live.charging).toBe(false)
   expect(live.currentA).toBe(0)
 

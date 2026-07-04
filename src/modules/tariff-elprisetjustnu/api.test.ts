@@ -29,8 +29,12 @@ function makeFetch(byDate: Record<string, ElprisetRecord[] | 404>, calls: string
 test('rejects a zone outside SE1–SE4 with ZoneNotFoundError (permanent)', async () => {
   const from = new Date('2026-07-04T10:00:00Z')
   const to = new Date('2026-07-04T14:00:00Z')
-  await expect(fetchElprisetPrices('SE9', from, to, makeFetch({}))).rejects.toBeInstanceOf(ZoneNotFoundError)
-  await expect(fetchElprisetPrices('FI', from, to, makeFetch({}))).rejects.toBeInstanceOf(ZoneNotFoundError)
+  await expect(fetchElprisetPrices('SE9', from, to, makeFetch({}))).rejects.toBeInstanceOf(
+    ZoneNotFoundError,
+  )
+  await expect(fetchElprisetPrices('FI', from, to, makeFetch({}))).rejects.toBeInstanceOf(
+    ZoneNotFoundError,
+  )
 })
 
 test('maps a day file to SEK 15-min slots and requests the right URL', async () => {
@@ -44,7 +48,12 @@ test('maps a day file to SEK 15-min slots and requests the right URL', async () 
     },
     calls,
   )
-  const slots = await fetchElprisetPrices('SE4', new Date('2026-07-04T10:00:00Z'), new Date('2026-07-04T14:00:00Z'), fetchFn)
+  const slots = await fetchElprisetPrices(
+    'SE4',
+    new Date('2026-07-04T10:00:00Z'),
+    new Date('2026-07-04T14:00:00Z'),
+    fetchFn,
+  )
   expect(slots).toHaveLength(2)
   expect(slots[0].pricePerKWh).toBe(0.59)
   expect(slots[0].currency).toBe('SEK')
@@ -55,10 +64,18 @@ test('maps a day file to SEK 15-min slots and requests the right URL', async () 
 test('tomorrow not yet published (404) is skipped, not an error', async () => {
   const calls: string[] = []
   const fetchFn = makeFetch(
-    { '2026-07-04': [rec('2026-07-04T12:00:00+02:00', '2026-07-04T12:15:00+02:00', 0.7)], '2026-07-05': 404 },
+    {
+      '2026-07-04': [rec('2026-07-04T12:00:00+02:00', '2026-07-04T12:15:00+02:00', 0.7)],
+      '2026-07-05': 404,
+    },
     calls,
   )
-  const slots = await fetchElprisetPrices('SE4', new Date('2026-07-04T10:00:00Z'), new Date('2026-07-05T14:00:00Z'), fetchFn)
+  const slots = await fetchElprisetPrices(
+    'SE4',
+    new Date('2026-07-04T10:00:00Z'),
+    new Date('2026-07-05T14:00:00Z'),
+    fetchFn,
+  )
   expect(slots).toHaveLength(1) // only today's slot; tomorrow skipped
   expect(calls.some((u) => u.endsWith('07-04_SE4.json'))).toBe(true)
   expect(calls.some((u) => u.endsWith('07-05_SE4.json'))).toBe(true)
@@ -67,5 +84,7 @@ test('tomorrow not yet published (404) is skipped, not an error', async () => {
 test('throws when no day is published (all 404) so the scheduler retries', async () => {
   const from = new Date('2026-07-04T10:00:00Z')
   const to = new Date('2026-07-04T14:00:00Z')
-  await expect(fetchElprisetPrices('SE4', from, to, makeFetch({}))).rejects.toThrow(/no published data/)
+  await expect(fetchElprisetPrices('SE4', from, to, makeFetch({}))).rejects.toThrow(
+    /no published data/,
+  )
 })

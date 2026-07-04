@@ -42,7 +42,9 @@ test('DST fall-back: the twice-occurring local hour collapses into one max row',
     recordHouseholdLoad(db, new Date('2026-10-25T00:30:00Z'), 8)
     recordHouseholdLoad(db, new Date('2026-10-25T01:30:00Z'), 12)
     const rows = db
-      .prepare(`SELECT date, hour, max_phase_a FROM household_load_hourly WHERE date = '2026-10-25' AND hour = 2`)
+      .prepare(
+        `SELECT date, hour, max_phase_a FROM household_load_hourly WHERE date = '2026-10-25' AND hour = 2`,
+      )
       .all()
     expect(rows).toEqual([{ date: '2026-10-25', hour: 2, max_phase_a: 12 }])
   })
