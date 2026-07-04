@@ -37,7 +37,7 @@ import type { Balancer, LoadpointSnapshot } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import type { LoadpointState } from './loadpoint.js'
 import type { ChargeMode, LoadpointConfig } from './config.js'
-import { estimateSoc } from './estimator.js'
+import { estimateSocSinceAnchor } from './estimator.js'
 import { resolveEnergyTarget } from './smart-charging/energy.js'
 import { resolvePriceCurve } from './smart-charging/price.js'
 import { resolveCurrentBudget } from './smart-charging/current.js'
@@ -318,9 +318,14 @@ async function main() {
     sessionEnergyKWh: number,
   ): number | undefined {
     const anchor = vehicleAnchor.get(lpName)
-    if (!anchor || !capacity) return undefined
-    const deltaKWh = Math.max(0, sessionEnergyKWh - anchor.sessionEnergyKWh)
-    return estimateSoc(anchor.soc, deltaKWh, capacity, config.smartCharging.chargingEfficiency)
+    if (!anchor) return undefined
+    return estimateSocSinceAnchor(
+      anchor.soc,
+      anchor.sessionEnergyKWh,
+      sessionEnergyKWh,
+      capacity,
+      config.smartCharging.chargingEfficiency,
+    )
   }
 
   // Poll gate: refresh a loadpoint's vehicle on (re)connect + during charging every
