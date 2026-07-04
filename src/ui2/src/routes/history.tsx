@@ -39,7 +39,9 @@ function HistoryPage() {
         <h1 className="font-display text-4xl font-semibold tracking-tight">
           {fmtKWh(weekTotal.kwh)}
         </h1>
-        <div className="text-muted-foreground">≈ {fmtCents(weekTotal.cost)}</div>
+        {weekTotal.cost > 0 && (
+          <div className="text-muted-foreground">≈ {fmtCents(weekTotal.cost)}</div>
+        )}
       </div>
 
       <div className="mt-8 space-y-3">
@@ -53,13 +55,14 @@ function HistoryPage() {
             <div>
               <div className="font-medium">{fmtDate(new Date(s.startedAt))}</div>
               <div className="text-xs text-muted-foreground">
-                {fmtDuration((s.endedAt - s.startedAt) / 60000)} · 🚗 {s.vehicleName}
+                {fmtDuration((s.endedAt - s.startedAt) / 60000)}
+                {s.vehicleName ? ` · 🚗 ${s.vehicleName}` : ""}
               </div>
             </div>
             <div className="text-right">
               <div className="font-display tabular-nums">{fmtKWh(s.kwh)}</div>
               <div className="text-xs text-muted-foreground tabular-nums">
-                {fmtCents(s.costEur)}
+                {s.costEur > 0 ? fmtCents(s.costEur) : "—"}
               </div>
             </div>
           </Link>

@@ -15,7 +15,16 @@ const projectDir = dirname(fileURLToPath(import.meta.url));
 // `server.entry: "server"` routes SSR through src/server.ts (the SSR error fallback).
 export default defineConfig({
   // Fixed port so ui2 coexists with the existing UI (5173) and backend (8080).
-  server: { port: 5174, strictPort: true },
+  // Proxy /api + /events to the backend (no CORS on the server → same-origin via proxy).
+  server: {
+    port: 5174,
+    strictPort: true,
+    proxy: {
+      "/api": { target: "http://localhost:8080", changeOrigin: true },
+      // SSE: http-proxy streams by default (no buffering).
+      "/events": { target: "http://localhost:8080", changeOrigin: true },
+    },
+  },
   resolve: {
     alias: { "@": resolve(projectDir, "src") },
     // Prevent duplicate React / Query copies (which crash hooks) across SSR + client.

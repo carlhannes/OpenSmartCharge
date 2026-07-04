@@ -1,5 +1,11 @@
 import { useOsc, type Mode } from "@/lib/mock/store";
 import type { Charger } from "@/lib/mock/store";
+import {
+  changeMode,
+  applyOneShot,
+  runCommand as runCmdApi,
+  viewComposite,
+} from "@/lib/live/commands";
 import { Timeline24h } from "./Timeline24h";
 import { StatusPill } from "@/components/StatusPill";
 import { modeLabel } from "@/lib/copy";
@@ -25,7 +31,6 @@ export function ChargerDetail({ charger, onClose }: Props) {
     () => allPlans.filter((p) => p.chargerId === charger?.id),
     [allPlans, charger?.id],
   );
-  const setMode = useOsc((s) => s.setMode);
   const setActiveVehicle = useOsc((s) => s.setActiveVehicle);
   const setGuestTarget = useOsc((s) => s.setGuestTarget);
   const addPlan = useOsc((s) => s.addPlan);
@@ -35,19 +40,19 @@ export function ChargerDetail({ charger, onClose }: Props) {
   const [ampApplied, setAmpApplied] = useState(false);
   const [lastCmd, setLastCmd] = useState<string | null>(null);
   const [showComposite, setShowComposite] = useState(false);
+  const [compositeText, setCompositeText] = useState<string | null>(null);
   const ampTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   if (!charger) return null;
 
   const commitAmps = () => {
-    oneShotAmps(charger.id, amps);
+    void applyOneShot(charger.id, amps);
     setAmpApplied(true);
     if (ampTimer.current) clearTimeout(ampTimer.current);
     ampTimer.current = setTimeout(() => setAmpApplied(false), 1500);
   };
   const runCommand = async (label: string) => {
-    // Mock async; maps to the OCPP REST endpoints (/start, /stop, /reset, …) once wired.
-    await new Promise((r) => setTimeout(r, 600));
+    await runCmdApi(charger.id, label); // real OCPP endpoint when live; simulated delay in demo
     setLastCmd(label);
   };
 
@@ -82,7 +87,7 @@ export function ChargerDetail({ charger, onClose }: Props) {
               return (
                 <button
                   key={m}
-                  onClick={() => setMode(charger.id, m)}
+                  onClick={() => void changeMode(charger.id, m)}
                   className={`flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
                     active
                       ? "bg-background text-foreground shadow-sm"
@@ -238,7 +243,16 @@ export function ChargerDetail({ charger, onClose }: Props) {
                   </ActionButton>
                 ))}
                 <button
-                  onClick={() => setShowComposite((x) => !x)}
+                  onClick={() => {
+                    const open = !showComposite;
+                    setShowComposite(open);
+                    if (open) {
+                      setCompositeText(null);
+                      void viewComposite(charger.id)
+                        .then(setCompositeText)
+                        .catch(() => setCompositeText("Unavailable"));
+                    }
+                  }}
                   className="rounded-xl border border-border/60 bg-background px-3 py-2 text-xs font-medium hover:bg-secondary"
                 >
                   View composite
@@ -249,12 +263,14 @@ export function ChargerDetail({ charger, onClose }: Props) {
               )}
               {showComposite && (
                 <div className="rounded-xl border border-border/60 bg-background p-3 text-xs">
-                  <div className="mb-1 font-medium">Composite schedule (next 12 h)</div>
-                  <div className="tabular-nums text-muted-foreground">
-                    <div>00:00–06:00 · {charger.maxAmps} A</div>
-                    <div>06:00–09:00 · 6 A</div>
-                    <div>09:00–24:00 · {charger.maxAmps} A</div>
-                  </div>
+                  <div className="mb-1 font-medium">Composite schedule</div>
+                  {compositeText == null ? (
+                    <div className="text-muted-foreground">Loading…</div>
+                  ) : (
+                    <pre className="overflow-x-auto whitespace-pre-wrap tabular-nums text-muted-foreground">
+                      {compositeText}
+                    </pre>
+                  )}
                 </div>
               )}
             </div>

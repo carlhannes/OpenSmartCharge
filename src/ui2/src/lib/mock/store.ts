@@ -86,6 +86,7 @@ interface OscState {
   pendingChargers: PendingCharger[];
   config: Config;
   tickMs: number;
+  source: "probing" | "live" | "demo"; // probing→ decide; live = backend via REST/SSE; demo = mock tick
 
   // actions
   setMode: (chargerId: string, mode: Mode) => void;
@@ -113,6 +114,16 @@ interface OscState {
   importSnapshot: (json: string) => boolean;
 
   oneShotAmps: (chargerId: string, amps: number | null) => void;
+
+  // Live-sync (populated from the backend when source === "live")
+  setSource: (source: "probing" | "live" | "demo") => void;
+  hydrate: (
+    patch: Partial<
+      Pick<OscState, "chargers" | "vehicles" | "moduleHealth" | "prices" | "sessions">
+    >,
+  ) => void;
+  patchCharger: (id: string, patch: Partial<Charger>) => void;
+  patchVehicle: (id: string, patch: Partial<Vehicle>) => void;
 
   _tick: () => void;
 }
@@ -210,6 +221,7 @@ function seed(): Pick<
 
 export const useOsc = create<OscState>()((set, get) => ({
   ...seed(),
+  source: "probing",
 
   setMode: (chargerId, mode) =>
     set((s) => ({
@@ -346,7 +358,15 @@ export const useOsc = create<OscState>()((set, get) => ({
       chargers: s.chargers.map((c) => (c.id === chargerId ? { ...c, constraintAmps: amps } : c)),
     })),
 
+  setSource: (source) => set({ source }),
+  hydrate: (patch) => set(patch),
+  patchCharger: (id, patch) =>
+    set((s) => ({ chargers: s.chargers.map((c) => (c.id === id ? { ...c, ...patch } : c)) })),
+  patchVehicle: (id, patch) =>
+    set((s) => ({ vehicles: s.vehicles.map((v) => (v.id === id ? { ...v, ...patch } : v)) })),
+
   _tick: () => {
+    if (get().source !== "demo") return; // mock tick runs only in confirmed demo mode
     const s = get();
     const nextChargers = s.chargers.map((c) => {
       const veh = s.vehicles.find((v) => v.id === c.activeVehicleId) ?? null;

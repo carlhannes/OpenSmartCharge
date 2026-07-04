@@ -1,6 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useOsc } from "@/lib/mock/store";
+import { getTransaction } from "@/lib/api/rest";
 import { fmtKWh, fmtCents, fmtDuration, fmtTime, fmtDate } from "@/lib/format";
+import { useEffect, useState } from "react";
 import {
   ResponsiveContainer,
   AreaChart,
@@ -23,15 +25,36 @@ export const Route = createFileRoute("/history/$sessionId")({
 function SessionPage() {
   const { sessionId } = Route.useParams();
   const s = useOsc((st) => st.sessions.find((x) => x.id === sessionId));
+  const source = useOsc((st) => st.source);
+  const [points, setPoints] = useState<{ minute: number; power: number }[]>([]);
+
+  useEffect(() => {
+    if (source === "live") {
+      // Real per-session meter samples from the backend.
+      getTransaction(Number(sessionId))
+        .then((d) =>
+          setPoints(
+            d.samples.map((sm, i) => ({
+              minute: i,
+              power: sm.power_w != null ? +(sm.power_w / 1000).toFixed(2) : 0,
+            })),
+          ),
+        )
+        .catch(() => setPoints([]));
+    } else if (s) {
+      // Demo: illustrative synthetic curve.
+      setPoints(
+        Array.from({ length: 60 }, (_, i) => {
+          const t = i / 60;
+          const power = 6 + 4.5 * Math.sin(t * Math.PI * 1.2) + Math.random() * 0.6;
+          return { minute: i, power: +power.toFixed(1) };
+        }),
+      );
+    }
+  }, [source, sessionId, s]);
+
   if (!s)
     return <div className="p-10 text-center text-sm text-muted-foreground">Session not found.</div>;
-
-  const points = Array.from({ length: 60 }, (_, i) => {
-    const t = i / 60;
-    const power = 6 + 4.5 * Math.sin(t * Math.PI * 1.2) + Math.random() * 0.6;
-    const soc = (s.socStart ?? 40) + t * ((s.socEnd ?? 80) - (s.socStart ?? 40));
-    return { minute: i, power: +power.toFixed(1), soc: +soc.toFixed(1) };
-  });
 
   return (
     <div className="mx-auto max-w-2xl px-5 pt-8 pb-10 md:pt-14">
@@ -50,7 +73,7 @@ function SessionPage() {
 
       <div className="mt-6 grid grid-cols-3 gap-3">
         <Stat label="Energy" value={fmtKWh(s.kwh)} />
-        <Stat label="Cost" value={fmtCents(s.costEur)} />
+        <Stat label="Cost" value={s.costEur > 0 ? fmtCents(s.costEur) : "—"} />
         <Stat label="SoC" value={`${s.socStart ?? "—"}→${s.socEnd ?? "—"}%`} />
       </div>
 

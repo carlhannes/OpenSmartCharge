@@ -12,7 +12,8 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { TabBar } from "@/components/shell/TabBar";
-import { startTick } from "@/lib/mock/store";
+import { useOsc } from "@/lib/mock/store";
+import { useLiveSync } from "@/lib/live/useLiveSync";
 
 function NotFoundComponent() {
   return (
@@ -118,9 +119,10 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const [mounted, setMounted] = useState(false);
+  const source = useOsc((s) => s.source);
+  useLiveSync(); // auto-detects the backend: live via REST/SSE, else falls back to the mock tick
   useEffect(() => {
     setMounted(true);
-    startTick();
   }, []);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const chromeless = pathname.startsWith("/onboarding");
@@ -128,6 +130,7 @@ function RootComponent() {
   if (chromeless) {
     return (
       <QueryClientProvider client={queryClient}>
+        <DemoBanner show={mounted && source === "demo"} />
         <div className="min-h-screen bg-background">
           {mounted ? <Outlet /> : <div className="h-screen" aria-hidden />}
         </div>
@@ -137,6 +140,7 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <DemoBanner show={mounted && source === "demo"} />
       <div className="min-h-screen bg-background md:grid md:grid-cols-[240px_minmax(0,1fr)]">
         <aside className="hidden border-r border-border/60 md:block">
           <div className="sticky top-0 flex h-screen flex-col">
@@ -162,5 +166,14 @@ function RootComponent() {
         </div>
       </div>
     </QueryClientProvider>
+  );
+}
+
+function DemoBanner({ show }: { show: boolean }) {
+  if (!show) return null;
+  return (
+    <div className="bg-status-warn/10 px-4 py-2 text-center text-xs font-medium text-status-warn">
+      Demo data — backend not connected. Start the server on :8080 to go live.
+    </div>
   );
 }
