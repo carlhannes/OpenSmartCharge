@@ -30,9 +30,13 @@ export function decideShouldCharge(i: DecideInputs): boolean {
     priceSlots: i.priceSlots,
     now: i.now,
   })
+  // `plan()` generates slots from the NEXT 15-min boundary onward, so when `now` sits inside the
+  // current partial slot — i.e. almost always, since control ticks rarely land exactly on a
+  // boundary — no planned slot covers `now`. Fall back to the IMMINENT slot's decision, NOT a
+  // blanket "charge": otherwise smart mode would charge regardless of price for ~14 of every 15
+  // minutes. planned[0] is the earliest (chronological) slot, so it's the right proxy for "now".
   const currentSlot = planned.find((s) => s.start <= i.now && s.end > i.now)
-  // Before the first planned slot (rare timing edge) default to charging, matching prior behaviour.
-  return currentSlot?.shouldCharge ?? true
+  return currentSlot?.shouldCharge ?? planned[0]?.shouldCharge ?? true
 }
 
 /**

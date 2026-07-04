@@ -48,6 +48,27 @@ test('defers when the current slot is expensive and a cheaper later slot suffice
   ).toBe(false)
 })
 
+test('defers even when now is OFF a 15-min boundary (regression: current partial slot)', () => {
+  // `now` mid-slot (18:07:23) → plan()'s first slot is 18:15, so no slot covers `now`. The old code
+  // fell through to a blanket "charge"; it must instead mirror the imminent slot and defer to 21:00.
+  const now = new Date('2026-07-04T18:07:23.456Z')
+  const targetTime = new Date('2026-07-04T22:00:00Z')
+  const priceSlots = [hour(18, 2), hour(19, 2), hour(20, 2), hour(21, 0.1)]
+  expect(
+    decideShouldCharge({ requiredKWh: 2, now, targetTime, planRateA: 16, phases: 3, priceSlots }),
+  ).toBe(false)
+})
+
+test('charges when now is off-boundary and the imminent slot IS among the cheapest', () => {
+  // Same off-boundary timing, but now the current/imminent hour is the cheap one → charge.
+  const now = new Date('2026-07-04T21:07:23.456Z')
+  const targetTime = new Date('2026-07-04T23:00:00Z')
+  const priceSlots = [hour(21, 0.1), hour(22, 2)]
+  expect(
+    decideShouldCharge({ requiredKWh: 2, now, targetTime, planRateA: 16, phases: 3, priceSlots }),
+  ).toBe(true)
+})
+
 test('shouldWrite: first write always; then only when |delta| ≥ deadband', () => {
   expect(shouldWrite(10, undefined, 1)).toBe(true)
   expect(shouldWrite(10, 10, 1)).toBe(false)
