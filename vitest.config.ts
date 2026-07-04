@@ -9,7 +9,10 @@ export default defineConfig({
     // Only our own tests. The default `**/*.test.ts` would also collect the Playwright
     // e2e suite and the vendored .references/evcc tests, which use other runners.
     include: ['src/**/*.test.ts'],
-    exclude: ['node_modules', 'dist', '.references', 'e2e'],
+    // Globs, not bare names — bare 'node_modules' misses NESTED ones, so a subproject's
+    // deps (e.g. src/ui2/node_modules) would otherwise be scanned. src/ui2 is a separate
+    // WIP app with its own test runner; the root suite must not reach into it.
+    exclude: ['**/node_modules/**', '**/dist/**', '.references/**', 'e2e/**', 'src/ui2/**'],
     coverage: {
       // Report against the whole backend source, not just test-imported files, so the
       // summary honestly shows what is NOT yet covered (e.g. the OCPP server handlers).

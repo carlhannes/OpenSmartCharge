@@ -1,6 +1,7 @@
 // First-party module imports — explicit so the dependency graph is clear
 import '../modules/charger-ocpp16/index.js'
 import '../modules/tariff-elering/index.js'
+import '../modules/tariff-elprisetjustnu/index.js'
 import '../modules/meter-tibber-pulse/index.js'
 import '../modules/balancer-mqtt-circuit/index.js'
 import '../modules/vehicle-skoda/index.js'

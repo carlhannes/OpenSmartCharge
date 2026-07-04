@@ -1,20 +1,16 @@
 import type { TariffSlot } from '../../sdk/tariff.js'
+import { ZoneNotFoundError } from '../../sdk/nordpool-tariff.js'
 import type { EleringResponse } from './types.js'
 
 const ELERING_BASE = 'https://dashboard.elering.ee/api'
 const FETCH_TIMEOUT_MS = 15_000
 
-export class EleringZoneError extends Error {
-  constructor(zone: string) {
-    super(`Elering: zone '${zone}' not found in response`)
-    this.name = 'EleringZoneError'
-  }
-}
-
 // Fetches price records for the given zone covering the requested range.
+// Elering (Estonian TSO) only publishes the Baltic + Finland zones: EE, FI, LV, LT.
+// For Swedish zones (SE1–SE4) use the elprisetjustnu provider instead.
 // Pass ctx.fetch for scheduled calls (adds thundering-herd jitter) or the
 // global fetch for the startup call where an immediate response is needed.
-// Throws EleringZoneError when the zone is absent (permanent failure).
+// Throws ZoneNotFoundError when the zone is absent (permanent failure).
 // Throws on network / non-2xx (transient failure).
 export async function fetchEleringPrices(
   zone: string,
@@ -38,7 +34,7 @@ export async function fetchEleringPrices(
 
   const records = body.data[zone.toLowerCase()]
   if (!records || records.length === 0) {
-    throw new EleringZoneError(zone)
+    throw new ZoneNotFoundError(zone, 'Elering')
   }
 
   return records.map((r) => ({
