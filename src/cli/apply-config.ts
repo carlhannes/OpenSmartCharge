@@ -7,6 +7,7 @@
 import { loadConfig, CONFIG_PATH, DATA_DIR } from '../core/config.js'
 import { openDb } from '../core/db.js'
 import { configToLoadpointInits, applyConfigToLoadpoints } from '../core/loadpoint.js'
+import { applyConfigSettings, getTimezone } from '../core/settings.js'
 
 interface StateRow {
   mode: string
@@ -26,9 +27,12 @@ function main(): void {
     const read = (name: string): StateRow | undefined => stmt.get(name) as StateRow | undefined
     const before = new Map(inits.map((i) => [i.name, read(i.name)]))
 
+    applyConfigSettings(db, config)
     applyConfigToLoadpoints(db, inits)
 
-    console.log(`Applied ${CONFIG_PATH} → ${DATA_DIR} for ${inits.length} loadpoint(s):`)
+    console.log(`Applied ${CONFIG_PATH} → ${DATA_DIR}:`)
+    console.log(`  settings.timezone → ${getTimezone(db)}`)
+    console.log(`  ${inits.length} loadpoint(s):`)
     for (const i of inits) {
       console.log(
         `  ${i.name}: ${JSON.stringify(before.get(i.name) ?? null)} → ${JSON.stringify(read(i.name) ?? null)}`,

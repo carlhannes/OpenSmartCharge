@@ -72,6 +72,14 @@ function runMigrations(db: DatabaseSync): void {
       value TEXT NOT NULL
     );
 
+    -- System-wide settings (key/value). Distinct from module_kv (module-internal state):
+    -- these are user/site-level knobs, e.g. the site timezone. Seeded from osc.yaml site.*
+    -- and runtime-settable via the API (auto-detected in the UI setup flow).
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
     -- Hourly-max rollup of household load (max phase current), keyed by Stockholm-local
     -- calendar day + hour. Feeds the "worst-case current over the last N days" charging
     -- fallback. One row per (date, hour) — bounded at 24 rows/day regardless of meter

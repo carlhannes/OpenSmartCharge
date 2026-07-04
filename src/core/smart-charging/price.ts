@@ -1,5 +1,5 @@
 import type { TariffSlot } from '../../sdk/tariff.js'
-import { stockholmHour, isNight } from '../../sdk/stockholm-time.js'
+import { localHour, isNight } from '../../sdk/local-time.js'
 import type { Resolved, PriceRung, NightWindow } from './types.js'
 
 export interface PriceInputs {
@@ -10,6 +10,8 @@ export interface PriceInputs {
   now: Date
   targetTime: Date
   nightWindow: NightWindow
+  /** Site timezone for hour-of-day binning + the night-window curve. */
+  tz: string
   /** Synthetic-curve prices (relative ordering only). night < day so night wins. */
   nightPrice?: number
   dayPrice?: number
@@ -38,13 +40,13 @@ export function resolvePriceCurve(i: PriceInputs): Resolved<TariffSlot[], PriceR
   if (i.historicalAvgByHour && i.historicalAvgByHour.size > 0) {
     const value = buildHourlyCurve(i.now, i.targetTime, (start) => {
       // Missing hour in the history → treat as expensive so it's only used if unavoidable.
-      return i.historicalAvgByHour!.get(stockholmHour(start)) ?? dayPrice
+      return i.historicalAvgByHour!.get(localHour(start, i.tz)) ?? dayPrice
     })
     return { value, source: 'historical-avg', degraded: true }
   }
 
   const value = buildHourlyCurve(i.now, i.targetTime, (start) =>
-    isNight(start, i.nightWindow.startHour, i.nightWindow.endHour) ? nightPrice : dayPrice,
+    isNight(start, i.nightWindow.startHour, i.nightWindow.endHour, i.tz) ? nightPrice : dayPrice,
   )
   return { value, source: 'static-night', degraded: true }
 }

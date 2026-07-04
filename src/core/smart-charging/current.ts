@@ -1,4 +1,4 @@
-import { isNight } from '../../sdk/stockholm-time.js'
+import { isNight } from '../../sdk/local-time.js'
 import type { Resolved, CurrentRung, NightWindow } from './types.js'
 
 const IEC_MIN_A = 6
@@ -20,6 +20,8 @@ export interface CurrentInputs {
   daytimeFraction?: number
   /** IEC minimum charge current; a budget below this resolves to 0 (never rounded up). */
   minCurrentA?: number
+  /** Site timezone for the night-window check. */
+  tz: string
 }
 
 /**
@@ -55,7 +57,7 @@ export function resolveCurrentBudget(i: CurrentInputs): Resolved<number, Current
   }
 
   if (i.mainBreakerA != null) {
-    const night = isNight(i.now, i.nightWindow.startHour, i.nightWindow.endHour)
+    const night = isNight(i.now, i.nightWindow.startHour, i.nightWindow.endHour, i.tz)
     const budget = night
       ? i.mainBreakerA - (i.nightMarginA ?? 3)
       : i.mainBreakerA * (i.daytimeFraction ?? 0.5)

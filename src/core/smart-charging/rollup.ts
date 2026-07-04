@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import { stockholmDateKey, stockholmHour } from '../../sdk/stockholm-time.js'
+import { localDateKey, localHour } from '../../sdk/local-time.js'
 
 // Household-load history for the "worst-case current over the last N days" charging fallback.
 // Stored as an hourly MAX rollup (one row per Stockholm day+hour) rather than raw samples:
@@ -7,12 +7,17 @@ import { stockholmDateKey, stockholmHour } from '../../sdk/stockholm-time.js'
 // repeated local hour collapses via the max() upsert).
 
 /** Fold one household-load sample (max phase current, A) into the hourly-max rollup. */
-export function recordHouseholdLoad(db: DatabaseSync, at: Date, maxPhaseA: number): void {
+export function recordHouseholdLoad(
+  db: DatabaseSync,
+  at: Date,
+  maxPhaseA: number,
+  tz: string,
+): void {
   if (!Number.isFinite(maxPhaseA) || maxPhaseA < 0) return
   db.prepare(
     `INSERT INTO household_load_hourly (date, hour, max_phase_a) VALUES (?, ?, ?)
      ON CONFLICT(date, hour) DO UPDATE SET max_phase_a = MAX(max_phase_a, excluded.max_phase_a)`,
-  ).run(stockholmDateKey(at), stockholmHour(at), maxPhaseA)
+  ).run(localDateKey(at, tz), localHour(at, tz), maxPhaseA)
 }
 
 /**
@@ -20,13 +25,18 @@ export function recordHouseholdLoad(db: DatabaseSync, at: Date, maxPhaseA: numbe
  * `historicalDays` calendar days (inclusive of `at`'s day). Null when there's no history for
  * that hour yet — the caller then falls through to the static rung.
  */
-export function worstCaseLoadA(db: DatabaseSync, at: Date, historicalDays: number): number | null {
+export function worstCaseLoadA(
+  db: DatabaseSync,
+  at: Date,
+  historicalDays: number,
+  tz: string,
+): number | null {
   const earliest = new Date(at.getTime() - (historicalDays - 1) * 24 * 3600_000)
   const row = db
     .prepare(
       `SELECT MAX(max_phase_a) AS worst FROM household_load_hourly WHERE hour = ? AND date >= ?`,
     )
-    .get(stockholmHour(at), stockholmDateKey(earliest)) as { worst: number | null }
+    .get(localHour(at, tz), localDateKey(earliest, tz)) as { worst: number | null }
   return row.worst ?? null
 }
 
@@ -35,7 +45,12 @@ export function worstCaseLoadA(db: DatabaseSync, at: Date, historicalDays: numbe
  * does not depend on it (worstCaseLoadA is date-bounded), so call it infrequently (on day
  * rollover), never on the hot per-sample path.
  */
-export function pruneHouseholdLoad(db: DatabaseSync, now: Date, keepDays: number): void {
+export function pruneHouseholdLoad(
+  db: DatabaseSync,
+  now: Date,
+  keepDays: number,
+  tz: string,
+): void {
   const cutoff = new Date(now.getTime() - keepDays * 24 * 3600_000)
-  db.prepare(`DELETE FROM household_load_hourly WHERE date < ?`).run(stockholmDateKey(cutoff))
+  db.prepare(`DELETE FROM household_load_hourly WHERE date < ?`).run(localDateKey(cutoff, tz))
 }

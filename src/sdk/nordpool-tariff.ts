@@ -10,9 +10,12 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { ModuleCtx, ModuleHealth } from './types.js'
 import type { Tariff, TariffSlot } from './tariff.js'
-import { stockholmParts, msUntilStockholmTime, msUntilStockholmMidnight } from './stockholm-time.js'
+import { localParts, msUntilLocalTime, msUntilLocalMidnight } from './local-time.js'
 
-// Nord Pool day-ahead prices publish ~13:00 CET; wait until 13:15 Stockholm to fetch.
+// Nord Pool day-ahead prices publish ~13:00 CET; wait until 13:15 to fetch. This is the price
+// MARKET's timezone (Nord Pool = CET/CEST), NOT the site/user timezone — the publish window +
+// per-day slot boundaries follow the market regardless of where the user lives.
+const MARKET_TZ = 'Europe/Stockholm'
 const PUBLISH_HOUR = 13
 const PUBLISH_MINUTE = 15
 
@@ -91,7 +94,7 @@ export interface ScheduleDecision {
 }
 
 export function isPastPublishWindow(now: Date): boolean {
-  const p = stockholmParts(now)
+  const p = localParts(now, MARKET_TZ)
   return p.hour > PUBLISH_HOUR || (p.hour === PUBLISH_HOUR && p.minute >= PUBLISH_MINUTE)
 }
 
@@ -120,20 +123,26 @@ export function nextDelay(
   now: Date,
 ): ScheduleDecision {
   if (haveTomorrow) {
-    return { delayMs: msUntilStockholmTime(now, PUBLISH_HOUR, PUBLISH_MINUTE), reason: 'next-day' }
+    return {
+      delayMs: msUntilLocalTime(now, PUBLISH_HOUR, PUBLISH_MINUTE, MARKET_TZ),
+      reason: 'next-day',
+    }
   }
   if (!isPastPublishWindow(now)) {
     return {
-      delayMs: msUntilStockholmTime(now, PUBLISH_HOUR, PUBLISH_MINUTE),
+      delayMs: msUntilLocalTime(now, PUBLISH_HOUR, PUBLISH_MINUTE, MARKET_TZ),
       reason: 'wait-for-window',
     }
   }
   // Past publish window, don't have tomorrow yet — retry chain: +30m, then 1h, 2h, 4h, …
   const n = state.consecutiveFailures
   const delayMs = n === 0 ? 30 * 60_000 : Math.pow(2, n - 1) * 3600_000
-  const tillMidnight = msUntilStockholmMidnight(now)
+  const tillMidnight = msUntilLocalMidnight(now, MARKET_TZ)
   if (delayMs >= tillMidnight) {
-    return { delayMs: msUntilStockholmTime(now, PUBLISH_HOUR, PUBLISH_MINUTE), reason: 'next-day' }
+    return {
+      delayMs: msUntilLocalTime(now, PUBLISH_HOUR, PUBLISH_MINUTE, MARKET_TZ),
+      reason: 'next-day',
+    }
   }
   return { delayMs, reason: 'retry' }
 }

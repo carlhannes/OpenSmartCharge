@@ -11,6 +11,8 @@ import type { MeterReader } from '../sdk/meter-reader.js'
 import type { Balancer } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import type { Charger } from '../sdk/charger.js'
+import { getTimezone, setTimezone } from '../core/settings.js'
+import { isValidTimeZone } from '../sdk/local-time.js'
 
 export interface ApiDeps {
   db: DatabaseSync
@@ -52,6 +54,25 @@ export function createApiRouter(deps: ApiDeps): Router {
       return
     }
     res.json(state)
+  })
+
+  // GET /api/settings — system-wide settings (currently the site timezone).
+  router.get('/settings', (_req: Request, res: Response) => {
+    res.json({ timezone: getTimezone(deps.db) })
+  })
+
+  // PUT /api/settings — persist system settings. The UI setup flow posts the auto-detected browser
+  // timezone here. Read live each control tick, so it applies without a restart.
+  router.put('/settings', (req: Request, res: Response) => {
+    const body = req.body as { timezone?: unknown }
+    const timezone = typeof body.timezone === 'string' ? body.timezone : undefined
+    if (timezone === undefined || !isValidTimeZone(timezone)) {
+      res.status(400).json({ error: 'timezone must be a valid IANA timezone' })
+      return
+    }
+    setTimezone(deps.db, timezone)
+    deps.events.emit('settings.changed', { timezone })
+    res.json({ timezone })
   })
 
   // POST /api/loadpoints/:name/mode

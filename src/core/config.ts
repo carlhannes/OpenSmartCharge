@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { parse } from 'yaml'
 import { z } from 'zod'
+import { isValidTimeZone } from '../sdk/local-time.js'
 
 const chargeModeSchema = z.enum(['disabled', 'smart', 'fast'])
 
@@ -91,6 +92,13 @@ const siteConfigSchema = z.object({
   // balancer (the static/historical current fallback sizes against this). A balancer,
   // when configured, carries its own mainBreakerA per circuit.
   mainBreakerA: z.number().positive().optional(),
+  // Site (user) timezone for all wall-clock planning — night window, plan ready-by, targets.
+  // Seeds the settings table; the UI setup flow auto-detects + overrides it at runtime. (Tariff
+  // providers use their own market timezone, not this.)
+  timezone: z
+    .string()
+    .refine(isValidTimeZone, { message: 'site.timezone must be a valid IANA timezone' })
+    .default('Europe/Stockholm'),
 })
 
 const configSchema = z.object({

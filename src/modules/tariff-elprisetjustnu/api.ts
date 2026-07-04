@@ -1,9 +1,12 @@
 import type { TariffSlot } from '../../sdk/tariff.js'
 import { ZoneNotFoundError } from '../../sdk/nordpool-tariff.js'
-import { stockholmDateKey } from '../../sdk/stockholm-time.js'
+import { localDateKey } from '../../sdk/local-time.js'
 import type { ElprisetRecord } from './types.js'
 
 const BASE = 'https://www.elprisetjustnu.se/api/v1/prices'
+// elprisetjustnu publishes one file per SWEDISH (Nord Pool market) calendar day — CET/CEST,
+// independent of the site/user timezone.
+const MARKET_TZ = 'Europe/Stockholm'
 const FETCH_TIMEOUT_MS = 15_000
 const VALID_ZONE = /^SE[1-4]$/
 
@@ -25,9 +28,9 @@ export async function fetchElprisetPrices(
   // is skipped even across a 23-hour DST day; the Set dedupes repeated keys.
   const dayKeys = new Set<string>()
   for (let t = from.getTime(); t <= to.getTime(); t += 12 * 3600_000) {
-    dayKeys.add(stockholmDateKey(new Date(t)))
+    dayKeys.add(localDateKey(new Date(t), MARKET_TZ))
   }
-  dayKeys.add(stockholmDateKey(to))
+  dayKeys.add(localDateKey(to, MARKET_TZ))
 
   const slots: TariffSlot[] = []
   let published = 0

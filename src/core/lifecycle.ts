@@ -33,7 +33,8 @@ import type { Charger } from '../sdk/charger.js'
 import type { Tariff, TariffSlot } from '../sdk/tariff.js'
 import type { MeterReader, MeterSnapshot } from '../sdk/meter-reader.js'
 import { recordHouseholdLoad, pruneHouseholdLoad, worstCaseLoadA } from './smart-charging/rollup.js'
-import { stockholmDateKey, stockholmHour, msUntilStockholmTime } from '../sdk/stockholm-time.js'
+import { localDateKey, localHour, msUntilLocalTime } from '../sdk/local-time.js'
+import { getTimezone, seedSettings } from './settings.js'
 import type { Balancer, LoadpointSnapshot } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import type { LoadpointState } from './loadpoint.js'
@@ -63,6 +64,11 @@ async function main() {
 
   const db = openDb(DATA_DIR)
   log.info({ dataDir: DATA_DIR }, 'database ready')
+
+  // Seed system settings (e.g. site timezone) from config into the DB on first boot; runtime
+  // values (UI setup auto-detect) win thereafter. Re-assert declaratively via `npm run config:apply`.
+  seedSettings(db, config)
+  log.info({ timezone: getTimezone(db) }, 'settings ready')
 
   const events = createEventBus()
   const health = createHealthMap()
@@ -165,12 +171,13 @@ async function main() {
     const s = p.snapshot
     const maxPhaseA = Math.max(s.i1A ?? 0, s.i2A ?? 0, s.i3A ?? 0)
     if (maxPhaseA > 0) {
-      recordHouseholdLoad(db, s.timestamp, maxPhaseA)
-      const dayKey = stockholmDateKey(s.timestamp)
+      const tz = getTimezone(db)
+      recordHouseholdLoad(db, s.timestamp, maxPhaseA, tz)
+      const dayKey = localDateKey(s.timestamp, tz)
       if (dayKey !== lastRollupPruneDay) {
         lastRollupPruneDay = dayKey
         // Keep a few days beyond the look-back window so the query range is always covered.
-        pruneHouseholdLoad(db, s.timestamp, config.smartCharging.historicalDays + 4)
+        pruneHouseholdLoad(db, s.timestamp, config.smartCharging.historicalDays + 4, tz)
       }
     }
   })
@@ -383,7 +390,7 @@ async function main() {
       sessionEnergyKWh: state.sessionEnergyKWh,
       estimatedSoc: estimatedSocVal,
       targetSoc: state.targetSoc,
-      targetTime: state.targetTime ? parseTargetTime(state.targetTime) : undefined,
+      targetTime: state.targetTime ? parseTargetTime(state.targetTime, getTimezone(db)) : undefined,
       maxCurrentA: state.maxCurrentA,
       pricesAvailable,
       shouldChargeNow,
@@ -409,13 +416,14 @@ async function main() {
     tariff: Tariff,
     now: Date,
     days: number,
+    tz: string,
   ): Promise<Map<number, number> | undefined> {
     const from = new Date(now.getTime() - days * 24 * 3600_000)
     const past = await tariff.prices(from, now).catch(() => [] as TariffSlot[])
     if (past.length === 0) return undefined
     const acc = new Map<number, { sum: number; n: number }>()
     for (const s of past) {
-      const h = stockholmHour(s.start)
+      const h = localHour(s.start, tz)
       const cur = acc.get(h) ?? { sum: 0, n: 0 }
       cur.sum += s.pricePerKWh
       cur.n += 1
@@ -442,9 +450,10 @@ async function main() {
     if (!state) return undefined
     const sc = config.smartCharging
     const nightWindow = sc.nightWindow
+    const tz = getTimezone(db) // site timezone — all wall-clock planning this tick uses it
 
     const targetTime = state.targetTime
-      ? parseTargetTime(state.targetTime)
+      ? parseTargetTime(state.targetTime, tz)
       : new Date(now.getTime() + 24 * 3600_000)
     const hoursUntilTarget = Math.max(0.25, (targetTime.getTime() - now.getTime()) / 3_600_000)
 
@@ -483,7 +492,7 @@ async function main() {
     }
     const historicalAvgByHour =
       (!livePrices || livePrices.length === 0) && tariff
-        ? await historicalPriceAvg(tariff, now, sc.historicalDays)
+        ? await historicalPriceAvg(tariff, now, sc.historicalDays, tz)
         : undefined
     const price = resolvePriceCurve({
       livePrices,
@@ -491,6 +500,7 @@ async function main() {
       now,
       targetTime,
       nightWindow,
+      tz,
     })
 
     // Current budget: live meter headroom → historical worst-case → time-of-day static.
@@ -502,11 +512,12 @@ async function main() {
       ownDrawA: Math.max(state.currentA, lastCommandedA.get(lpCfg.name) ?? 0),
       worstCaseLoadA:
         mainBreakerA != null
-          ? (worstCaseLoadA(db, now, sc.historicalDays) ?? undefined)
+          ? (worstCaseLoadA(db, now, sc.historicalDays, tz) ?? undefined)
           : undefined,
       nightWindow,
       nightMarginA: sc.nightMarginA,
       daytimeFraction: sc.daytimeFraction,
+      tz,
     })
 
     let shouldChargeNow: boolean | undefined
@@ -733,13 +744,13 @@ async function main() {
   process.once('SIGTERM', shutdown)
 }
 
-// Parse "HH:MM" into the next occurrence of that time in Stockholm-local wall-clock (today or
-// tomorrow) — matching how Nord Pool prices and the night window are reasoned about. Previously
-// used server-local setHours, which was only correct when the host TZ happened to be Stockholm.
-function parseTargetTime(hhmm: string): Date {
+// Parse "HH:MM" into the next occurrence of that time in the SITE-local wall-clock (today or
+// tomorrow) — matching how the night window + plans are reasoned about. Previously used
+// server-local setHours, which was only correct when the host TZ happened to be the site TZ.
+function parseTargetTime(hhmm: string, tz: string): Date {
   const [h, m] = hhmm.split(':').map(Number)
   const now = new Date()
-  return new Date(now.getTime() + msUntilStockholmTime(now, h, m))
+  return new Date(now.getTime() + msUntilLocalTime(now, h, m, tz))
 }
 
 main().catch((err) => {
