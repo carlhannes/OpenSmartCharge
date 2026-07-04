@@ -75,6 +75,14 @@ Outbound commands OSC can send (all in `commands.ts`, wired through `server.ts` 
    "transaction start in SuspendedEVSE" and incorrect profile application — check the
    charger's firmware version if behaviour is strange.
 
+## Connection resilience (flaky WiFi / host sleep)
+
+The charger↔central-system WebSocket *will* drop — flaky WiFi, the host sleeping, network blips. Design for it:
+
+- **Charging continues through drops.** Charging profiles are stored on the charger, so an active session keeps charging at its last limit even while the central system is disconnected. (Validated: overnight the charger bounced ~17× in the morning with outages up to **35 min** — laptop sleep + WiFi blips — and the car still charged to completion.)
+- **On (re)connect, re-assert + refresh.** OSC should, on every (re)connect: (a) **re-send the current `SetChargingProfile`** (at the max stack level) so the offered limit is guaranteed correct after any drop or CS takeover, and (b) **refresh connection state** — push a `connected` status and/or send **`TriggerMessage(StatusNotification)`**, because a charger (Zaptec Go confirmed) does **not** re-send BootNotification/StatusNotification on a bare WS reconnect, so OSC's `connected`/status/limit view otherwise goes stale until the next real status change. *(Status: follow-up — see ROADMAP "Permanent fix still to land".)*
+- **Don't evict a live station on a stale disconnect.** A fast reconnect opens a new socket (which re-registers) before the old socket's `disconnect` fires; guard eviction with `s.client === client` so the stale disconnect can't drop the live registration. *(Fixed — `server.ts` disconnect handler.)*
+
 ## Debugging playbook
 
 When a charger accepts profiles but won't charge:
