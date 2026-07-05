@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { estimateSoc, estimateSocSinceAnchor } from './estimator.js'
+import { estimateSoc, estimateSocSinceAnchor, observedEfficiency } from './estimator.js'
 import { DEFAULT_CHARGING_EFFICIENCY } from './electrical.js'
 
 // estimateSoc is the Tier-2 degradation path: it estimates SoC from delivered
@@ -58,4 +58,40 @@ test('a session-energy decrease (meter reset) floors the delta at 0 — never su
 
 test('returns undefined when capacity is unknown', () => {
   expect(estimateSocSinceAnchor(50, 5, 15, undefined)).toBeUndefined()
+})
+
+// observedEfficiency measures THIS session's real efficiency from two readings, so a mid-session
+// car-API dropout can extrapolate SoC on the measured value instead of the generic constant.
+
+test('observedEfficiency: battery kWh gained / grid kWh delivered, within a sane band', () => {
+  // 40%→60% = 20% of 60 kWh = 12 kWh into the battery, for 13 kWh from the grid ⇒ ≈0.923.
+  expect(
+    observedEfficiency({ soc: 40, sessionKWh: 0 }, { soc: 60, sessionKWh: 13 }, 60),
+  ).toBeCloseTo(12 / 13, 3)
+})
+
+test('observedEfficiency: undefined until enough SoC AND kWh delta to be reliable', () => {
+  expect(
+    observedEfficiency({ soc: 40, sessionKWh: 0 }, { soc: 60, sessionKWh: 2 }, 60),
+  ).toBeUndefined() // <3 kWh
+  expect(
+    observedEfficiency({ soc: 40, sessionKWh: 0 }, { soc: 41, sessionKWh: 6 }, 60),
+  ).toBeUndefined() // <2% SoC
+})
+
+test('observedEfficiency: rejects out-of-band results (noise / bad data)', () => {
+  // 12 kWh into 12 kWh delivered ⇒ 1.0, impossible → undefined.
+  expect(
+    observedEfficiency({ soc: 40, sessionKWh: 0 }, { soc: 60, sessionKWh: 12 }, 60),
+  ).toBeUndefined()
+  // 6 kWh into 12 kWh ⇒ 0.5, implausibly low → undefined.
+  expect(
+    observedEfficiency({ soc: 40, sessionKWh: 0 }, { soc: 50, sessionKWh: 12 }, 60),
+  ).toBeUndefined()
+})
+
+test('observedEfficiency: undefined without capacity', () => {
+  expect(
+    observedEfficiency({ soc: 40, sessionKWh: 0 }, { soc: 60, sessionKWh: 13 }, undefined),
+  ).toBeUndefined()
 })

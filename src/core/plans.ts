@@ -158,24 +158,7 @@ export function planTargetTime(plan: Plan, now: Date, tz: string): Date {
   return new Date(now.getTime() + msUntilLocalTime(now, h, m, tz))
 }
 
-export interface PlanVehicleReading {
-  range?: number
-  soc?: number
-}
-
-/**
- * Turn a plan's target into the energy resolver's inputs. `pct`→targetSocPct, `kwh`→targetKWh,
- * `km`→targetSocPct via the car's range/SoC ratio (km per %). A km target with no cached reading
- * (car never seen / soc 0) returns {} — the energy resolver then degrades to duty-cycle.
- */
-export function planEnergyTarget(
-  plan: Plan,
-  veh: PlanVehicleReading,
-): { targetSocPct?: number; targetKWh?: number } {
-  if (plan.unit === 'kwh') return { targetKWh: plan.target }
-  if (plan.unit === 'pct') return { targetSocPct: plan.target }
-  const { range, soc } = veh
-  if (range == null || soc == null || soc <= 0 || range <= 0) return {}
-  const kmPerPct = range / soc
-  return { targetSocPct: Math.min(100, plan.target / kmPerPct) }
-}
+// A plan's target → charging value + display SoC now lives in ONE place: `resolveTarget` /
+// `targetToSoc` in smart-charging/energy.ts (unit conversion + the energy ladder + resolvedSoc).
+// The lifecycle builds a { unit, value } Target from the active plan (or the ad-hoc loadpoint
+// target) and calls it; the API reuses targetToSoc for each plan's display %.

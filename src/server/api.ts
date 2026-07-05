@@ -25,6 +25,7 @@ import {
   type PlanUnit,
   type DayKey,
 } from '../core/plans.js'
+import { targetToSoc, availableUnits, type EnergyReading } from '../core/smart-charging/energy.js'
 
 export interface ApiDeps {
   db: DatabaseSync
@@ -68,8 +69,9 @@ function validPlanTarget(unit: PlanUnit, target: number): boolean {
   return unit === 'pct' ? target > 0 && target <= 100 : target > 0
 }
 
-// DTO for ui2: id as a string, loadpointName (ui2 maps → chargerId), rest pass through.
-function toPlanDto(p: Plan) {
+// DTO for ui2: id as a string, loadpointName (ui2 maps → chargerId), rest pass through, plus
+// resolvedSoc — the backend-computed display % (the single value ui2 shows). null for kwh / no car.
+function toPlanDto(p: Plan, reading: EnergyReading) {
   return {
     id: String(p.id),
     loadpointName: p.loadpointName,
@@ -78,6 +80,7 @@ function toPlanDto(p: Plan) {
     target: p.target,
     unit: p.unit,
     enabled: p.enabled,
+    resolvedSoc: targetToSoc({ unit: p.unit, value: p.target }, reading),
   }
 }
 
@@ -92,9 +95,26 @@ export function createApiRouter(deps: ApiDeps): Router {
     return lp ? deps.chargers.get(lp.charger) : undefined
   }
 
-  // GET /api/loadpoints
-  router.get('/loadpoints', (_req: Request, res: Response) => {
-    res.json([...deps.loadpoints.values()])
+  // The bound vehicle's freshest cached reading (no network) for a loadpoint — soc/range for the km
+  // conversion + display, capacity to size energy. {} when the loadpoint has no vehicle.
+  const vehicleReadingForLoadpoint = async (name: string): Promise<EnergyReading> => {
+    const lp = deps.config.loadpoints.find((l) => l.name === name)
+    const veh = lp?.vehicle ? deps.vehicles.get(lp.vehicle) : undefined
+    if (!veh) return {}
+    const data = await veh.getData().catch(() => undefined)
+    return { soc: data?.soc, range: data?.range, capacity: veh.getCachedCapacity() }
+  }
+
+  // GET /api/loadpoints — each loadpoint carries availableTargetUnits (which target units its data
+  // sources can back right now): kwh always; pct with SoC+capacity; km also needs range.
+  router.get('/loadpoints', async (_req: Request, res: Response) => {
+    const out = await Promise.all(
+      [...deps.loadpoints.values()].map(async (state) => ({
+        ...state,
+        availableTargetUnits: availableUnits(await vehicleReadingForLoadpoint(state.name)),
+      })),
+    )
+    res.json(out)
   })
 
   // GET /api/loadpoints/:name
@@ -129,17 +149,18 @@ export function createApiRouter(deps: ApiDeps): Router {
   // ── Charging plans (per loadpoint) ──────────────────────────────────────────
 
   // GET /api/loadpoints/:name/plans
-  router.get('/loadpoints/:name/plans', (req: Request, res: Response) => {
+  router.get('/loadpoints/:name/plans', async (req: Request, res: Response) => {
     const name = String(req.params.name)
     if (!deps.loadpoints.has(name)) {
       res.status(404).json({ error: 'loadpoint not found' })
       return
     }
-    res.json(listPlans(deps.db, name).map(toPlanDto))
+    const reading = await vehicleReadingForLoadpoint(name)
+    res.json(listPlans(deps.db, name).map((p) => toPlanDto(p, reading)))
   })
 
   // POST /api/loadpoints/:name/plans — create a plan
-  router.post('/loadpoints/:name/plans', (req: Request, res: Response) => {
+  router.post('/loadpoints/:name/plans', async (req: Request, res: Response) => {
     const name = String(req.params.name)
     if (!deps.loadpoints.has(name)) {
       res.status(404).json({ error: 'loadpoint not found' })
@@ -165,11 +186,11 @@ export function createApiRouter(deps: ApiDeps): Router {
     const enabled = typeof b.enabled === 'boolean' ? b.enabled : true
     const plan = createPlan(deps.db, name, { days, readyBy, target, unit, enabled })
     deps.onPlansChanged(name)
-    res.status(201).json(toPlanDto(plan))
+    res.status(201).json(toPlanDto(plan, await vehicleReadingForLoadpoint(name)))
   })
 
   // PUT /api/loadpoints/:name/plans/:id — partial update (only provided fields change)
-  router.put('/loadpoints/:name/plans/:id', (req: Request, res: Response) => {
+  router.put('/loadpoints/:name/plans/:id', async (req: Request, res: Response) => {
     const name = String(req.params.name)
     const id = Number(req.params.id)
     const existing = getPlan(deps.db, id)
@@ -230,7 +251,7 @@ export function createApiRouter(deps: ApiDeps): Router {
     }
     const updated = updatePlan(deps.db, id, patch)
     deps.onPlansChanged(name)
-    res.json(toPlanDto(updated!))
+    res.json(toPlanDto(updated!, await vehicleReadingForLoadpoint(name)))
   })
 
   // DELETE /api/loadpoints/:name/plans/:id

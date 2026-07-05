@@ -35,19 +35,13 @@ import type { MeterReader, MeterSnapshot } from '../sdk/meter-reader.js'
 import { recordHouseholdLoad, pruneHouseholdLoad, worstCaseLoadA } from './smart-charging/rollup.js'
 import { localDateKey, localHour, msUntilLocalTime } from '../sdk/local-time.js'
 import { getTimezone, seedSettings } from './settings.js'
-import {
-  listPlans,
-  selectActivePlan,
-  planTargetTime,
-  planEnergyTarget,
-  type PlanVehicleReading,
-} from './plans.js'
+import { listPlans, selectActivePlan, planTargetTime } from './plans.js'
 import type { Balancer, LoadpointSnapshot } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import type { LoadpointState } from './loadpoint.js'
 import type { ChargeMode, LoadpointConfig } from './config.js'
-import { estimateSocSinceAnchor } from './estimator.js'
-import { resolveEnergyTarget } from './smart-charging/energy.js'
+import { estimateSocSinceAnchor, observedEfficiency } from './estimator.js'
+import { resolveTarget, type Target } from './smart-charging/energy.js'
 import { resolvePriceCurve } from './smart-charging/price.js'
 import { resolveCurrentBudget } from './smart-charging/current.js'
 import { decideShouldCharge, forceMinSoc } from './smart-charging/decide.js'
@@ -327,10 +321,34 @@ async function main() {
   // instead of double-counting the whole session on top of a mid-session reading.
   const vehiclePollState = new Map<string, { lastPollAt: number; polledThisConnection: boolean }>()
   const vehicleAnchor = new Map<string, { soc: number; sessionEnergyKWh: number }>()
+  // The session's FIRST real reading, kept alongside the latest anchor so we can observe THIS
+  // session's charging efficiency (see effectiveEfficiencyFor). Reset on disconnect, so each
+  // charging session measures its own efficiency; never persisted across sessions.
+  const sessionFirstReading = new Map<string, { soc: number; sessionEnergyKWh: number }>()
   // Loadpoints we've already warned about being below minSoc while disabled (warn once per episode).
   const minSocWarned = new Set<string>()
 
-  // Re-anchored SoC estimate: last real SoC + (session kWh since that reading) × efficiency / capacity.
+  // Charging efficiency to use for this loadpoint right now: the value OBSERVED this session (two
+  // real readings with enough delta) when available, else the configured default. Session-scoped.
+  function effectiveEfficiencyFor(
+    lpName: string,
+    capacity: number | undefined,
+  ): { efficiency: number; observed: number | undefined } {
+    const first = sessionFirstReading.get(lpName)
+    const latest = vehicleAnchor.get(lpName)
+    const observed =
+      first && latest
+        ? observedEfficiency(
+            { soc: first.soc, sessionKWh: first.sessionEnergyKWh },
+            { soc: latest.soc, sessionKWh: latest.sessionEnergyKWh },
+            capacity,
+          )
+        : undefined
+    return { efficiency: observed ?? config.smartCharging.chargingEfficiency, observed }
+  }
+
+  // Re-anchored SoC estimate: last real SoC + (session kWh since) × efficiency / capacity, using the
+  // observed-this-session efficiency when we have it — so a car-API dropout stays accurate.
   function estimatedSocFor(
     lpName: string,
     capacity: number | undefined,
@@ -343,8 +361,53 @@ async function main() {
       anchor.sessionEnergyKWh,
       sessionEnergyKWh,
       capacity,
-      config.smartCharging.chargingEfficiency,
+      effectiveEfficiencyFor(lpName, capacity).efficiency,
     )
+  }
+
+  // Assemble the energy context for a loadpoint from whatever data sources it has — the vehicle
+  // today; a charger reading SoC over the Type-2 wire could feed the same shape later. The resolver
+  // takes plain data (not a Vehicle), so it stays source-agnostic. getData() is cached (no network).
+  async function gatherEnergyContext(
+    lpCfg: LoadpointConfig,
+    state: LoadpointState,
+  ): Promise<{
+    estimatedSocPct?: number
+    soc?: number
+    range?: number
+    capacity?: number
+    sessionEnergyKWh: number
+    efficiency: number
+  }> {
+    const vehicle = lpCfg.vehicle ? vehicles.get(lpCfg.vehicle) : undefined
+    const capacity = vehicle?.getCachedCapacity()
+    let soc: number | undefined
+    let range: number | undefined
+    if (vehicle) {
+      const data = await vehicle.getData().catch(() => undefined)
+      soc = data?.soc
+      range = data?.range
+    }
+    const eff = effectiveEfficiencyFor(lpCfg.name, capacity)
+    // Surface the observed-this-session efficiency when we have one, so it's visible in the logs
+    // overnight (fallback is the configured constant, not logged as it's the uninteresting case).
+    if (eff.observed !== undefined)
+      log.debug(
+        {
+          loadpoint: lpCfg.name,
+          observedEfficiency: Number(eff.observed.toFixed(3)),
+          fallback: config.smartCharging.chargingEfficiency,
+        },
+        'using observed session charging efficiency',
+      )
+    return {
+      estimatedSocPct: estimatedSocFor(lpCfg.name, capacity, state.sessionEnergyKWh),
+      soc,
+      range,
+      capacity,
+      sessionEnergyKWh: state.sessionEnergyKWh,
+      efficiency: eff.efficiency,
+    }
   }
 
   // Poll gate: refresh a loadpoint's vehicle on (re)connect + during charging every
@@ -358,6 +421,7 @@ async function main() {
     if (!state.connected) {
       vp.polledThisConnection = false // reset so the next connection re-anchors on its first tick
       vehiclePollState.set(lpCfg.name, vp)
+      sessionFirstReading.delete(lpCfg.name) // each new charging session measures its own efficiency
       return
     }
     const should = shouldPollVehicle({
@@ -379,7 +443,10 @@ async function main() {
     void vehicle
       .refresh()
       .then((data) => {
-        vehicleAnchor.set(lpCfg.name, { soc: data.soc, sessionEnergyKWh: state.sessionEnergyKWh })
+        const reading = { soc: data.soc, sessionEnergyKWh: state.sessionEnergyKWh }
+        vehicleAnchor.set(lpCfg.name, reading)
+        // Record the session's first real reading once; with a later one it yields observed efficiency.
+        if (!sessionFirstReading.has(lpCfg.name)) sessionFirstReading.set(lpCfg.name, reading)
         updateHealth(health, vehicleName, vehicle.health())
       })
       .catch((err) => log.warn({ err, vehicle: vehicleName }, 'vehicle refresh failed'))
@@ -471,27 +538,15 @@ async function main() {
     const nightWindow = sc.nightWindow
     const tz = getTimezone(db) // site timezone — all wall-clock planning this tick uses it
 
-    // Vehicle handle (battery capacity + km-plan conversion).
-    const vehicle = lpCfg.vehicle ? vehicles.get(lpCfg.vehicle) : undefined
-    const capacity = vehicle?.getCachedCapacity()
-
     // A recurring plan that governs NOW takes precedence over the ad-hoc loadpoint target; with no
     // active plan we fall back to state.target* (guest / manual one-off). Plans are read live each
     // tick — no reload (see core/plans.ts for the resolution rule).
     const activePlan = selectActivePlan(listPlans(db, lpCfg.name), now, tz)
-    let planTarget: { targetSocPct?: number; targetKWh?: number } | undefined
-    if (activePlan) {
-      let veh: PlanVehicleReading = {}
-      if (activePlan.unit === 'km' && vehicle) {
-        const data = await vehicle.getData().catch(() => undefined)
-        veh = { range: data?.range, soc: data?.soc }
-      }
-      planTarget = planEnergyTarget(activePlan, veh)
+    if (activePlan)
       log.debug(
         { loadpoint: lpCfg.name, plan: activePlan.id, readyBy: activePlan.readyBy },
         'active plan governs',
       )
-    }
 
     const targetTime = activePlan
       ? planTargetTime(activePlan, now, tz)
@@ -510,14 +565,19 @@ async function main() {
     // A balancer carries its own circuit fuse; a bare loadpoint falls back to the site fuse.
     const mainBreakerA = balancerCfg?.mainBreakerA ?? config.site.mainBreakerA
 
-    // Energy target: active plan → ad-hoc loadpoint target → duty-cycle (all one resolved value).
-    const estimatedSocPct = estimatedSocFor(lpCfg.name, capacity, state.sessionEnergyKWh)
-    const energy = resolveEnergyTarget({
-      estimatedSocPct,
-      targetSocPct: planTarget ? planTarget.targetSocPct : state.targetSoc,
-      batteryCapacityKWh: capacity,
-      targetKWh: planTarget ? planTarget.targetKWh : state.targetKWh,
-      sessionEnergyKWh: state.sessionEnergyKWh,
+    // One target → one resolved { requiredKWh (charge) + resolvedSoc (display) } through the single
+    // resolver, which owns unit conversion (km→% via the car's ratio) and the degradation ladder.
+    // The target is the governing plan or the ad-hoc loadpoint target, preferring % when capacity
+    // lets us size it (else the kWh-to-add fallback) — mirroring the ladder's own rung order.
+    const ectx = await gatherEnergyContext(lpCfg, state)
+    const estimatedSocPct = ectx.estimatedSocPct
+    let target: Target | null = null
+    if (activePlan) target = { unit: activePlan.unit, value: activePlan.target }
+    else if (state.targetSoc != null && (ectx.capacity != null || state.targetKWh == null))
+      target = { unit: 'pct', value: state.targetSoc }
+    else if (state.targetKWh != null) target = { unit: 'kwh', value: state.targetKWh }
+    const energy = resolveTarget(target, {
+      ...ectx,
       hoursUntilTarget,
       maxCurrentA: state.maxCurrentA,
       phases,
@@ -566,7 +626,7 @@ async function main() {
     let shouldChargeNow: boolean | undefined
     if (state.mode === 'smart') {
       const priceDecision = decideShouldCharge({
-        requiredKWh: energy.value,
+        requiredKWh: energy.requiredKWh,
         now,
         targetTime,
         planRateA: Math.min(state.maxCurrentA, current.value),

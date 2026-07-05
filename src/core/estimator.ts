@@ -28,3 +28,27 @@ export function estimateSocSinceAnchor(
   const deltaKWh = Math.max(0, sessionKWhNow - anchorSessionKWh)
   return estimateSoc(anchorSoc, deltaKWh, batteryCapacityKWh, chargingEfficiency)
 }
+
+// Charging efficiency OBSERVED within one session: (battery kWh gained between two real SoC
+// readings) / (grid kWh delivered between them). Lets a mid-session car-API dropout extrapolate SoC
+// on THIS car's measured efficiency + charger kWh instead of a generic constant. Returns undefined
+// when the deltas are too small to trust or the result falls outside a sane band — the caller then
+// keeps the configured default. Session-scoped only; nothing is persisted.
+const MIN_OBSERVE_KWH = 3 // need a few kWh delivered before the ratio is meaningful
+const MIN_OBSERVE_SOC = 2 // …and >1% SoC gained, so 1% quantization doesn't dominate
+const OBSERVE_EFF_MIN = 0.7
+const OBSERVE_EFF_MAX = 0.98
+
+export function observedEfficiency(
+  first: { soc: number; sessionKWh: number },
+  latest: { soc: number; sessionKWh: number },
+  batteryCapacityKWh: number | undefined,
+): number | undefined {
+  if (batteryCapacityKWh === undefined || batteryCapacityKWh <= 0) return undefined
+  const deltaSocPct = latest.soc - first.soc
+  const deltaKWh = latest.sessionKWh - first.sessionKWh
+  if (deltaKWh < MIN_OBSERVE_KWH || deltaSocPct < MIN_OBSERVE_SOC) return undefined
+  const eff = ((deltaSocPct / 100) * batteryCapacityKWh) / deltaKWh
+  if (eff < OBSERVE_EFF_MIN || eff > OBSERVE_EFF_MAX) return undefined
+  return eff
+}

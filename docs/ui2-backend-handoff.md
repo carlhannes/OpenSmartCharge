@@ -6,6 +6,15 @@ built** — it's just **mock/local**. This is the wiring to make it live. No bac
 your side; the endpoints below are stable. (Line numbers are approximate — verify against your current
 code, since we're editing in parallel. I have NOT touched `src/ui2/`.)
 
+> **⚠️ Update (2026-07-05) — target-model rework.** Two additions below, both to move the km→%
+> conversion fully into the backend (single source of truth) so the UI never computes it:
+> - **`PlanDto.resolvedSoc`** — the backend now computes each plan's display SoC% (km via the car's
+>   range/soc ratio, pct passthrough, `null` for kwh or no car). **Display it; delete client-side km→%
+>   math** — this supersedes the old "keep your ≈% display as-is" line; the hardcoded efficiency
+>   constant and the SoC ring's fake-80% fallback both go away.
+> - **`availableTargetUnits`** on each loadpoint (`GET /api/loadpoints`) — the units its data can back
+>   right now. **Gate the unit picker on it**: no `km` without range, no `pct` without SoC (always `kwh`).
+
 ---
 
 ## TL;DR
@@ -38,14 +47,18 @@ interface PlanDto {
   target: number
   unit: "pct" | "km" | "kwh"
   enabled: boolean
+  resolvedSoc: number | null // backend display %: pct→value, km→via car ratio, kwh / no-car → null
 }
 ```
 
 - **400** on: empty/unknown `days`, `readyBy` not `HH:MM`, `unit` not `pct|km|kwh`, `target ≤ 0`, or
   `pct` target > 100. **404** if the loadpoint (or plan id under it) doesn't exist.
 - **SSE `loadpoint.plans` `{ name }`** fires on every create/update/delete → re-fetch that loadpoint's plans.
-- Send `km` as `{ unit: "km", target: <km> }` — the **backend** converts km→% for charging (via the car's
-  cached range/SoC ratio; degrades gracefully with no car). Keep your client-side ≈% display as-is.
+- Send `km` as `{ unit: "km", target: <km> }` — the backend converts km→% for **both** charging and
+  display. Read **`resolvedSoc`** off each `PlanDto` for the ring / "≈N%"; do **not** recompute km→%
+  client-side (the old guidance — it caused a hardcoded constant + wrong-vehicle drift). Keep the raw
+  target ("300 km by 07:00") as the headline, `resolvedSoc` as the "≈N%". It's `null` for kwh targets
+  and when there's no car → then show the raw target only, no ring arc.
 
 ### Settings — site timezone
 
@@ -64,6 +77,15 @@ interface PlanDto {
   (all COALESCE-merged — send only what changed).
 - Surfaced on `GET /api/loadpoints` as `minSoc` (camelCase, on `LoadpointStateDto`) and on the
   **`loadpoint.target`** SSE event (add `minSoc?` next to the `targetKWh?` you already read).
+
+### availableTargetUnits — per loadpoint
+
+- `GET /api/loadpoints` now includes **`availableTargetUnits: ("pct"|"km"|"kwh")[]`** on each loadpoint —
+  the units its data sources can actually back right now: `kwh` always; `pct` when SoC + battery capacity
+  are known; `km` also needs range. **Gate the plan-editor unit picker on this list.**
+- Derived from the bound vehicle's cached reading, so it grows once a car is seen (`["kwh"]` →
+  `["pct","km","kwh"]`). Re-read it when you re-fetch loadpoints (e.g. on `loadpoint.state`) — there's no
+  dedicated SSE event; best-effort is fine.
 
 ---
 
@@ -116,8 +138,12 @@ the backend's contract; your day toggles + ready-by feed straight into it.
 - **Two timezones.** You only ever touch the **site** timezone (`/api/settings`). Tariff providers use
   their own market tz internally — not your concern.
 - **ids are strings** in the DTO (stringified rowids). Your `Plan.id: string` already matches.
-- **km needs a connected car** — the backend can't convert km→% without one; your existing
-  "km targets need a connected car" note is the right UX.
+- **km needs a connected car** — without one the backend can't convert km→%, so a km plan's
+  `resolvedSoc` is `null` and `km` is absent from `availableTargetUnits`. Your "km targets need a
+  connected car" note is still the right UX.
+- **Don't recompute km→% or the target ring client-side** — read `resolvedSoc` per plan and gate the
+  unit picker on `availableTargetUnits`. The backend owns the range/soc ratio + battery capacity; the UI
+  just displays. (This retires the hardcoded efficiency constant + the fake-80% ring.)
 
 ---
 
@@ -131,4 +157,6 @@ npm run dev:ui2        # ui2 dev server; set OSC_BACKEND=http://localhost:8080 i
 `useLiveSync` auto-probes `GET /api/loadpoints`: reachable → **live** (hydrate + SSE), unreachable →
 **demo** (local mock tick). So partial wiring is safe — unwired slices just stay on their mock values.
 If you extend `scripts/mock-backend.mjs`, add the `/plans` + `/settings` routes there too so demo mode
-exercises the same shapes.
+exercises the same shapes — **include `resolvedSoc` on each plan and `availableTargetUnits` on each
+loadpoint** (mirror the backend: `pct`→value, `km`→`value ÷ (range/soc)`, `kwh`/no-car→`null`; units =
+`kwh` always, `pct` with soc+capacity, `km` also with range) so demo mode matches live.

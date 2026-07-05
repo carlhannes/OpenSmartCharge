@@ -15,7 +15,6 @@ import {
   updatePlan,
   deletePlan,
   selectActivePlan,
-  planEnergyTarget,
   type Plan,
   type DayKey,
 } from './plans.js'
@@ -77,21 +76,8 @@ test('selectActivePlan returns undefined when no plan qualifies today', () => {
   expect(selectActivePlan([mkPlan({ enabled: false })], NOW, TZ)).toBeUndefined() // disabled
 })
 
-// ── target conversion (pure) ──────────────────────────────────────────────────
-
-test('planEnergyTarget maps pct/kwh directly and km via the range/soc ratio', () => {
-  expect(planEnergyTarget(mkPlan({ unit: 'pct', target: 80 }), {})).toEqual({ targetSocPct: 80 })
-  expect(planEnergyTarget(mkPlan({ unit: 'kwh', target: 40 }), {})).toEqual({ targetKWh: 40 })
-  // range 300 km at 60% → 5 km/% → 350 km target ⇒ 70%.
-  expect(planEnergyTarget(mkPlan({ unit: 'km', target: 350 }), { range: 300, soc: 60 })).toEqual({
-    targetSocPct: 70,
-  })
-})
-
-test('planEnergyTarget degrades a km target with no usable vehicle reading to {}', () => {
-  expect(planEnergyTarget(mkPlan({ unit: 'km', target: 350 }), {})).toEqual({})
-  expect(planEnergyTarget(mkPlan({ unit: 'km', target: 350 }), { range: 300, soc: 0 })).toEqual({})
-})
+// Target conversion (pct/km/kwh → SoC%, resolveTarget) moved to smart-charging/energy.test.ts —
+// it now lives with the resolver that owns it.
 
 // ── persistence CRUD ──────────────────────────────────────────────────────────
 

@@ -169,6 +169,65 @@ test('POST plan rejects invalid input with 400', async () => {
   }
 })
 
+test('plans carry resolvedSoc; loadpoints carry availableTargetUnits (backend owns km→%)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-plans-'))
+  const db = openDb(dir)
+  try {
+    // A car reporting soc + range + capacity → all three units backable; km resolves via the ratio.
+    const vehicle = {
+      getData: async () => ({ soc: 60, range: 300, batteryCapacity: 60, fetchedAt: new Date() }),
+      getCachedCapacity: () => 60,
+    }
+    const deps = {
+      db,
+      events: { emit() {} },
+      config: { loadpoints: [{ name: 'garage', charger: 'garage', vehicle: 'car' }] },
+      chargers: new Map(),
+      loadpoints: new Map([['garage', { name: 'garage' }]]),
+      vehicles: new Map([['car', vehicle]]),
+      onPlansChanged: () => {},
+    } as unknown as ApiDeps
+    await withApi(deps, async (baseUrl) => {
+      // 300 km at 60% → 5 km/% → 350 km ⇒ resolvedSoc 70.
+      const cr = await fetch(`${baseUrl}/api/loadpoints/garage/plans`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days: ['mon'], readyBy: '07:00', target: 350, unit: 'km' }),
+      })
+      expect(((await cr.json()) as { resolvedSoc: number }).resolvedSoc).toBe(70)
+      const lps = (await (await fetch(`${baseUrl}/api/loadpoints`)).json()) as {
+        availableTargetUnits: string[]
+      }[]
+      expect(lps[0].availableTargetUnits).toEqual(['pct', 'km', 'kwh'])
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('no vehicle → km plan resolvedSoc null, only kwh offered', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-plans-'))
+  const db = openDb(dir)
+  try {
+    await withApi(planDeps(db, { n: 0 }), async (baseUrl) => {
+      const cr = await fetch(`${baseUrl}/api/loadpoints/garage/plans`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days: ['mon'], readyBy: '07:00', target: 350, unit: 'km' }),
+      })
+      expect(((await cr.json()) as { resolvedSoc: number | null }).resolvedSoc).toBeNull()
+      const lps = (await (await fetch(`${baseUrl}/api/loadpoints`)).json()) as {
+        availableTargetUnits: string[]
+      }[]
+      expect(lps[0].availableTargetUnits).toEqual(['kwh'])
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('POST /target validates minSoc and passes it through', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'osc-api-minsoc-'))
   const db = openDb(dir)
