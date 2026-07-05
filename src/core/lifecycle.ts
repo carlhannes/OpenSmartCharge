@@ -56,8 +56,10 @@ import {
   circuitLiveMaxPhaseA,
   circuitOwnDrawA,
   planCircuit,
+  resumeNudgeDecision,
   type Circuit,
   type LpDecision,
+  type ResumeNudgeState,
 } from './control-loop.js'
 
 const PLUGINS_DIR = process.env.OSC_PLUGINS_DIR ?? './plugins'
@@ -345,6 +347,12 @@ async function main() {
   // Last amps value successfully sent to each charger. Keyed by loadpoint name (= LoadpointSnapshot.id).
   // Used to give the allocator an accurate credit-back during the car's ramp-up period.
   const lastCommandedA = new Map<string, number>()
+
+  // Resume-nudge state per loadpoint: some cars (VW group) latch SuspendedEV after an OSC 0 A pause
+  // and won't resume on a limit change — only a fresh RemoteStop+RemoteStart restarts them. We detect
+  // "wants charge + active session + drawing ~0 A" and nudge, guarded against ramp/spam/stuck loops.
+  const nudgeStates = new Map<string, ResumeNudgeState>()
+  const RESUME_NUDGE = { minDrawA: 1, graceMs: 90_000, cooldownMs: 180_000, maxNudges: 3 }
 
   // Lifecycle-owned vehicle polling (the module owns no timer). Per loadpoint: when we last polled
   // + whether we've polled since this connection began; and the SoC "anchor" — a real reading +
@@ -808,12 +816,45 @@ async function main() {
         budgetA: circuitBudget.value,
         lastCommandedA: lastCommandedA.get(r.state.name),
       }))
-      const { writes } = planCircuit(decisions, allocations, config.smartCharging.deadbandA)
-      for (const [lpId, amps] of writes) {
+      const { amps, writes } = planCircuit(decisions, allocations, config.smartCharging.deadbandA)
+      for (const [lpId, w] of writes) {
         const charger = chargerLimitMap.get(lpId)
         if (charger) {
-          await charger.setCurrentLimit(amps).catch(() => {})
-          lastCommandedA.set(lpId, amps) // record only actual writes → allocator credit-back stays honest
+          await charger.setCurrentLimit(w).catch(() => {})
+          lastCommandedA.set(lpId, w) // record only actual writes → allocator credit-back stays honest
+        }
+      }
+
+      // Resume-nudge: a car that WANTS current but sits at ~0 A inside an open session (a SuspendedEV
+      // latch — VW group after a 0 A pause) won't restart from a limit change; kick it with
+      // RemoteStop+RemoteStart. Only resumes an open transaction (never starts one → autoStart is
+      // respected); guarded by ramp-grace / cooldown / max-retries inside resumeNudgeDecision.
+      const nudgeNowMs = now.getTime()
+      for (const r of resolved) {
+        const lpId = r.state.name
+        const charger = chargerLimitMap.get(lpId)
+        if (!charger?.remoteStart) continue
+        const dec = resumeNudgeDecision(
+          nudgeStates.get(lpId) ?? { nudges: 0 },
+          {
+            wantsCharge: (amps.get(lpId) ?? 0) > 0,
+            connected: r.state.connected,
+            sessionActive: r.state.charging,
+            drawingA: r.state.currentA,
+            now: nudgeNowMs,
+          },
+          RESUME_NUDGE,
+        )
+        nudgeStates.set(lpId, dec.next)
+        if (dec.nudge) {
+          log.warn(
+            { loadpoint: lpId, attempt: dec.next.nudges, commandedA: amps.get(lpId) },
+            'car wants charge but is drawing ~0 A — RemoteStop+RemoteStart to resume',
+          )
+          await charger.remoteStop?.().catch(() => {}) // no-op if there is no active transaction
+          await charger
+            .remoteStart()
+            .catch((err) => log.warn({ err, loadpoint: lpId }, 'resume nudge start failed'))
         }
       }
     } finally {

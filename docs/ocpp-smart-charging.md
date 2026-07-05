@@ -128,6 +128,21 @@ our 10 A profile then won (composite 10) → `RemoteStart` → **Charging, 6.6 k
    slate on takeover. Check/clear its profile stack.
 5. **Never equate `Accepted` with `applied`** — verify the effect, not the ack.
 
+## The SuspendedEV resume latch (2026-07-05) + the resume-nudge
+
+Observed on the real Enyaq during e2e testing: after OSC intentionally pauses by commanding **0 A**
+(a target/price pause → `SuspendedEVSE`), the car latches **`SuspendedEV`** and does **not** resume
+when OSC raises the limit back to 8 A — nor on a bare `RemoteStart` (a no-op while a transaction is
+open). Only a full **`RemoteStop` + `RemoteStart`** (a fresh transaction) restarted it. This is a
+known VW-group trait; the same current-only pause/resume works on many other cars.
+
+**Fix — the resume-nudge** (`resumeNudgeDecision`, `src/core/control-loop.ts`; wired in
+`circuitTick`): when a loadpoint *wants* current, is plugged with an **open session**, yet draws
+`~0 A` beyond a ramp-grace window, the control loop issues `RemoteStop`+`RemoteStart`. It is guarded
+by a grace window (absorbs the normal `SuspendedEVSE→Charging` ramp), a cooldown between attempts, and
+a max-retries cap (never stop/starts a genuinely stuck car forever). It requires an **open** session,
+so it only ever *resumes* — never *starts* a transaction — which keeps `autoStart: false` meaningful.
+
 ## References
 - Zaptec native OCPP 1.6J docs & release notes: <https://docs.zaptec.com/docs/ocpp16j>,
   <https://docs.zaptec.com/changelog/zaptec-go-ocpp-native-release-notes>,

@@ -117,7 +117,9 @@ pure allocation math with no meter and no timer. See Balancing below.)
 **The lifecycle owns orchestration** (`src/core/lifecycle.ts` + the pure helpers in
 `src/core/smart-charging/`): the control-loop tick, *when* to poll a vehicle, the resolver ladders,
 the smart-mode force signals (`minSoc` floor + climate/preconditioning → force-charge, overriding
-price and a reached target), mode/target transitions — and, in 0.3.0, car identification and **car↔charger association** (which is
+price and a reached target), the resume-nudge (RemoteStop+RemoteStart when a car wants charge but a
+latched open session draws ~0 A — some VW-group cars won't resume on a limit change alone), mode/target
+transitions — and, in 0.3.0, car identification and **car↔charger association** (which is
 *runtime state*, not static config; see the 0.2.0 vision).
 
 Worked examples:
