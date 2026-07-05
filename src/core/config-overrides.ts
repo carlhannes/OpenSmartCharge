@@ -42,17 +42,21 @@ export function getOverride(
   return row ? (JSON.parse(row.patch) as Record<string, unknown>) : undefined
 }
 
+// MERGES the patch into any existing override for (kind, name), so partial updates compose (e.g. a
+// PUT that changes only maxA keeps a claimed charger's type/stationId). Reset a field to the config
+// value via deleteOverride (whole entity) or `npm run config:apply`.
 export function setOverride(
   db: DatabaseSync,
   kind: OverrideKind,
   name: string,
   patch: Record<string, unknown>,
 ): void {
+  const merged = { ...(getOverride(db, kind, name) ?? {}), ...patch }
   db.prepare(
     `INSERT INTO config_overrides (kind, name, patch, updated_at)
        VALUES (?, ?, ?, datetime('now'))
      ON CONFLICT(kind, name) DO UPDATE SET patch = excluded.patch, updated_at = excluded.updated_at`,
-  ).run(kind, name, JSON.stringify(patch))
+  ).run(kind, name, JSON.stringify(merged))
 }
 
 export function deleteOverride(db: DatabaseSync, kind: OverrideKind, name: string): boolean {

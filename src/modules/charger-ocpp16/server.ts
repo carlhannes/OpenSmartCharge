@@ -51,6 +51,15 @@ import { latestReadings } from './meter-parser.js'
 
 type StatusCallback = (status: ChargerStatus) => void
 
+/** A charger that has connected over OCPP but isn't registered from config yet — awaiting a claim. */
+export interface PendingStation {
+  stationId: string
+  vendor?: string
+  model?: string
+  status?: string
+  connectedAt: string
+}
+
 interface StationState {
   client: OcppClient
   activeTransactionId?: number
@@ -73,6 +82,12 @@ export class OcppServer {
   private readonly maxStackByStation = new Map<string, number>()
   // Per-charger phase count (from config), sent as numberPhases in the charging profile.
   private readonly phasesByStation = new Map<string, number>()
+  // Connection info for any connected station (vendor/model/status), for the "pending unclaimed
+  // charger" flow. Populated on connect + BootNotification + StatusNotification.
+  private readonly pendingInfo = new Map<
+    string,
+    { vendor?: string; model?: string; lastStatus?: string; firstSeenAt: Date }
+  >()
 
   constructor(
     private readonly db: DatabaseSync,
@@ -104,7 +119,20 @@ export class OcppServer {
 
   registerStation(stationId: string, autoStart: boolean): void {
     this._pendingAutoStart.set(stationId, autoStart)
-    this.log.debug({ stationId }, 'station registered (waiting for connection)')
+    // If the station is ALREADY connected (claiming an unclaimed charger), update its live autoStart
+    // too — otherwise the flag captured at connect (false for unclaimed) sticks until the next reconnect.
+    const s = this.stations.get(stationId)
+    if (s) s.autoStart = autoStart
+    this.log.debug({ stationId }, 'station registered')
+  }
+
+  /** Undo registerStation (removing a claimed charger); the WS, if still open, reverts to pending. */
+  unregisterStation(stationId: string): void {
+    this._pendingAutoStart.delete(stationId)
+    this._loadpointNames.delete(stationId)
+    this.phasesByStation.delete(stationId)
+    const s = this.stations.get(stationId)
+    if (s) s.autoStart = false
   }
 
   setLoadpointName(stationId: string, loadpointName: string): void {
@@ -154,9 +182,29 @@ export class OcppServer {
   }
 
   getHealth(): ModuleHealth {
-    // Derived from live connection state — no stored field to keep in sync.
-    // `stations` mutates on connect/disconnect, so health recomputes for free.
-    return computeHealth(this._pendingAutoStart.size, this.stations.size)
+    // Health is about the REGISTERED (claimed) chargers only — an unclaimed connection awaiting a
+    // claim must not inflate the connected count and mask a degraded state.
+    const connectedRegistered = [...this.stations.keys()].filter((id) =>
+      this._pendingAutoStart.has(id),
+    ).length
+    return computeHealth(this._pendingAutoStart.size, connectedRegistered)
+  }
+
+  /** Stations connected over OCPP but not registered from config — awaiting a claim. */
+  listPending(): PendingStation[] {
+    const out: PendingStation[] = []
+    for (const stationId of this.stations.keys()) {
+      if (this._pendingAutoStart.has(stationId)) continue
+      const info = this.pendingInfo.get(stationId)
+      out.push({
+        stationId,
+        vendor: info?.vendor,
+        model: info?.model,
+        status: info?.lastStatus,
+        connectedAt: (info?.firstSeenAt ?? new Date()).toISOString(),
+      })
+    }
+    return out
   }
 
   async remoteStart(stationId: string, idTag = 'osc-manual'): Promise<void> {
@@ -264,7 +312,10 @@ export class OcppServer {
 
     this.log.info({ stationId }, 'OCPP station connected')
 
-    const autoStart = this._pendingAutoStart.get(stationId) ?? true
+    // Unregistered (unclaimed) stations default autoStart=false — never auto-start a transaction on
+    // a charger OSC doesn't manage yet. Registered stations use their configured autoStart.
+    const autoStart = this._pendingAutoStart.get(stationId) ?? false
+    this.pendingInfo.set(stationId, { firstSeenAt: new Date() })
     const state: StationState = {
       client,
       connectorId: 1,
@@ -287,6 +338,7 @@ export class OcppServer {
       // leaving commands failing "not connected" while messages still flow on the new socket.
       if (s && s.client === client) {
         this.stations.delete(stationId)
+        this.pendingInfo.delete(stationId)
         this.pushStatus(stationId, {
           connectorId: s.connectorId,
           status: 'Unavailable',
@@ -317,6 +369,11 @@ export class OcppServer {
         { stationId, vendor: p.chargePointVendor, model: p.chargePointModel },
         'BootNotification',
       )
+      const pinfo = this.pendingInfo.get(stationId)
+      if (pinfo) {
+        pinfo.vendor = p.chargePointVendor
+        pinfo.model = p.chargePointModel
+      }
 
       // Issue safe default current immediately so charger is never at an unknown limit
       setImmediate(() => {
@@ -365,6 +422,9 @@ export class OcppServer {
         { stationId, connectorId: p.connectorId, status: p.status },
         'StatusNotification',
       )
+
+      const pinfo = this.pendingInfo.get(stationId)
+      if (pinfo) pinfo.lastStatus = p.status
 
       const { charging, connected } = computeConnectionState(p.status)
 

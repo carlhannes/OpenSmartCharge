@@ -16,6 +16,13 @@ const putJson = (url: string, body: unknown) =>
     body: JSON.stringify(body),
   })
 
+const postJson = (url: string, body: unknown) =>
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
 async function withApi(deps: ApiDeps, fn: (baseUrl: string) => Promise<void>): Promise<void> {
   const app = express()
   app.use(express.json())
@@ -290,6 +297,74 @@ test('PUT site/tariff/balancer persist overrides + reconcile; GET /api/site refl
       // overrides persisted for config:apply / reboot
       expect(getOverride(db, 'tariff', 'home')).toEqual({ zone: 'SE4' })
       expect(getOverride(db, 'site', 'site')).toEqual({ mainBreakerA: 16 })
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('charger management: pending list, claim (+ loadpoint), edit (merge), remove', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-chg-'))
+  const db = openDb(dir)
+  try {
+    const config = configSchema.parse({ chargers: [], loadpoints: [] })
+    const loadpoints = new Map<string, unknown>()
+    // Stub reconcile mirroring the real config/Map mutations (no real OCPP modules in the test).
+    const reconcile = {
+      addCharger: async (name: string) => {
+        config.chargers.push({ name, ...getOverride(db, 'charger', name) } as never)
+      },
+      addLoadpoint: (name: string) => {
+        config.loadpoints.push({ name, ...getOverride(db, 'loadpoint', name) } as never)
+        loadpoints.set(name, { name })
+      },
+      reloadCharger: async () => {},
+      removeCharger: async (name: string) => {
+        config.chargers = config.chargers.filter((c) => c.name !== name)
+      },
+      removeLoadpoint: (name: string) => {
+        config.loadpoints = config.loadpoints.filter((l) => l.name !== name)
+        loadpoints.delete(name)
+      },
+    }
+    const deps = { db, config, loadpoints, events: { emit() {} }, reconcile } as unknown as ApiDeps
+
+    await withApi(deps, async (baseUrl) => {
+      // no OCPP server in-process → empty pending list
+      expect(await (await fetch(`${baseUrl}/api/chargers/pending`)).json()).toEqual([])
+
+      expect(
+        (await postJson(`${baseUrl}/api/chargers`, { stationId: 'ST9', name: 'g2', maxA: 20 }))
+          .status,
+      ).toBe(201)
+      expect(getOverride(db, 'charger', 'g2')).toMatchObject({
+        type: 'ocpp16',
+        stationId: 'ST9',
+        maxA: 20,
+      })
+      expect(getOverride(db, 'loadpoint', 'g2')).toMatchObject({ charger: 'g2', autoStart: true })
+
+      expect(
+        (await postJson(`${baseUrl}/api/chargers`, { stationId: 'ST9', name: 'g2' })).status,
+      ).toBe(409) // dup name
+      expect(
+        (await postJson(`${baseUrl}/api/chargers`, { stationId: 'ST8', name: 'g3', maxA: -1 }))
+          .status,
+      ).toBe(400)
+      expect((await postJson(`${baseUrl}/api/chargers`, { name: 'g4' })).status).toBe(400) // missing stationId
+
+      expect((await putJson(`${baseUrl}/api/chargers/g2`, { maxA: 10 })).status).toBe(200)
+      expect(getOverride(db, 'charger', 'g2')).toMatchObject({
+        maxA: 10,
+        stationId: 'ST9',
+        type: 'ocpp16',
+      }) // merged
+      expect((await putJson(`${baseUrl}/api/chargers/nope`, { maxA: 10 })).status).toBe(404)
+
+      expect((await fetch(`${baseUrl}/api/chargers/g2`, { method: 'DELETE' })).status).toBe(204)
+      expect(getOverride(db, 'charger', 'g2')).toBeUndefined()
+      expect(getOverride(db, 'loadpoint', 'g2')).toBeUndefined() // its loadpoint cleaned up too
     })
   } finally {
     db.close()

@@ -13,7 +13,8 @@ import type { Vehicle } from '../sdk/vehicle.js'
 import type { Charger } from '../sdk/charger.js'
 import { getTimezone, setTimezone } from '../core/settings.js'
 import type { Reconciler } from '../core/reconcile.js'
-import { setOverride } from '../core/config-overrides.js'
+import { setOverride, deleteOverride } from '../core/config-overrides.js'
+import { getOcppServer } from '../modules/charger-ocpp16/index.js'
 import { isValidTimeZone } from '../sdk/local-time.js'
 import {
   listPlans,
@@ -225,6 +226,116 @@ export function createApiRouter(deps: ApiDeps): Router {
     await deps.reconcile.reloadBalancer(name)
     const b = deps.config.balancers.find((x) => x.name === name)!
     res.json({ name, type: b.type, mainBreakerA: b.mainBreakerA, phases: b.phases })
+  })
+
+  // ── Charger management (OCPP): claim a pending connection, edit, remove ──────
+
+  // GET /api/chargers/pending — chargers connected over OCPP but not yet claimed/configured.
+  router.get('/chargers/pending', (_req: Request, res: Response) => {
+    res.json(getOcppServer()?.listPending() ?? [])
+  })
+
+  // POST /api/chargers — claim a station: create the charger + its loadpoint (a charger with no
+  // loadpoint does nothing), register the station on the OCPP server, and wire it live. The
+  // already-connected socket becomes controllable immediately; the next tick commands it.
+  router.post('/chargers', async (req: Request, res: Response) => {
+    const b = req.body as {
+      stationId?: unknown
+      name?: unknown
+      maxA?: unknown
+      phases?: unknown
+      tariff?: unknown
+      balancer?: unknown
+      vehicle?: unknown
+    }
+    const stationId = typeof b.stationId === 'string' ? b.stationId.trim() : ''
+    const name = typeof b.name === 'string' ? b.name.trim() : ''
+    if (!stationId || !name) {
+      res.status(400).json({ error: 'stationId and name are required' })
+      return
+    }
+    if (deps.config.chargers.some((c) => c.name === name) || deps.loadpoints.has(name)) {
+      res.status(409).json({ error: `name "${name}" already in use` })
+      return
+    }
+    const maxA = b.maxA === undefined ? 16 : b.maxA
+    if (typeof maxA !== 'number' || !Number.isInteger(maxA) || maxA <= 0) {
+      res.status(400).json({ error: 'maxA must be a positive integer' })
+      return
+    }
+    const phases = b.phases === undefined ? 3 : b.phases
+    if (typeof phases !== 'number' || ![1, 2, 3].includes(phases)) {
+      res.status(400).json({ error: 'phases must be 1, 2 or 3' })
+      return
+    }
+    const refName = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
+    // loadpoint name == charger name (one-loadpoint-per-charger convention).
+    setOverride(deps.db, 'charger', name, { type: 'ocpp16', stationId, maxA, phases })
+    setOverride(deps.db, 'loadpoint', name, {
+      charger: name,
+      tariff: refName(b.tariff),
+      balancer: refName(b.balancer),
+      vehicle: refName(b.vehicle),
+      defaultMode: 'smart',
+      autoStart: true,
+    })
+    await deps.reconcile.addCharger(name)
+    deps.reconcile.addLoadpoint(name)
+    getOcppServer()?.setLoadpointName(stationId, name) // transaction attribution
+    res.status(201).json({ name, stationId, maxA, phases })
+  })
+
+  // PUT /api/chargers/:name — edit a charger's label / max current (identity is immutable).
+  router.put('/chargers/:name', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    if (!deps.config.chargers.some((c) => c.name === name)) {
+      res.status(404).json({ error: 'charger not found' })
+      return
+    }
+    const b = req.body as { label?: unknown; maxA?: unknown }
+    const patch: Record<string, unknown> = {}
+    if (b.label !== undefined) {
+      if (typeof b.label !== 'string') {
+        res.status(400).json({ error: 'label must be a string' })
+        return
+      }
+      patch.label = b.label
+    }
+    if (b.maxA !== undefined) {
+      if (typeof b.maxA !== 'number' || !Number.isInteger(b.maxA) || b.maxA <= 0) {
+        res.status(400).json({ error: 'maxA must be a positive integer' })
+        return
+      }
+      patch.maxA = b.maxA
+    }
+    if (Object.keys(patch).length === 0) {
+      res.status(400).json({ error: 'nothing to update (label and/or maxA)' })
+      return
+    }
+    setOverride(deps.db, 'charger', name, patch)
+    await deps.reconcile.reloadCharger(name)
+    res.json({ name, ...patch })
+  })
+
+  // DELETE /api/chargers/:name — remove the charger + its loadpoint(s). The WS (if open) reverts to
+  // pending so it can be re-claimed. (A charger defined in osc.yaml returns on the next reboot.)
+  router.delete('/chargers/:name', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    const chargerCfg = deps.config.chargers.find((c) => c.name === name)
+    if (!chargerCfg) {
+      res.status(404).json({ error: 'charger not found' })
+      return
+    }
+    const stationId = (chargerCfg as { stationId?: string }).stationId
+    // Snapshot referencing loadpoints before removeLoadpoint mutates config.loadpoints.
+    for (const lp of deps.config.loadpoints.filter((l) => l.charger === name)) {
+      deps.reconcile.removeLoadpoint(lp.name)
+      deleteOverride(deps.db, 'loadpoint', lp.name)
+    }
+    await deps.reconcile.removeCharger(name)
+    if (stationId) getOcppServer()?.unregisterStation(stationId)
+    deleteOverride(deps.db, 'charger', name)
+    res.status(204).end()
   })
 
   // ── Charging plans (per loadpoint) ──────────────────────────────────────────

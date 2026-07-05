@@ -1,15 +1,15 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { Config, LoadpointConfig } from './config.js'
 import type { EventBus } from './events.js'
-import { updateHealth, type HealthMap } from './health.js'
+import { updateHealth, removeHealth, type HealthMap } from './health.js'
 import type { ModuleCtx } from '../sdk/types.js'
 import type { Charger } from '../sdk/charger.js'
 import type { Tariff } from '../sdk/tariff.js'
 import type { Balancer } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import type { MeterReader } from '../sdk/meter-reader.js'
-import type { LoadpointState } from './loadpoint.js'
-import { createTariff, createBalancer } from './registry.js'
+import { loadLoadpointStates, configToLoadpointInits, type LoadpointState } from './loadpoint.js'
+import { createTariff, createBalancer, createCharger } from './registry.js'
 import { getEffectiveConfig } from './config-overrides.js'
 
 // The reconcile seam: after an API write persists a config override, the lifecycle rebuilds the
@@ -44,6 +44,11 @@ export interface Reconciler {
   reloadTariff(name: string): Promise<void>
   reloadBalancer(name: string): Promise<void>
   reloadSite(): void
+  addCharger(name: string): Promise<void>
+  reloadCharger(name: string): Promise<void>
+  removeCharger(name: string): Promise<void>
+  addLoadpoint(name: string): void
+  removeLoadpoint(name: string): void
 }
 
 export function createReconciler(d: ReconcileDeps): Reconciler {
@@ -96,6 +101,82 @@ export function createReconciler(d: ReconcileDeps): Reconciler {
     reloadSite() {
       Object.assign(d.config.site, getEffectiveConfig(d.base, d.db).site)
       d.events.emit('config.changed', { kind: 'site', name: 'site' })
+    },
+
+    // Instantiate a newly-claimed charger. createCharger runs the module's create(), which registers
+    // the OCPP station + phases on the shared server (claiming an already-connected socket). Pair
+    // with addLoadpoint — a charger with no loadpoint does nothing.
+    async addCharger(name) {
+      const cfg = desired<{ name: string; type: string }>('chargers', name)
+      if (!cfg) return
+      const c = createCharger(cfg.type, cfg, d.ctx)
+      await c.start()
+      syncEntity('chargers', cfg)
+      d.chargers.set(name, c)
+      updateHealth(d.health, name, c.health())
+      d.events.emit('config.changed', { kind: 'charger', name })
+    },
+
+    async reloadCharger(name) {
+      const cfg = desired<{ name: string; type: string; maxA?: number }>('chargers', name)
+      if (!cfg) return
+      const old = d.chargers.get(name)
+      const c = createCharger(cfg.type, cfg, d.ctx) // new handle over the same shared WS server
+      await c.start()
+      syncEntity('chargers', cfg)
+      d.chargers.set(name, c)
+      updateHealth(d.health, name, c.health())
+      // Re-point every loadpoint on this charger: rewire onStatus to the new handle, refresh the
+      // limit map, and re-capture maxA (it lives on both the handle and LoadpointState).
+      for (const lp of d.config.loadpoints.filter((l) => l.charger === name)) {
+        d.chargerLimitMap.set(lp.name, c)
+        const st = d.loadpointStates.get(lp.name)
+        if (st) {
+          if (typeof cfg.maxA === 'number') st.maxCurrentA = cfg.maxA
+          d.wireChargerStatus(lp, c, st)
+        }
+      }
+      if (old) await old.stop()
+      d.events.emit('config.changed', { kind: 'charger', name })
+    },
+
+    async removeCharger(name) {
+      const old = d.chargers.get(name)
+      d.chargers.delete(name)
+      removeHealth(d.health, name)
+      const i = d.config.chargers.findIndex((c) => c.name === name)
+      if (i >= 0) d.config.chargers.splice(i, 1)
+      if (old) await old.stop()
+      d.events.emit('config.changed', { kind: 'charger', name })
+    },
+
+    addLoadpoint(name) {
+      const cfg = desired<LoadpointConfig>('loadpoints', name)
+      if (!cfg) return
+      syncEntity('loadpoints', cfg)
+      // Seed + adopt the loadpoint's runtime state (INSERT OR IGNORE; existing rows untouched).
+      const seeded = loadLoadpointStates(d.db, configToLoadpointInits(d.config)).get(name)
+      if (seeded) d.loadpointStates.set(name, seeded)
+      const charger = d.chargers.get(cfg.charger)
+      const st = d.loadpointStates.get(name)
+      if (charger && st) {
+        d.chargerLimitMap.set(name, charger)
+        d.wireChargerStatus(cfg, charger, st)
+      }
+      d.rebuildCircuits()
+      d.events.emit('config.changed', { kind: 'loadpoint', name })
+    },
+
+    removeLoadpoint(name) {
+      const i = d.config.loadpoints.findIndex((l) => l.name === name)
+      if (i < 0) return
+      d.config.loadpoints.splice(i, 1)
+      d.chargerUnsubs.get(name)?.()
+      d.chargerUnsubs.delete(name)
+      d.chargerLimitMap.delete(name)
+      d.loadpointStates.delete(name)
+      d.rebuildCircuits()
+      d.events.emit('config.changed', { kind: 'loadpoint', name })
     },
   }
 }
