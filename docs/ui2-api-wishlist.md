@@ -50,6 +50,10 @@ remove + re-add; not wired as a single call.
   first fetch run in the background (poll `GET /api/vehicles/:name`). Credentials are stored server-side
   and **never returned or logged**; `GET /api/site` stays whitelisted to `{ name, type, vin }`.
 - `DELETE /api/vehicles/:name` — teardown + drops `vehicle_cache`; a bound loadpoint degrades to no-SoC.
+- `POST /api/vehicles/:name/refresh` — forces a live poll now → `{name, health, data, capacityKWh}` (same
+  shape as the GET). Hits the real vehicle API — wire it to an explicit "refresh" affordance, not a
+  timer/poll. 404 unknown, 502 on poll failure. (Also: `data.climateActive` now *drives* charging —
+  smart mode force-charges while the car is preconditioning + plugged, to feed it from the grid.)
 - **Bind to a loadpoint:** `PUT /api/loadpoints/:name { vehicle }` (also `tariff`/`balancer`; the ref must exist).
 - Security: creds move from `osc.yaml` (plaintext, gitignored) to `config_overrides` in `data/osc.db` —
   same plaintext-at-rest posture; `chmod 700 data/`. Encryption-at-rest is a noted future item.

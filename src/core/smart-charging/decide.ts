@@ -62,3 +62,14 @@ export function shouldWrite(
 export function forceMinSoc(estimatedSoc: number | undefined, minSoc: number | undefined): boolean {
   return estimatedSoc != null && minSoc != null && estimatedSoc < minSoc
 }
+
+/**
+ * Preconditioning force: when the car is running remote climate/preconditioning AND is plugged in,
+ * supply that load from the grid by force-charging — instead of letting it drain the traction
+ * battery. Like `forceMinSoc`, this overrides the smart-mode price wait AND a reached target (a
+ * full/at-target car still wants grid power for climate). Unknown/false climate, or not connected,
+ * → no force. Only smart mode consults this (fast already charges; disabled stays off).
+ */
+export function forceClimate(climateActive: boolean | undefined, connected: boolean): boolean {
+  return climateActive === true && connected
+}

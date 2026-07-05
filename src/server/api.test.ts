@@ -222,6 +222,46 @@ test('plans carry resolvedSoc; loadpoints carry availableTargetUnits (backend ow
   }
 })
 
+test('POST /vehicles/:name/refresh forces one live poll + returns fresh data; 404 for unknown', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-vrefresh-'))
+  const db = openDb(dir)
+  try {
+    let polls = 0
+    const vehicle = {
+      refresh: async () => {
+        polls++
+        return { soc: 72, range: 310, climateActive: true, fetchedAt: new Date() }
+      },
+      health: () => 'ok',
+      getCachedCapacity: () => 77,
+    }
+    const deps = {
+      db,
+      events: { emit() {} },
+      config: { loadpoints: [] },
+      chargers: new Map(),
+      loadpoints: new Map(),
+      vehicles: new Map([['car', vehicle]]),
+    } as unknown as ApiDeps
+    await withApi(deps, async (baseUrl) => {
+      const r = await postJson(`${baseUrl}/api/vehicles/car/refresh`, {})
+      expect(r.status).toBe(200)
+      const body = (await r.json()) as {
+        data: { soc: number; climateActive: boolean }
+        capacityKWh: number
+      }
+      expect(body.data.soc).toBe(72)
+      expect(body.data.climateActive).toBe(true) // the field the climate feature keys on
+      expect(body.capacityKWh).toBe(77)
+      expect(polls).toBe(1) // hit the live poll exactly once
+      expect((await postJson(`${baseUrl}/api/vehicles/nope/refresh`, {})).status).toBe(404)
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('no vehicle → km plan resolvedSoc null, only kwh offered', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'osc-api-plans-'))
   const db = openDb(dir)

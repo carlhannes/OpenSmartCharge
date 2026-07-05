@@ -45,6 +45,7 @@ src/
     charger-ocpp16/
     tariff-elering/          (EE/FI/LV/LT)
     tariff-elprisetjustnu/   (SE1–SE4)
+    tariff-fixed/            (flat rate, no network)
     balancer-mqtt-circuit/
     vehicle-skoda/
     meter-tibber-pulse/
@@ -115,7 +116,8 @@ pure allocation math with no meter and no timer. See Balancing below.)
 
 **The lifecycle owns orchestration** (`src/core/lifecycle.ts` + the pure helpers in
 `src/core/smart-charging/`): the control-loop tick, *when* to poll a vehicle, the resolver ladders,
-mode/target transitions — and, in 0.3.0, car identification and **car↔charger association** (which is
+the smart-mode force signals (`minSoc` floor + climate/preconditioning → force-charge, overriding
+price and a reached target), mode/target transitions — and, in 0.3.0, car identification and **car↔charger association** (which is
 *runtime state*, not static config; see the 0.2.0 vision).
 
 Worked examples:
@@ -189,7 +191,7 @@ balancer, a tariff, nor a vehicle — each is an enhancement, not a prerequisite
 ## Config schema
 
 ```yaml
-tariffs:    [{name, type: elering|elprisetjustnu, zone, ...}]   # elprisetjustnu = SE1–SE4; elering = EE/FI/LV/LT
+tariffs:    [{name, type: elering|elprisetjustnu|fixed, zone|pricePerKWh, ...}]   # elprisetjustnu=SE1–SE4; elering=EE/FI/LV/LT; fixed=flat rate
 balancers:  [{name, type, mainBreakerA, phases, meterReader?, nightMarginA?, daytimeFraction?}]  # pure splitter; meterReader → the live-current SSoT
 meterReaders: [{name, type: tibber-pulse|mqtt-phase, ...}]     # live household current + its staleness authority
 vehicles:   [{name, type, ...}]

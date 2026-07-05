@@ -26,6 +26,7 @@ tariffs:
                              # Prices fetched at 13:15 Europe/Stockholm after Nordpool publishes.
                              # Health is 'degraded' between midnight and 13:15 until tomorrow lands.
                              # For the Baltics/Finland instead, use:  type: elering  zone: EE|FI|LV|LT
+                             # For a fixed-price contract instead:    type: fixed    pricePerKWh: 1.5
 
 # Electrical circuits / load balancers.
 # One per main fuse group in your home.

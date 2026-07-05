@@ -2,6 +2,7 @@
 import '../modules/charger-ocpp16/index.js'
 import '../modules/tariff-elering/index.js'
 import '../modules/tariff-elprisetjustnu/index.js'
+import '../modules/tariff-fixed/index.js'
 import '../modules/meter-tibber-pulse/index.js'
 import '../modules/meter-mqtt-phase/index.js'
 import '../modules/balancer-mqtt-circuit/index.js'
@@ -47,7 +48,7 @@ import { estimateSocSinceAnchor, observedEfficiency } from './estimator.js'
 import { resolveTarget, type Target } from './smart-charging/energy.js'
 import { resolvePriceCurve } from './smart-charging/price.js'
 import { resolveCurrentBudget } from './smart-charging/current.js'
-import { decideShouldCharge, forceMinSoc } from './smart-charging/decide.js'
+import { decideShouldCharge, forceMinSoc, forceClimate } from './smart-charging/decide.js'
 import { shouldPollVehicle } from './smart-charging/vehicle-poll.js'
 import {
   buildCircuits,
@@ -406,6 +407,7 @@ async function main() {
     soc?: number
     range?: number
     capacity?: number
+    climateActive?: boolean
     sessionEnergyKWh: number
     efficiency: number
   }> {
@@ -413,10 +415,12 @@ async function main() {
     const capacity = vehicle?.getCachedCapacity()
     let soc: number | undefined
     let range: number | undefined
+    let climateActive: boolean | undefined
     if (vehicle) {
       const data = await vehicle.getData().catch(() => undefined)
       soc = data?.soc
       range = data?.range
+      climateActive = data?.climateActive
     }
     const eff = effectiveEfficiencyFor(lpCfg.name, capacity)
     // Surface the observed-this-session efficiency when we have one, so it's visible in the logs
@@ -435,6 +439,7 @@ async function main() {
       soc,
       range,
       capacity,
+      climateActive,
       sessionEnergyKWh: state.sessionEnergyKWh,
       efficiency: eff.efficiency,
     }
@@ -632,11 +637,19 @@ async function main() {
         phases,
         priceSlots: price.value,
       })
-      shouldChargeNow = belowMinSoc || priceDecision
+      // Preconditioning: if the car is climatising while plugged in, force-charge to feed that load
+      // from the grid rather than the battery — overrides both the price wait and a reached target.
+      const climateForce = forceClimate(ectx.climateActive, state.connected)
+      shouldChargeNow = belowMinSoc || climateForce || priceDecision
       if (belowMinSoc && !priceDecision)
         log.debug(
           { loadpoint: lpCfg.name, estimatedSoc: estimatedSocPct, minSoc: state.minSoc },
           'minSoc floor: force-charging past the price wait',
+        )
+      if (climateForce && !priceDecision)
+        log.debug(
+          { loadpoint: lpCfg.name },
+          'climate active: force-charging to supply preconditioning from the grid',
         )
     }
     if (belowMinSoc && state.mode === 'disabled') {

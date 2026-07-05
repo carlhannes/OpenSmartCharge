@@ -701,6 +701,30 @@ export function createApiRouter(deps: ApiDeps): Router {
       )
   })
 
+  // POST /api/vehicles/:name/refresh — force a live poll now (updates the cache the control loop
+  // reads). Unlike GET, this hits the real vehicle API, so use it sparingly: over-polling can wake +
+  // slowly drain a parked car and risks a provider rate-limit lockout. Useful right after the user
+  // starts remote climate, so climate-triggered charging reacts within one control tick.
+  router.post('/vehicles/:name/refresh', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    const vehicle = deps.vehicles.get(name)
+    if (!vehicle) {
+      res.status(404).json({ error: 'vehicle not found' })
+      return
+    }
+    try {
+      const data = await vehicle.refresh()
+      res.json({
+        name,
+        health: vehicle.health(),
+        data,
+        capacityKWh: vehicle.getCachedCapacity() ?? null,
+      })
+    } catch {
+      res.status(502).json({ error: 'vehicle refresh failed', health: vehicle.health() })
+    }
+  })
+
   // GET /api/health
   router.get('/health', (_req: Request, res: Response) => {
     res.json(getHealthSummary(deps.health))

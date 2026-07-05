@@ -73,7 +73,7 @@ tariffs:
     zone: SE4              # SE1 | SE2 | SE3 | SE4
 ```
 
-**Built-in types:** `elprisetjustnu` (Sweden), `elering` (Baltics + Finland)
+**Built-in types:** `elprisetjustnu` (Sweden), `elering` (Baltics + Finland), `fixed` (flat rate)
 
 Both providers publish the same Nord Pool day-ahead auction — pick the one that covers your bidding zone:
 
@@ -89,7 +89,20 @@ Both providers publish the same Nord Pool day-ahead auction — pick the one tha
 - Prices stored in **EUR/kWh** (Elering returns EUR/MWh; OSC divides by 1000), hourly.
 - **Elering does not publish Swedish zones** — for SE1–SE4 use `elprisetjustnu`.
 
-**Shared fetch schedule (both providers):**
+**`fixed` (flat rate — no spot pricing):**
+
+```yaml
+tariffs:
+  - name: flat
+    type: fixed
+    pricePerKWh: 1.5        # every hour costs the same (default 0)
+    # currency: SEK         # optional label (default SEK)
+```
+
+- For a fixed-price electricity contract. No network, no API key — `health` is always `ok`.
+- Since every slot is equal-priced, smart mode charges **as early as possible** (soonest slots to hit the target/deadline) rather than waiting for a "cheap" window. Targets, `minSoc`, and climate-triggered charging all still apply.
+
+**Shared fetch schedule (`elprisetjustnu` + `elering`):**
 
 - Nordpool publishes next-day prices around 13:00 CET. OSC waits until **13:15 Europe/Stockholm** before fetching tomorrow's data. On failure it retries at +30 min, then +1 h, +2 h, +4 h, … until midnight Stockholm, then retries the next day at 13:15. `health` is `degraded` between midnight and 13:15 — this is expected.
 - Scheduled fetches use `ctx.fetch` (0–120 s random jitter) so multiple OSC instances don't hit the API at the same millisecond.
@@ -226,6 +239,8 @@ loadpoints:
 | `disabled` | No charging. Current is set to 0. |
 | `smart` | Charges in the cheapest hours to reach the energy target by `targetTime`. Works **with or without a balancer**, and falls back gracefully when tariff/vehicle/meter data is missing (see [`smartCharging`](#smartcharging)). |
 | `fast` | Charges at the maximum current the circuit budget allows, ignoring tariff and SoC target. |
+
+In `smart` mode two signals **force-charge**, overriding both the price wait and a reached target: a **`minSoc` floor** breach, and **remote climate/preconditioning running while the car is plugged in** — the latter supplies the preconditioning load from the grid instead of draining the battery. (OSC learns climate is on from the vehicle poll, so it reacts within one poll interval; `POST /api/vehicles/:name/refresh` forces an immediate poll.) `fast` and `disabled` ignore both (fast always charges; disabled never does).
 
 The mode can be changed at any time via the UI, REST, or MQTT — it takes effect immediately (an on-demand control-loop tick) and otherwise on the next tick (default 30 s).
 

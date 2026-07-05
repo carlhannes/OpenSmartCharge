@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { decideShouldCharge, shouldWrite, forceMinSoc } from './decide.js'
+import { decideShouldCharge, shouldWrite, forceMinSoc, forceClimate } from './decide.js'
 import type { TariffSlot } from '../../sdk/tariff.js'
 
 const hour = (h: number, price: number): TariffSlot => ({
@@ -75,6 +75,13 @@ test('forceMinSoc: true only when a KNOWN SoC is strictly below a configured min
   expect(forceMinSoc(30, 25)).toBe(false) // above
   expect(forceMinSoc(undefined, 25)).toBe(false) // unknown SoC → never force blind
   expect(forceMinSoc(20, undefined)).toBe(false) // no floor configured
+})
+
+test('forceClimate: true only when climate is active AND the car is connected', () => {
+  expect(forceClimate(true, true)).toBe(true) // climatising + plugged → feed it from the grid
+  expect(forceClimate(true, false)).toBe(false) // not plugged → can't charge anyway
+  expect(forceClimate(false, true)).toBe(false) // climate off → no force
+  expect(forceClimate(undefined, true)).toBe(false) // unknown (no vehicle / stale) → never force blind
 })
 
 test('shouldWrite: first write always; then only when |delta| ≥ deadband', () => {
