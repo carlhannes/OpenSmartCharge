@@ -35,8 +35,14 @@ smartCharging:
   nightMarginA: 3          # static night current = mainBreakerA − nightMarginA
   daytimeFraction: 0.5     # static day current   = mainBreakerA × daytimeFraction
   historicalDays: 3        # look-back for the historical price-average and worst-case-load rungs
-  vehiclePollIntervalSec: 1800  # min spacing between vehicle SoC refreshes WHILE charging
-                                # (300–3600 s, default 30 min). Never polled while idle — see vehicles[].
+  vehiclePollIntervalSec: 900   # spacing between vehicle SoC refreshes WHILE drawing current
+                                # (300–3600 s, default 15 min); also the night-time idle rate
+  vehicleIdlePollIntervalSec: 600  # idle-poll spacing (plugged, not drawing) during the day window
+                                   # below (60–1800 s, default 10 min); off-window uses the rate above.
+                                   # Catches remote climate/plug changes; raise if you hit rate limits
+  vehicleIdlePollDayWindow:     # local hours [start, end) for the faster idle poll
+    startHour: 6
+    endHour: 22
   chargingEfficiency: 0.92 # AC charge efficiency (0.5–1) — fallback for the between-poll SoC estimate; each session refines it from its own real readings
 ```
 
@@ -148,7 +154,7 @@ vehicles:
 
 **What it exposes:** State of Charge (%), estimated range, the target SoC set in the car, the car's own plugged-in state (a cross-check of the OCPP status), and whether remote climate/preconditioning is running.
 
-**Polling is demand-driven — the module owns no timer.** The lifecycle refreshes a vehicle **only when its charger reports connected**: once on connect (to anchor SoC/range) and then, while actively charging, at most every `smartCharging.vehiclePollIntervalSec` (default 30 min). It is **never polled while idle or unplugged** — polling MySkoda too often can wake and slowly drain the car, and hammering the account risks a server-side lockout. Between polls, SoC is estimated by carrying the last real reading forward by delivered energy — at the efficiency **observed this session** (measured from two real readings) when available, else `chargingEfficiency` — so a mid-session API dropout still tracks accurately. The module honours `429`/`Retry-After` rate-limit responses.
+**Polling is demand-driven — the module owns no timer.** The lifecycle refreshes a vehicle **only when its charger reports connected** (strictly per-car), on two cadences while plugged in: once on connect (to anchor SoC/range), then `smartCharging.vehiclePollIntervalSec` (default 15 min) while actively drawing current, and the faster `vehicleIdlePollIntervalSec` (default 10 min) while connected-but-idle **during the day window** — so remote climate/plug changes are caught promptly. Outside the day window the idle rate falls back to the 15-min cadence, and it is **never polled while unplugged** — polling MySkoda too often can wake and slowly drain a parked car, and hammering the account risks a server-side lockout. Between polls, SoC is estimated by carrying the last real reading forward by delivered energy — at the efficiency **observed this session** (measured from two real readings) when available, else `chargingEfficiency` — so a mid-session API dropout still tracks accurately. The module honours `429`/`Retry-After` rate-limit responses.
 
 **Finding the VIN:** it's on the MySkoda app vehicle page, the physical car (windscreen / door pillar), or the registration document. It must be the full 17 characters, uppercase.
 
@@ -240,7 +246,7 @@ loadpoints:
 | `smart` | Charges in the cheapest hours to reach the energy target by `targetTime`. Works **with or without a balancer**, and falls back gracefully when tariff/vehicle/meter data is missing (see [`smartCharging`](#smartcharging)). |
 | `fast` | Charges at the maximum current the circuit budget allows, ignoring tariff and SoC target. |
 
-In `smart` mode two signals **force-charge**, overriding both the price wait and a reached target: a **`minSoc` floor** breach, and **remote climate/preconditioning running while the car is plugged in** — the latter supplies the preconditioning load from the grid instead of draining the battery. (OSC learns climate is on from the vehicle poll, so it reacts within one poll interval; `POST /api/vehicles/:name/refresh` forces an immediate poll.) `fast` and `disabled` ignore both (fast always charges; disabled never does).
+In `smart` mode two signals **force-charge**, overriding both the price wait and a reached target: a **`minSoc` floor** breach, and **remote climate/preconditioning running while the car is plugged in**. When climate is the *only* reason to charge (battery already at target), OSC offers just the **6 A IEC minimum** — a car that draws preconditioning from the charger (e.g. Kia EV6) then runs it off the grid; how much it actually pulls is up to the car (some, like the Škoda Enyaq, run climate off the battery when at their charge limit and draw ≈nothing). OSC learns climate is on from the vehicle poll (faster during the day window; `POST /api/vehicles/:name/refresh` forces it immediately). `fast` and `disabled` ignore both (fast always charges; disabled never does).
 
 The mode can be changed at any time via the UI, REST, or MQTT — it takes effect immediately (an on-demand control-loop tick) and otherwise on the next tick (default 30 s).
 

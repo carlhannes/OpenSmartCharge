@@ -117,7 +117,7 @@ pure allocation math with no meter and no timer. See Balancing below.)
 **The lifecycle owns orchestration** (`src/core/lifecycle.ts` + the pure helpers in
 `src/core/smart-charging/`): the control-loop tick, *when* to poll a vehicle, the resolver ladders,
 the smart-mode force signals (`minSoc` floor + climate/preconditioning → force-charge, overriding
-price and a reached target), the resume-nudge (RemoteStop+RemoteStart when a car wants charge but a
+price and a reached target — climate at just the 6 A IEC minimum), the resume-nudge (RemoteStop+RemoteStart when a car wants charge but a
 latched open session draws ~0 A — some VW-group cars won't resume on a limit change alone), mode/target
 transitions — and, in 0.3.0, car identification and **car↔charger association** (which is
 *runtime state*, not static config; see the 0.2.0 vision).
@@ -126,9 +126,10 @@ Worked examples:
 
 - **Vehicle polling.** The module exposes `refresh()` — *one* live fetch on demand, no timer. The
   lifecycle decides *when*, via the pure `shouldPollVehicle()` gate (`smart-charging/vehicle-poll.ts`):
-  on charger-connect + at most every `vehiclePollIntervalSec` while charging, **never while idle**
-  (polling a parked car can wake and drain it, and risks an account lockout). The "don't poll a
-  sleeping car" policy is orchestration, so it lives in the lifecycle — not smeared across the module.
+  on charger-connect, then `vehiclePollIntervalSec` while actively drawing (+ night idle) and the
+  faster `vehicleIdlePollIntervalSec` while connected-but-idle in the daytime window; **never while
+  unplugged** (polling a parked car can wake and drain it, and risks an account lockout). The "don't
+  poll a sleeping car" policy is orchestration, so it lives in the lifecycle — not in the module.
 - **Balancing.** The balancer is pure per-tick allocation math (`allocate({loadpoints, circuitBudgetA})`);
   it holds no meter, no timer, no staleness. The lifecycle resolves the circuit's current budget **once**
   per tick — the meter reader is the SSoT for live current *and* its staleness (`health()`), and the
@@ -201,7 +202,7 @@ chargers:   [{name, type, stationId, maxA, phases}]
 loadpoints: [{name, charger, vehicle?, tariff?, balancer?, defaultMode, targetSoc?, targetTime?, targetKWh?, minSoc?}]
 mqtt:       {host, port, topicPrefix, homeAssistantDiscovery}
 site:       {name, port, mainBreakerA?, timezone?}               # timezone: site/user tz (default Europe/Stockholm); mainBreakerA = fallback fuse
-smartCharging: {controlIntervalSec, deadbandA, nightWindow, nightMarginA, daytimeFraction, historicalDays, vehiclePollIntervalSec, chargingEfficiency}
+smartCharging: {controlIntervalSec, deadbandA, nightWindow, nightMarginA, daytimeFraction, historicalDays, vehiclePollIntervalSec, vehicleIdlePollIntervalSec, vehicleIdlePollDayWindow, chargingEfficiency}
 ```
 
 Name references enable multiplicity: multiple tariff zones, circuits, and chargers are just more list entries — no code changes required.

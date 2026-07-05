@@ -353,6 +353,10 @@ async function main() {
   // "wants charge + active session + drawing ~0 A" and nudge, guarded against ramp/spam/stuck loops.
   const nudgeStates = new Map<string, ResumeNudgeState>()
   const RESUME_NUDGE = { minDrawA: 1, graceMs: 90_000, cooldownMs: 180_000, maxNudges: 3 }
+  // When charging is driven ONLY by climate (preconditioning, battery already at target), offer just
+  // the IEC minimum rather than the full circuit budget — the car draws only its climate load, and
+  // this avoids topping the battery past the target at full rate. The car chooses how much it pulls.
+  const CLIMATE_MAX_OFFER_A = 6
 
   // Lifecycle-owned vehicle polling (the module owns no timer). Per loadpoint: when we last polled
   // + whether we've polled since this connection began; and the SoC "anchor" — a real reading +
@@ -453,9 +457,10 @@ async function main() {
     }
   }
 
-  // Poll gate: refresh a loadpoint's vehicle on (re)connect + during charging every
-  // vehiclePollIntervalSec; never while idle. Fire-and-forget — the fresh reading + its anchor are
-  // used from the next tick.
+  // Poll gate: refresh a loadpoint's vehicle on (re)connect, then on two cadences while plugged in —
+  // vehiclePollIntervalSec while actively drawing (re-anchor the estimate), the faster
+  // vehicleIdlePollIntervalSec while connected-but-idle (catch climate/plug changes). Never while
+  // unplugged. Fire-and-forget — the fresh reading + its anchor are used from the next tick.
   function maybePollVehicle(lpCfg: LoadpointConfig, state: LoadpointState, nowMs: number): void {
     if (!lpCfg.vehicle) return
     const vehicle = vehicles.get(lpCfg.vehicle)
@@ -467,12 +472,21 @@ async function main() {
       sessionFirstReading.delete(lpCfg.name) // each new charging session measures its own efficiency
       return
     }
+    // Idle polling is faster during the day window (when preconditioning/departure happens) and
+    // falls back to the slow charging cadence at night, so an overnight-plugged car isn't hammered.
+    const sc = config.smartCharging
+    const h = localHour(new Date(nowMs), getTimezone(db))
+    const { startHour: ds, endHour: de } = sc.vehicleIdlePollDayWindow
+    const isDay = ds <= de ? h >= ds && h < de : h >= ds || h < de
+    const idleIntervalMs =
+      (isDay ? sc.vehicleIdlePollIntervalSec : sc.vehiclePollIntervalSec) * 1000
     const should = shouldPollVehicle({
       now: nowMs,
       connected: state.connected,
-      charging: state.charging,
+      drawing: state.currentA > 0,
       lastPollAt: vp.lastPollAt,
-      intervalMs: config.smartCharging.vehiclePollIntervalSec * 1000,
+      chargingIntervalMs: sc.vehiclePollIntervalSec * 1000,
+      idleIntervalMs,
       polledThisConnection: vp.polledThisConnection,
     })
     if (!should) {
@@ -552,6 +566,9 @@ async function main() {
   interface ResolvedLoadpoint {
     state: LoadpointState
     shouldChargeNow?: boolean
+    /** Charging is driven ONLY by climate-force (target reached, price wouldn't charge) — so this is
+     * just preconditioning: offer the IEC minimum, not the full budget. */
+    climateOnly: boolean
     pricesAvailable: boolean
     sources: { energy: string; price: string; current: string }
   }
@@ -636,6 +653,7 @@ async function main() {
     // Unknown SoC / no minSoc → no floor (never force-charge blind).
     const belowMinSoc = forceMinSoc(estimatedSocPct, state.minSoc)
     let shouldChargeNow: boolean | undefined
+    let climateOnly = false
     if (state.mode === 'smart') {
       const priceDecision = decideShouldCharge({
         requiredKWh: energy.requiredKWh,
@@ -649,6 +667,9 @@ async function main() {
       // from the grid rather than the battery — overrides both the price wait and a reached target.
       const climateForce = forceClimate(ectx.climateActive, state.connected)
       shouldChargeNow = belowMinSoc || climateForce || priceDecision
+      // Climate is the SOLE reason to charge (battery at target, price wouldn't charge) → this is
+      // pure preconditioning, so we offer only the IEC minimum (6 A), not the full circuit budget.
+      climateOnly = climateForce && !priceDecision && !belowMinSoc
       if (belowMinSoc && !priceDecision)
         log.debug(
           { loadpoint: lpCfg.name, estimatedSoc: estimatedSocPct, minSoc: state.minSoc },
@@ -675,6 +696,7 @@ async function main() {
     return {
       state,
       shouldChargeNow,
+      climateOnly,
       pricesAvailable: !price.degraded,
       sources: { energy: energy.source, price: price.source, current: circuitBudget.source },
     }
@@ -789,7 +811,10 @@ async function main() {
         if (!balancer) return
         const snaps = resolved.map((r) => {
           const lp = lpCfgs.find((l) => l.name === r.state.name)!
-          return buildSnapshot(r.state, lp.vehicle, r.shouldChargeNow, r.pricesAvailable)
+          const snap = buildSnapshot(r.state, lp.vehicle, r.shouldChargeNow, r.pricesAvailable)
+          // Climate-only → cap this loadpoint's allocatable current at the IEC minimum.
+          if (r.climateOnly) snap.maxCurrentA = Math.min(snap.maxCurrentA, CLIMATE_MAX_OFFER_A)
+          return snap
         })
         const out = await balancer.tick({
           loadpoints: snaps,
@@ -813,7 +838,10 @@ async function main() {
         loadpointName: r.state.name,
         mode: r.state.mode,
         shouldChargeNow: r.shouldChargeNow,
-        budgetA: circuitBudget.value,
+        // Climate-only → cap the bare-circuit offer at the IEC minimum (not the full budget).
+        budgetA: r.climateOnly
+          ? Math.min(CLIMATE_MAX_OFFER_A, circuitBudget.value)
+          : circuitBudget.value,
         lastCommandedA: lastCommandedA.get(r.state.name),
       }))
       const { amps, writes } = planCircuit(decisions, allocations, config.smartCharging.deadbandA)

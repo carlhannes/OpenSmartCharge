@@ -29,10 +29,22 @@ const smartChargingConfigSchema = z
     daytimeFraction: z.number().min(0).max(1).default(0.5),
     // Look-back window for the historical price-average and worst-case-load rungs.
     historicalDays: z.number().int().min(1).max(30).default(3),
-    // Vehicle telemetry is polled ONLY on charger-connect and during active charging, at most
-    // this often (default 30 min ≈ the price cadence). Never polled while idle — polling MySkoda
-    // too often can wake/drain the car and risk an account lockout.
-    vehiclePollIntervalSec: z.number().min(300).max(3600).default(1800),
+    // Vehicle telemetry poll cadence while actively drawing current (re-anchors the SoC estimate
+    // against delivered energy) AND while connected-but-idle at night. Default 15 min. Polling too
+    // often risks waking/draining a parked car + a provider lockout; the module backs off on 429.
+    vehiclePollIntervalSec: z.number().min(300).max(3600).default(900),
+    // Idle-poll cadence — car plugged in but NOT drawing (paused/idle). This faster interval applies
+    // ONLY during the day window below; outside it OSC falls back to vehiclePollIntervalSec, so an
+    // overnight-plugged car isn't polled aggressively. Catches remote climate/preconditioning + plug
+    // changes the SoC estimate can't reveal. Each poll hits the vehicle API — raise if rate-limited.
+    vehicleIdlePollIntervalSec: z.number().min(60).max(1800).default(600),
+    // Local-hour window [start, end) during which the faster idle poll applies (else the slow rate).
+    vehicleIdlePollDayWindow: z
+      .object({
+        startHour: z.number().int().min(0).max(23).default(6),
+        endHour: z.number().int().min(0).max(23).default(22),
+      })
+      .default({}),
     // AC charging efficiency (energy into battery ÷ energy from grid) — tunes the between-poll
     // SoC estimate that carries a real reading forward by delivered kWh.
     chargingEfficiency: z.number().min(0.5).max(1).default(0.92),
