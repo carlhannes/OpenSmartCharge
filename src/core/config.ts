@@ -49,11 +49,20 @@ const balancerConfigSchema = z
     type: z.string(),
     mainBreakerA: z.number(),
     phases: z.number().int().min(1).max(3).default(3),
-    meterTopicPrefix: z.string().default('house'),
+    // Live meter for the circuit: point at a meterReaders[] entry (the meter SSoT). `meterTopicPrefix`
+    // is legacy (raw i1_a/i2_a/i3_a topics) — use a `meter-mqtt-phase` reader instead (docs/config.md).
+    meterTopicPrefix: z.string().optional(),
     meterReader: z.string().optional(),
-    safeStaticCurrentA: z.number().default(10),
-    meterStaleAfterSec: z.number().default(60),
-    intervalSec: z.number().default(15),
+    // Per-circuit static-tod fallback margins, used when the meter is stale/absent (night =
+    // mainBreakerA − nightMarginA, day = mainBreakerA × daytimeFraction). Unset → fall back to the
+    // global smartCharging.* values. These replace the deprecated flat safeStaticCurrentA.
+    nightMarginA: z.number().min(0).optional(),
+    daytimeFraction: z.number().min(0).max(1).optional(),
+    // Deprecated + unused (the balancer is now a pure splitter; the meter + its staleness live on a
+    // MeterReader). Optional/no-default so a boot WARN fires only when a user actually set one.
+    safeStaticCurrentA: z.number().optional(),
+    meterStaleAfterSec: z.number().optional(),
+    intervalSec: z.number().optional(),
   })
   .catchall(z.unknown())
 

@@ -60,7 +60,7 @@ mqtt:
   homeAssistantDiscovery: true   # publish HA discovery payloads on startup
 ```
 
-MQTT is required if you use the `mqtt-circuit` balancer. It is optional otherwise, but recommended for Home Assistant integration.
+MQTT is required if a balancer draws on an MQTT-based `meterReader` (`mqtt-phase` or `tibber-pulse`). It is optional otherwise, but recommended for Home Assistant integration.
 
 ### `tariffs[]`
 
@@ -102,18 +102,21 @@ A list of electrical circuits with their load balancing configuration.
 ```yaml
 balancers:
   - name: house-main
-    type: mqtt-circuit
-    mainBreakerA: 25        # main fuse per phase, in amps
-    phases: 3               # 1 or 3
-    meterTopicPrefix: house # listens to <prefix>/i1_a, /i2_a, /i3_a
-    safeStaticCurrentA: 10  # current per loadpoint when meter feed is stale
-    meterStaleAfterSec: 60  # seconds of silence before switching to safe static
-    intervalSec: 15         # control loop interval in seconds
+    type: mqtt-circuit       # splits the circuit across its loadpoints (name is legacy — see below)
+    mainBreakerA: 25         # main fuse per phase, in amps — the hard ceiling for this circuit
+    phases: 3                # 1 or 3
+    meterReader: house-phase # live current from a meterReader (the meter SSoT); see meterReaders[]
+    # Static time-of-day fallback margins, per-breaker. Used only when the meter is stale AND
+    # there is no load history yet. Unset → global smartCharging.{nightMarginA,daytimeFraction}.
+    # nightMarginA: 3        # night budget = mainBreakerA − this A
+    # daytimeFraction: 0.5   # day budget   = mainBreakerA × this
 ```
 
 **Built-in types:** `mqtt-circuit`
 
-`safeStaticCurrentA` is the fallback when your Tibber Pulse or DSMR bridge stops publishing. It should be conservative enough that the house won't trip the breaker even at typical peak household load, but still meaningful enough to charge the car. A good starting point: `mainBreakerA − estimatedPeakHouseholdA − marginA`.
+The balancer is a **pure splitter**: each tick it divides the circuit's already-resolved current budget across the loadpoints sharing it (fast-mode first, then an equal split of the remainder, with ±1 A hysteresis and the 6 A IEC floor). It holds **no meter and no timers** — the meter is a separate `meterReader` (the SSoT for live current *and* its staleness), and the current-degradation ladder runs once per circuit in the control loop. When the meter's `health()` goes `degraded`/`unavailable` the whole circuit steps down the ladder (live-meter → historical-worstcase → static-tod); `nightMarginA`/`daytimeFraction` (falling back to the global `smartCharging.*`) size that bottom static rung. The `mqtt-circuit` type name is kept for config back-compat.
+
+> **Migration.** The old self-contained meter fields — `meterTopicPrefix`, `safeStaticCurrentA`, `meterStaleAfterSec`, `intervalSec` — are deprecated (a boot WARNING fires if any is set) and otherwise ignored. Move the meter onto a `meterReaders[]` entry: replace `meterTopicPrefix: house` with a `type: mqtt-phase` reader (`topicPrefix: house`) and point the balancer's `meterReader:` at it. Replace the flat `safeStaticCurrentA` with `nightMarginA`/`daytimeFraction`; the control cadence is now the global `smartCharging.controlIntervalSec`.
 
 ### `vehicles[]`
 
@@ -140,28 +143,33 @@ Credentials are stored in `osc.yaml` which is gitignored. Keep it out of version
 
 ### `meterReaders[]`
 
-Optional. Provides live household current and power data to the load balancer. Requires `mqtt:` to be configured.
+Optional. The **single source of truth for live household current** — a balancer sizes charger output below the main fuse from it, and its `health()`/`staleAfterSec` is the one authority on whether that data is fresh (when it goes stale, the circuit degrades down the current ladder). Requires `mqtt:` to be configured.
 
 ```yaml
 meterReaders:
-  - name: house-pulse
-    type: tibber-pulse
-    subTopic: pulse        # MQTT topic where Pulse publishes DSMR frames (default: pulse)
-    republishPrefix: house # optional: republish to <prefix>/{power_w,i1_a,i2_a,i3_a}
+  - name: house-phase
+    type: mqtt-phase       # raw per-phase amps on <topicPrefix>/i1_a, /i2_a, /i3_a
+    topicPrefix: house     # published by pulse_bridge.py or any DSMR/Modbus bridge (default: house)
     staleAfterSec: 60      # seconds before health → degraded if no frame received (default: 60)
 ```
 
-**Built-in types:** `tibber-pulse`
+**Built-in types:** `mqtt-phase`, `tibber-pulse`
+
+**mqtt-phase specifics:**
+
+- The plain-per-phase reader: subscribes to `<topicPrefix>/i1_a`, `/i2_a`, `/i3_a` and emits a snapshot on each frame. This is the SSoT home for the legacy balancer `meterTopicPrefix` path — a garbage/non-numeric frame is ignored rather than clobbering the last good reading.
+- Use it for any bridge that publishes bare per-phase amps. For a Tibber Pulse speaking DSMR directly, prefer `tibber-pulse` below (richer frames — active power too, plus keep-alive control).
+- Health: `ok` while frames arrive within `staleAfterSec`; `degraded` if stale (last values still returned); `unavailable` until the first frame.
 
 **tibber-pulse specifics:**
 
 - Subscribes to the Tibber Pulse DSMR/OBIS MQTT stream. Parses active power (`1-0:1.7.0`) and per-phase current (`1-0:31.7.0`, `1-0:51.7.0`, `1-0:71.7.0`).
 - Sends `batching_disable true` to the Pulse control topics (`pctrl`, `pulse/subscribe`) on connect and every 300 s to keep data flowing unbatched.
 - Requires `mqtt:` configured in `osc.yaml` — the module opens its own connection to the same broker using the same credentials.
-- `republishPrefix: house` reproduces the exact MQTT topic layout of the Python `pulse_bridge.py` sidecar (`house/power_w`, `house/i1_a`, …) for Home Assistant or Node-RED dashboards. Remove this field to disable the sidecar behaviour — the balancer reads meter data in-process instead.
+- `republishPrefix: house` reproduces the exact MQTT topic layout of the Python `pulse_bridge.py` sidecar (`house/power_w`, `house/i1_a`, …) for Home Assistant or Node-RED dashboards. Remove this field to disable the sidecar behaviour — OSC still consumes the meter in-process via the `meterReader:` link.
 - Health: `ok` while frames arrive within `staleAfterSec`; `degraded` if stale (last known values still returned); `unavailable` until the first frame after boot.
 
-The `meterReader: <name>` field on `balancers[]` (M3) links a balancer to a meter reader by name for in-process data flow — no MQTT round-trip.
+The `meterReader: <name>` field on `balancers[]` is how a circuit gets its live current: it names the `meterReaders[]` entry to read, in-process (no MQTT round-trip through OSC). A balancer with no `meterReader` is a blind circuit — it skips the live rung and runs on the historical/static-tod fallbacks.
 
 ### `chargers[]`
 
@@ -273,18 +281,24 @@ tariffs:
     type: elering
     zone: SE2
 
+meterReaders:
+  - name: house-phase
+    type: mqtt-phase
+    topicPrefix: house
+  - name: garage-phase
+    type: mqtt-phase
+    topicPrefix: garage
+
 balancers:
   - name: house-main
     type: mqtt-circuit
     mainBreakerA: 25
-    meterTopicPrefix: house
-    safeStaticCurrentA: 10
+    meterReader: house-phase
 
   - name: garage-sub
     type: mqtt-circuit
     mainBreakerA: 16
-    meterTopicPrefix: garage
-    safeStaticCurrentA: 8
+    meterReader: garage-phase
 
 chargers:
   - name: wallbox-a

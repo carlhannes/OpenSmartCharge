@@ -31,14 +31,17 @@ tariffs:
 # One per main fuse group in your home.
 balancers:
   - name: house-main
-    type: mqtt-circuit
-    mainBreakerA: 25         # main fuse in amps (per phase)
+    type: mqtt-circuit       # splits this circuit across its loadpoints (the name is legacy —
+                             # the balancer is a pure splitter; the meter lives on a meterReader)
+    mainBreakerA: 25         # main fuse in amps (per phase) — the hard ceiling for this circuit
     phases: 3
-    meterTopicPrefix: house  # reads house/i1_a, house/i2_a, house/i3_a from MQTT
-                             # (published by pulse_bridge.py or any DSMR bridge)
-    safeStaticCurrentA: 10   # current to use when meter feed is stale
-    meterStaleAfterSec: 60   # seconds before meter data is considered stale
-    intervalSec: 15          # control loop interval
+    meterReader: house-phase # live household current comes from a meterReader (the meter SSoT);
+                             # defined under meterReaders: below. Omit for a blind circuit.
+    # Static time-of-day fallback, used ONLY when the meter is stale AND there's no load history
+    # yet. Per-breaker; unset → the global smartCharging defaults (nightMarginA 3, daytimeFraction
+    # 0.5). Raise nightMarginA on a shared/multi-charger circuit so the house keeps more headroom.
+    # nightMarginA: 3        # night budget = mainBreakerA − this A
+    # daytimeFraction: 0.5   # day budget   = mainBreakerA × this
 
 # Vehicles (optional — enables SoC-aware departure planning).
 # osc.yaml is gitignored — credentials stay on-device and are never logged.
@@ -52,16 +55,21 @@ vehicles:
     # pollIntervalSec: 900       # poll interval; minimum 300 s (default: 900)
     # staleAfterSec: 7200        # health → degraded if no successful poll for this long
 
-# Meter readers (optional — feeds the mqtt-circuit balancer with live
-# household current data so it can size charger output below the main fuse).
-# Requires mqtt: to be configured above.
-# meterReaders:
-#   - name: house-pulse
-#     type: tibber-pulse
-#     subTopic: pulse              # MQTT topic where Pulse publishes DSMR frames (default: pulse)
-#     republishPrefix: house       # optional: re-publish to house/{power_w,i1_a,i2_a,i3_a}
-#                                  # for Home Assistant / Node-RED dashboards (mirrors pulse_bridge.py)
-#     staleAfterSec: 60            # health → degraded after this many seconds without a frame
+# Meter readers — the single source of truth for live household current, so a balancer can
+# size charger output below the main fuse. A balancer points its meterReader: at one by name.
+# The reader's health()/staleAfterSec is the ONE staleness authority: when it goes degraded,
+# the circuit falls back down the ladder (historical → static-tod). Requires mqtt: above.
+meterReaders:
+  - name: house-phase
+    type: mqtt-phase             # subscribes to house/i1_a, house/i2_a, house/i3_a — raw per-phase
+    topicPrefix: house           # amps published by pulse_bridge.py or any DSMR/Modbus bridge
+    staleAfterSec: 60            # health → degraded after this many seconds without a frame
+  # For a Tibber Pulse speaking DSMR directly, use the richer reader instead of mqtt-phase:
+  # - name: house-pulse
+  #   type: tibber-pulse
+  #   subTopic: pulse              # MQTT topic where Pulse publishes DSMR frames (default: pulse)
+  #   republishPrefix: house       # optional: re-publish house/{power_w,i1_a,i2_a,i3_a} for dashboards
+  #   staleAfterSec: 60
 
 # OCPP chargers.
 # Any OCPP 1.6J charger configured to connect to ws://<your-host>:8080/ocpp

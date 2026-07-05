@@ -3,6 +3,7 @@ import '../modules/charger-ocpp16/index.js'
 import '../modules/tariff-elering/index.js'
 import '../modules/tariff-elprisetjustnu/index.js'
 import '../modules/meter-tibber-pulse/index.js'
+import '../modules/meter-mqtt-phase/index.js'
 import '../modules/balancer-mqtt-circuit/index.js'
 import '../modules/vehicle-skoda/index.js'
 
@@ -51,6 +52,8 @@ import { shouldPollVehicle } from './smart-charging/vehicle-poll.js'
 import {
   buildCircuits,
   circuitForLoadpoint,
+  circuitLiveMaxPhaseA,
+  circuitOwnDrawA,
   planCircuit,
   type Circuit,
   type LpDecision,
@@ -226,6 +229,14 @@ async function main() {
       )
       continue
     }
+    const deprecated = (
+      ['safeStaticCurrentA', 'meterStaleAfterSec', 'meterTopicPrefix', 'intervalSec'] as const
+    ).filter((k) => (balancerCfg as Record<string, unknown>)[k] !== undefined)
+    if (deprecated.length)
+      log.warn(
+        { balancer: balancerCfg.name, deprecated },
+        'balancer fields are deprecated + ignored — the meter + its staleness moved to a MeterReader; use `meterReader` for live data and `nightMarginA`/`daytimeFraction` for the static fallback',
+      )
     const balancer = mod.create(balancerCfg, ctx)
     await balancer.start()
     balancers.set(balancerCfg.name, balancer)
@@ -502,18 +513,6 @@ async function main() {
     }
   }
 
-  // Freshest household load (max phase current) from any meter reader with a recent snapshot.
-  // Feeds the current resolver's live rung — independent of whether a balancer is configured.
-  function freshMeterMaxPhaseA(now: Date): number | undefined {
-    for (const r of meterReaders.values()) {
-      const s = r.latest()
-      if (s && now.getTime() - s.timestamp.getTime() < 60_000) {
-        return Math.max(s.i1A ?? 0, s.i2A ?? 0, s.i3A ?? 0)
-      }
-    }
-    return undefined
-  }
-
   // Average price per Stockholm hour-of-day over the last N days (price fallback rung). Reuses
   // the tariff's own cache via prices() — no zone plumbing needed. Only computed when live
   // prices are missing.
@@ -540,7 +539,6 @@ async function main() {
   interface ResolvedLoadpoint {
     state: LoadpointState
     shouldChargeNow?: boolean
-    budgetA: number
     pricesAvailable: boolean
     sources: { energy: string; price: string; current: string }
   }
@@ -550,6 +548,7 @@ async function main() {
   async function resolveLoadpoint(
     lpCfg: LoadpointConfig,
     now: Date,
+    circuitBudget: { value: number; source: string },
   ): Promise<ResolvedLoadpoint | undefined> {
     const state = loadpointStates.get(lpCfg.name)
     if (!state) return undefined
@@ -581,8 +580,6 @@ async function main() {
       | { phases?: number }
       | undefined
     const phases = balancerCfg?.phases ?? chargerCfg?.phases ?? 3
-    // A balancer carries its own circuit fuse; a bare loadpoint falls back to the site fuse.
-    const mainBreakerA = balancerCfg?.mainBreakerA ?? config.site.mainBreakerA
 
     // One target → one resolved { requiredKWh (charge) + resolvedSoc (display) } through the single
     // resolver, which owns unit conversion (km→% via the car's ratio) and the degradation ladder.
@@ -621,23 +618,6 @@ async function main() {
       tz,
     })
 
-    // Current budget: live meter headroom → historical worst-case → time-of-day static.
-    const current = resolveCurrentBudget({
-      now,
-      maxCurrentA: state.maxCurrentA,
-      mainBreakerA,
-      liveMaxPhaseA: freshMeterMaxPhaseA(now),
-      ownDrawA: Math.max(state.currentA, lastCommandedA.get(lpCfg.name) ?? 0),
-      worstCaseLoadA:
-        mainBreakerA != null
-          ? (worstCaseLoadA(db, now, sc.historicalDays, tz) ?? undefined)
-          : undefined,
-      nightWindow,
-      nightMarginA: sc.nightMarginA,
-      daytimeFraction: sc.daytimeFraction,
-      tz,
-    })
-
     // minSoc safety floor: in smart mode, force-charge when the SoC is below the minimum (bypasses
     // the price wait). In disabled mode we respect the explicit Off but warn once per episode.
     // Unknown SoC / no minSoc → no floor (never force-charge blind).
@@ -648,7 +628,7 @@ async function main() {
         requiredKWh: energy.requiredKWh,
         now,
         targetTime,
-        planRateA: Math.min(state.maxCurrentA, current.value),
+        planRateA: Math.min(state.maxCurrentA, circuitBudget.value),
         phases,
         priceSlots: price.value,
       })
@@ -674,9 +654,8 @@ async function main() {
     return {
       state,
       shouldChargeNow,
-      budgetA: current.value,
       pricesAvailable: !price.degraded,
-      sources: { energy: energy.source, price: price.source, current: current.source },
+      sources: { energy: energy.source, price: price.source, current: circuitBudget.source },
     }
   }
 
@@ -686,6 +665,50 @@ async function main() {
     { allocations: Record<string, number>; freeAmps: number }
   >()
   const tickSlots = new Map<string, { running: boolean; rerun: boolean }>()
+
+  // One current budget per CIRCUIT (bare = its single loadpoint; balancer = all of its loadpoints),
+  // resolved through the single ladder (live-meter headroom → historical worst-case → static
+  // time-of-day). This is the ONLY place the meter is read: the balancer splits the result and a
+  // bare loadpoint takes it directly. Per-breaker margins fall back to the global smartCharging.*.
+  function resolveCircuitBudget(circuit: Circuit, now: Date): { value: number; source: string } {
+    const sc = config.smartCharging
+    const tz = getTimezone(db)
+    const worst = (breaker: number | undefined) =>
+      breaker != null ? (worstCaseLoadA(db, now, sc.historicalDays, tz) ?? undefined) : undefined
+    if (circuit.kind === 'balancer') {
+      const b = config.balancers.find((x) => x.name === circuit.balancerName)
+      const mainBreakerA = b?.mainBreakerA
+      const r = resolveCurrentBudget({
+        now,
+        // The splittable budget is the circuit fuse; per-charger maxA is enforced in allocate().
+        maxCurrentA: mainBreakerA ?? 0,
+        mainBreakerA,
+        liveMaxPhaseA: circuitLiveMaxPhaseA(b?.meterReader, meterReaders),
+        ownDrawA: circuitOwnDrawA(circuit.loadpoints, loadpointStates, lastCommandedA),
+        worstCaseLoadA: worst(mainBreakerA),
+        nightWindow: sc.nightWindow,
+        nightMarginA: b?.nightMarginA ?? sc.nightMarginA,
+        daytimeFraction: b?.daytimeFraction ?? sc.daytimeFraction,
+        tz,
+      })
+      return { value: r.value, source: r.source }
+    }
+    const state = loadpointStates.get(circuit.loadpoint.name)
+    const mainBreakerA = config.site.mainBreakerA
+    const r = resolveCurrentBudget({
+      now,
+      maxCurrentA: state?.maxCurrentA ?? 0,
+      mainBreakerA,
+      liveMaxPhaseA: circuitLiveMaxPhaseA(undefined, meterReaders),
+      ownDrawA: Math.max(state?.currentA ?? 0, lastCommandedA.get(circuit.loadpoint.name) ?? 0),
+      worstCaseLoadA: worst(mainBreakerA),
+      nightWindow: sc.nightWindow,
+      nightMarginA: sc.nightMarginA,
+      daytimeFraction: sc.daytimeFraction,
+      tz,
+    })
+    return { value: r.value, source: r.source }
+  }
 
   // Tick one circuit: resolve each loadpoint, coordinate the applied amps through the balancer
   // if the circuit has one (else use the resolved budget directly), then command each charger
@@ -714,9 +737,12 @@ async function main() {
         if (st) maybePollVehicle(lp, st, nowMs)
       }
 
-      const resolved = (await Promise.all(lpCfgs.map((lp) => resolveLoadpoint(lp, now)))).filter(
-        (r): r is ResolvedLoadpoint => r !== undefined,
-      )
+      // One budget for the whole circuit (the only meter read this tick); each loadpoint resolves
+      // its charge decision against it.
+      const circuitBudget = resolveCircuitBudget(circuit, now)
+      const resolved = (
+        await Promise.all(lpCfgs.map((lp) => resolveLoadpoint(lp, now, circuitBudget)))
+      ).filter((r): r is ResolvedLoadpoint => r !== undefined)
       if (resolved.length === 0) return
 
       // Surface WHY each loadpoint decided as it did — the key question in a degradation-first
@@ -727,7 +753,7 @@ async function main() {
             loadpoint: r.state.name,
             mode: r.state.mode,
             shouldChargeNow: r.shouldChargeNow,
-            budgetA: r.budgetA,
+            budgetA: circuitBudget.value,
             sources: r.sources,
           },
           'circuit resolve',
@@ -744,10 +770,14 @@ async function main() {
           const lp = lpCfgs.find((l) => l.name === r.state.name)!
           return buildSnapshot(r.state, lp.vehicle, r.shouldChargeNow, r.pricesAvailable)
         })
-        const out = await balancer.tick({ loadpoints: snaps, timestamp: now })
+        const out = await balancer.tick({
+          loadpoints: snaps,
+          circuitBudgetA: circuitBudget.value,
+          timestamp: now,
+        })
         allocations = out.allocations
         const allocRecord = Object.fromEntries(out.allocations)
-        const freeAmps = out.freeAmps ?? 0
+        const freeAmps = circuitBudget.value // the resolved circuit headroom (what freeAmps meant before)
         lastTickByBalancer.set(circuit.balancerName, { allocations: allocRecord, freeAmps })
         events.emit('balancer.tick', {
           name: circuit.balancerName,
@@ -762,7 +792,7 @@ async function main() {
         loadpointName: r.state.name,
         mode: r.state.mode,
         shouldChargeNow: r.shouldChargeNow,
-        budgetA: r.budgetA,
+        budgetA: circuitBudget.value,
         lastCommandedA: lastCommandedA.get(r.state.name),
       }))
       const { writes } = planCircuit(decisions, allocations, config.smartCharging.deadbandA)

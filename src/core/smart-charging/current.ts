@@ -25,8 +25,9 @@ export interface CurrentInputs {
 }
 
 /**
- * Resolve the amps this loadpoint may draw, degrading:
- *  1. live-meter           — mainBreakerA − liveMaxPhaseA + ownDraw (n=1 form of allocate())
+ * Resolve the amps a CIRCUIT may draw (bare = its one loadpoint; balancer = the shared circuit the
+ * balancer then splits), degrading:
+ *  1. live-meter           — mainBreakerA − liveMaxPhaseA + circuit ownDraw (credit-back)
  *  2. historical-worstcase — mainBreakerA − worst-load-this-hour − 1 A safety
  *  3. static-tod           — night: mainBreakerA − nightMarginA, day: mainBreakerA × daytimeFraction
  *

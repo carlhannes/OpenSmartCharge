@@ -48,6 +48,7 @@ src/
     balancer-mqtt-circuit/
     vehicle-skoda/
     meter-tibber-pulse/
+    meter-mqtt-phase/        (raw <prefix>/i{1,2,3}_a feed)
   server/     — Express HTTP + SSE + MQTT bridge
   ui/         — React 19 + Vite admin app
 plugins/      — third-party modules (auto-loaded at startup, gitignored)
@@ -108,7 +109,9 @@ more: authenticate, translate that service's data ⇄ OSC's SDK types *when aske
 and report its own `health()`/degradation. A module owns **no orchestration** — no background timers,
 no polling cadence, no decisions about *when* it runs or how its data combines with other modules'.
 `charger-ocpp16`, `tariff-elprisetjustnu`, `tariff-elering`, `vehicle-skoda`, `meter-tibber-pulse`,
-and `balancer-mqtt-circuit` all follow this: each is a thin translation layer over one protocol/API.
+and `meter-mqtt-phase` all follow this: each is a thin translation layer over one protocol/API.
+(`balancer-mqtt-circuit` is the boundary's limiting case — it maps *no* external service at all; it's
+pure allocation math with no meter and no timer. See Balancing below.)
 
 **The lifecycle owns orchestration** (`src/core/lifecycle.ts` + the pure helpers in
 `src/core/smart-charging/`): the control-loop tick, *when* to poll a vehicle, the resolver ladders,
@@ -122,9 +125,12 @@ Worked examples:
   on charger-connect + at most every `vehiclePollIntervalSec` while charging, **never while idle**
   (polling a parked car can wake and drain it, and risks an account lockout). The "don't poll a
   sleeping car" policy is orchestration, so it lives in the lifecycle — not smeared across the module.
-- **Balancing.** The balancer is pure per-tick allocation math (`allocate(input)`); it does not own a
-  loop. The lifecycle's single control tick drives it. Same split: the module computes, the lifecycle
-  decides when and how it composes.
+- **Balancing.** The balancer is pure per-tick allocation math (`allocate({loadpoints, circuitBudgetA})`);
+  it holds no meter, no timer, no staleness. The lifecycle resolves the circuit's current budget **once**
+  per tick — the meter reader is the SSoT for live current *and* its staleness (`health()`), and the
+  `resolveCurrentBudget` ladder degrades it (live-meter → historical → static-tod) — then hands the
+  balancer a single number to split across the circuit's loadpoints. The module computes the split; the
+  lifecycle decides the budget and when it composes.
 
 When you're tempted to add a `setInterval`, a "poll every N seconds", or cross-module coordination to a
 module — stop. That belongs in the lifecycle. The module should just expose a pure "do it now" method.
@@ -184,7 +190,8 @@ balancer, a tariff, nor a vehicle — each is an enhancement, not a prerequisite
 
 ```yaml
 tariffs:    [{name, type: elering|elprisetjustnu, zone, ...}]   # elprisetjustnu = SE1–SE4; elering = EE/FI/LV/LT
-balancers:  [{name, type, mainBreakerA, phases, meterTopicPrefix, safeStaticCurrentA, meterStaleAfterSec}]
+balancers:  [{name, type, mainBreakerA, phases, meterReader?, nightMarginA?, daytimeFraction?}]  # pure splitter; meterReader → the live-current SSoT
+meterReaders: [{name, type: tibber-pulse|mqtt-phase, ...}]     # live household current + its staleness authority
 vehicles:   [{name, type, ...}]
 chargers:   [{name, type, stationId, maxA, phases}]
 loadpoints: [{name, charger, vehicle?, tariff?, balancer?, defaultMode, targetSoc?, targetTime?, targetKWh?, minSoc?}]

@@ -25,14 +25,15 @@ export interface LoadpointSnapshot {
 
 export interface BalancerInput {
   loadpoints: LoadpointSnapshot[]
+  /** Amps available for the whole circuit this tick — already resolved through the degradation
+   *  ladder (live-meter headroom / historical worst-case / static time-of-day) by the lifecycle.
+   *  The balancer SPLITS this across loadpoints; it never reads the meter or computes headroom. */
+  circuitBudgetA: number
   timestamp: Date
 }
 
 export interface BalancerOutput {
   allocations: Map<string, number>
-  /** House headroom after charger credit-back, as computed from live phase currents. Populated
-   *  by the balancer module so the lifecycle doesn't have to recompute it from partial data. */
-  freeAmps?: number
 }
 
 export interface Balancer {

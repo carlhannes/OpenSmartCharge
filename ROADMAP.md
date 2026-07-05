@@ -90,12 +90,14 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 **Goal:** Dynamic load balancing from live household meter data, with a well-defined degradation path for meter failures.
 
-- [x] `src/modules/balancer-mqtt-circuit/` — in-process MeterReader path (preferred); MQTT topic fallback (`{prefix}/i1_a`, `i2_a`, `i3_a`) when no `meterReader:` is set
-- [x] `meterReader: <name>` link path — balancer reads from in-process MeterReader by preference, falls back to `meterTopicPrefix` MQTT subscription when not set (backwards compatible)
-- [x] Control loop (default 15 s): `freeAmps = mainBreakerA − max(phaseCurrents) + chargerCurrents`
-- [x] Distributes `freeAmps` across active loadpoints — `fast` loadpoints get priority; `smart` get equal split of remaining headroom; `disabled` get 0
+> **Later refactored (SSoT unification).** The balancer became a **pure splitter**: the meter + its staleness moved onto a `MeterReader` (the raw-topic path is now `type: mqtt-phase`), and the current-degradation ladder runs **once per circuit** in the control loop. The capabilities below still hold; the mechanism lines are updated to match. See `docs/config.md` (balancers[]) and AGENTS.md.
+
+- [x] `src/modules/balancer-mqtt-circuit/` — pure allocation math; the meter lives on a `MeterReader` (`tibber-pulse`, or `mqtt-phase` for the raw `{prefix}/i{1,2,3}_a` feed)
+- [x] `meterReader: <name>` link path — the circuit reads live current from the named in-process MeterReader (no MQTT round-trip); unset → a blind circuit on the historical/static fallbacks
+- [x] Control loop (default 30 s): resolves the circuit budget `mainBreakerA − max(phaseCurrents) + circuit ownDraw`, then the balancer splits it
+- [x] Distributes the circuit budget across active loadpoints — `fast` loadpoints get priority; `smart` get equal split of remaining headroom; `disabled` get 0
 - [x] Smart mode: respects tariff windows (no charging in expensive hours); `shouldChargeNow` computed per loadpoint via `planner.plan()` in lifecycle
-- [x] Meter staleness: after `meterStaleAfterSec`, switch to `safeStaticCurrentA` per loadpoint; health → `degraded`
+- [x] Meter staleness: the reader's `health()` is the one authority — when it degrades, the circuit steps down the ladder (historical-worstcase → static-tod `nightMarginA`/`daytimeFraction`); health → `degraded`
 - [x] Publishes allocation state to `osc/balancer/<name>/...` (health, free_amps, allocations)
 - [x] `GET /api/balancers/:name` REST endpoint — live allocations + health + freeAmps
 
@@ -105,7 +107,7 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 |---|---|
 | Full healthy | Dynamic balancing at full optimization |
 | Internet down | Balancer uses cached prices; SoC estimated; charging continues |
-| Pulse feed stops | `safeStaticCurrentA` applied within `meterStaleAfterSec`; UI shows "meter feed lost" |
+| Pulse feed stops | Meter reader → `degraded` (its `staleAfterSec`); circuit falls to historical-worstcase, then static-tod (`nightMarginA`/`daytimeFraction`); UI shows "meter feed lost" |
 | Vehicle API down, never seen | Time-based planning; charging at scheduled start |
 | Vehicle API down, seen before | Estimated SoC from capacity + session kWh; departure planning works |
 | Everything restored | Auto-recovery, no restart |

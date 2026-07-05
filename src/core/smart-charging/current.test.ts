@@ -19,6 +19,21 @@ test('live-meter rung: mainBreaker − maxPhase + ownDraw, clamped to charger ma
   expect(r).toMatchObject({ value: 16, source: 'live-meter', degraded: false }) // 25−10+6=21 → clamp 16
 })
 
+test('circuit budget clamps to the breaker even with a large credit-back (safety ceiling)', () => {
+  // Balancer circuit: maxCurrentA = mainBreakerA = 25. A big multi-charger credit-back pushes the
+  // raw headroom past the fuse; settle() clamps it so the split can never over-subscribe the breaker.
+  const r = resolveCurrentBudget({
+    now: dayNow,
+    maxCurrentA: 25,
+    mainBreakerA: 25,
+    liveMaxPhaseA: 10,
+    ownDrawA: 20, // 25 − 10 + 20 = 35, clamped to 25
+    nightWindow: NIGHT,
+    tz: TZ,
+  })
+  expect(r).toMatchObject({ value: 25, source: 'live-meter' })
+})
+
 test('live-meter rung: credit-back avoids a phantom zero during ramp-up', () => {
   // House at 20 A including our own 6 A: raw headroom 5 A (<6→0), but credit-back gives 11 A.
   const r = resolveCurrentBudget({

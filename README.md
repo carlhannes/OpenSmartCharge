@@ -84,7 +84,7 @@ The loadpoint is what you control — via the web UI, REST, or MQTT. The Charger
 [Skoda API]   → estimator → loadpoint    ─┘
 ```
 
-The balancer runs every 15 seconds. It reads live per-phase currents from MQTT, subtracts house load from the main breaker, and distributes the remaining headroom across active loadpoints — weighted by mode, tariff window, and SoC target.
+Each control tick, OSC resolves the circuit's available current — the main breaker minus live house load read from the meter reader, degrading to a last-few-days worst-case or a time-of-day static when the meter is stale — and the balancer splits that budget across the active loadpoints, weighted by mode, tariff window, and SoC target.
 
 ## When things break
 
@@ -101,7 +101,7 @@ Every module reports a health status: `ok` / `degraded` / `unavailable`. The sys
 | What breaks | What happens |
 |---|---|
 | Internet down | Balancer uses cached prices (yesterday's curve). Vehicle SoC estimated from last known value + session kWh delivered. Charging continues. |
-| Tibber Pulse / MQTT meter feed stale | Balancer switches to a configured safe static current (`safeStaticCurrentA`) — conservative but meaningful. Fuses safe. |
+| Tibber Pulse / MQTT meter feed stale | The circuit steps down the current ladder — last-few-days worst-case household load, then a time-of-day static (night `mainBreakerA − nightMarginA`, day `mainBreakerA × daytimeFraction`). Conservative but meaningful. Fuses safe. |
 | Vehicle API unreachable (never seen vehicle) | Planner falls back to time-based: start charging at the latest time that completes by departure. |
 | Vehicle API unreachable (seen vehicle before) | Battery capacity is cached. Planner estimates current SoC from `lastKnownSoc + (sessionKWh / capacity)`. Full departure planning works. |
 | Everything restored | Modules recover automatically. No restart needed. |

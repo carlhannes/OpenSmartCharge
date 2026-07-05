@@ -196,19 +196,30 @@ export function createApiRouter(deps: ApiDeps): Router {
     }
     const body = req.body as Record<string, unknown>
     const patch: Record<string, unknown> = {}
-    for (const f of [
-      'mainBreakerA',
-      'safeStaticCurrentA',
-      'meterStaleAfterSec',
-      'intervalSec',
-    ] as const) {
-      if (body[f] !== undefined) {
-        if (typeof body[f] !== 'number' || !((body[f] as number) > 0)) {
-          res.status(400).json({ error: `${f} must be a positive number` })
-          return
-        }
-        patch[f] = body[f]
+    if (body.mainBreakerA !== undefined) {
+      if (typeof body.mainBreakerA !== 'number' || !(body.mainBreakerA > 0)) {
+        res.status(400).json({ error: 'mainBreakerA must be a positive number' })
+        return
       }
+      patch.mainBreakerA = body.mainBreakerA
+    }
+    if (body.nightMarginA !== undefined) {
+      if (typeof body.nightMarginA !== 'number' || body.nightMarginA < 0) {
+        res.status(400).json({ error: 'nightMarginA must be a number ≥ 0' })
+        return
+      }
+      patch.nightMarginA = body.nightMarginA
+    }
+    if (body.daytimeFraction !== undefined) {
+      if (
+        typeof body.daytimeFraction !== 'number' ||
+        body.daytimeFraction <= 0 ||
+        body.daytimeFraction > 1
+      ) {
+        res.status(400).json({ error: 'daytimeFraction must be a number in (0, 1]' })
+        return
+      }
+      patch.daytimeFraction = body.daytimeFraction
     }
     if (body.phases !== undefined) {
       const p = body.phases

@@ -78,7 +78,7 @@ Flow (each step skippable where sensible; progress persists):
 1. **Welcome** — one line on what OSC does.
 2. **Connect your charger** — show the exact `ws://<host>:8080/ocpp/<id>` URL with copy button and a live *"Waiting for your charger to connect…"* state that flips to **"✓ Detected `<stationId>`"** the moment a charger opens a WebSocket. This *is* the pairing moment — we surface the otherwise-orphaned unknown-station connection and let the user **claim** it (name it, confirm max amps).
 3. **Electricity region** — pick zone (SE1–SE4, plus EE/LV/LT/FI) from a labelled list/map.
-4. **House & load balancing** — enter main breaker size; optionally connect a Tibber Pulse / MQTT meter, with a clear *"Skip — use a safe static limit"* path (maps to `safeStaticCurrentA`).
+4. **House & load balancing** — enter main breaker size; optionally connect a Tibber Pulse / MQTT meter, with a clear *"Skip — use a safe static limit"* path (a blind circuit with no `meterReader`, running the static-tod fallback: night `mainBreakerA − nightMarginA`, day `× daytimeFraction`).
 5. **Add your car** *(optional)* — Skoda login, or **"Skip — use a Guest profile."**
 6. **First plan** — accept a sensible default (*Ready by 07:00, 80%, every day*) or customize. Done → land on Home.
 

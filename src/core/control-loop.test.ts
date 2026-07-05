@@ -3,13 +3,78 @@ import {
   buildCircuits,
   circuitForLoadpoint,
   bareCircuitAmps,
+  circuitLiveMaxPhaseA,
+  circuitOwnDrawA,
   planCircuit,
   type LpDecision,
 } from './control-loop.js'
 import type { Config, LoadpointConfig } from './config.js'
+import type { MeterSnapshot } from '../sdk/meter-reader.js'
+import type { ModuleHealth } from '../sdk/types.js'
+
+const reader = (health: ModuleHealth, snap: MeterSnapshot | null) => ({
+  health: () => health,
+  latest: () => snap,
+})
+const snap = (i1: number, i2: number, i3: number): MeterSnapshot => ({
+  i1A: i1,
+  i2A: i2,
+  i3A: i3,
+  timestamp: new Date(0),
+})
 
 const lp = (name: string, balancer?: string): LoadpointConfig =>
   ({ name, charger: name, balancer, defaultMode: 'smart', autoStart: true }) as LoadpointConfig
+
+test('circuitOwnDrawA sums max(currentA, commandedA) across the circuit (generalized credit-back)', () => {
+  const states = new Map([
+    ['a', { currentA: 6 }], // ramping — commanded higher than measured
+    ['b', { currentA: 16 }], // steady
+    ['c', { currentA: 0 }], // idle, never commanded
+  ])
+  const commanded = new Map([
+    ['a', 16],
+    ['b', 16],
+  ])
+  // a: max(6,16)=16; b: max(16,16)=16; c: max(0,0)=0 → 32. The ramping charger counts its commanded
+  // 16 (not the measured 6), so the resolver's headroom isn't phantom-inflated mid-ramp.
+  expect(circuitOwnDrawA([{ name: 'a' }, { name: 'b' }, { name: 'c' }], states, commanded)).toBe(32)
+})
+
+test('circuitLiveMaxPhaseA: a fresh named reader yields its max phase current (feeds the live rung)', () => {
+  const readers = new Map([['house', reader('ok', snap(10, 8, 3))]])
+  expect(circuitLiveMaxPhaseA('house', readers)).toBe(10)
+})
+
+test('circuitLiveMaxPhaseA: the staleness gate — degraded/unavailable/absent/frame-less → undefined', () => {
+  // A degraded reader (past its staleAfterSec) must NOT feed the live rung — the resolver degrades.
+  expect(
+    circuitLiveMaxPhaseA('house', new Map([['house', reader('degraded', snap(10, 8, 3))]])),
+  ).toBeUndefined()
+  // Never-seen-a-frame reader.
+  expect(
+    circuitLiveMaxPhaseA('house', new Map([['house', reader('unavailable', null)]])),
+  ).toBeUndefined()
+  // Named reader that isn't registered.
+  expect(
+    circuitLiveMaxPhaseA('missing', new Map([['house', reader('ok', snap(10, 8, 3))]])),
+  ).toBeUndefined()
+  // Health says ok but no snapshot yet (defensive) — don't fabricate a 0-load reading.
+  expect(circuitLiveMaxPhaseA('house', new Map([['house', reader('ok', null)]]))).toBeUndefined()
+})
+
+test('circuitLiveMaxPhaseA: unnamed selection — sole reader used; ambiguous (>1) degrades', () => {
+  // No name + exactly one reader → the sole reader (single-meter install).
+  expect(circuitLiveMaxPhaseA(undefined, new Map([['only', reader('ok', snap(5, 12, 7))]]))).toBe(
+    12,
+  )
+  // No name + more than one reader → ambiguous → undefined (degrade, the safe choice).
+  const two = new Map([
+    ['a', reader('ok', snap(9, 9, 9))],
+    ['b', reader('ok', snap(1, 1, 1))],
+  ])
+  expect(circuitLiveMaxPhaseA(undefined, two)).toBeUndefined()
+})
 
 test('buildCircuits: balancer loadpoints group into one circuit; the rest are bare', () => {
   const config = { loadpoints: [lp('a', 'house'), lp('b', 'house'), lp('c')] } as Config

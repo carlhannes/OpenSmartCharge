@@ -283,6 +283,21 @@ test('PUT site/tariff/balancer persist overrides + reconcile; GET /api/site refl
         (await putJson(`${baseUrl}/api/balancers/main`, { mainBreakerA: 20, phases: 1 })).status,
       ).toBe(200)
       expect((await putJson(`${baseUrl}/api/balancers/main`, { phases: 5 })).status).toBe(400)
+      // per-breaker static-tod margins (replace the deprecated flat safeStaticCurrentA)
+      expect(
+        (await putJson(`${baseUrl}/api/balancers/main`, { nightMarginA: 6, daytimeFraction: 0.4 }))
+          .status,
+      ).toBe(200)
+      expect(getOverride(db, 'balancer', 'main')).toMatchObject({
+        nightMarginA: 6,
+        daytimeFraction: 0.4,
+      })
+      expect(
+        (await putJson(`${baseUrl}/api/balancers/main`, { daytimeFraction: 1.5 })).status,
+      ).toBe(400)
+      expect((await putJson(`${baseUrl}/api/balancers/main`, { nightMarginA: -1 })).status).toBe(
+        400,
+      )
 
       const site = (await (await fetch(`${baseUrl}/api/site`)).json()) as {
         site: { mainBreakerA: number; timezone: string }

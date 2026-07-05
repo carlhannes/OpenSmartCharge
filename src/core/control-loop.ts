@@ -1,5 +1,10 @@
 import type { ChargeMode, Config, LoadpointConfig } from './config.js'
+import type { ModuleHealth } from '../sdk/types.js'
+import type { MeterSnapshot } from '../sdk/meter-reader.js'
 import { shouldWrite } from './smart-charging/decide.js'
+
+/** The slice of a MeterReader the current-budget resolver needs: its freshness + last frame. */
+type MeterReaderLike = { health(): ModuleHealth; latest(): MeterSnapshot | null }
 
 // The control loop drives every loadpoint on one slow, damped tick — independent of whether a
 // balancer exists. Degradation is resolved upstream (the resolver ladders), so the only branch
@@ -54,6 +59,45 @@ export function bareCircuitAmps(
   if (mode === 'disabled') return 0
   if (mode === 'smart' && shouldChargeNow === false) return 0
   return budgetA
+}
+
+/**
+ * Total current the chargers on a circuit draw (or were commanded — whichever is higher), summed
+ * across the circuit. Credited back into the live-meter headroom rung so a car ramping up to a
+ * freshly-commanded level isn't under-counted (which would make the resolver yank current back on
+ * the next tick). Generalizes the single-charger credit-back to N chargers on a shared circuit.
+ */
+export function circuitOwnDrawA(
+  loadpoints: { name: string }[],
+  states: Map<string, { currentA: number }>,
+  lastCommandedA: Map<string, number>,
+): number {
+  return loadpoints.reduce((sum, lp) => {
+    const cur = states.get(lp.name)?.currentA ?? 0
+    const cmd = lastCommandedA.get(lp.name) ?? 0
+    return sum + Math.max(cur, cmd)
+  }, 0)
+}
+
+/**
+ * Live household load (max phase current) for a circuit's meter — the meter-SSoT selection plus the
+ * one staleness gate. Feeds the live-meter rung of resolveCurrentBudget ONLY when the chosen reader
+ * is fresh (its own health() === 'ok'); a degraded/absent/ambiguous reader returns undefined, so the
+ * resolver degrades to the historical/static rungs. Reader selection:
+ *  - a named reader (balancers[].meterReader) → that reader;
+ *  - no name + exactly one reader → the sole reader (single-meter installs);
+ *  - no name + more than one reader → undefined (ambiguous — degrade, the safe choice).
+ */
+export function circuitLiveMaxPhaseA(
+  meterReaderName: string | undefined,
+  readers: Map<string, MeterReaderLike>,
+): number | undefined {
+  let reader: MeterReaderLike | undefined
+  if (meterReaderName) reader = readers.get(meterReaderName)
+  else if (readers.size === 1) reader = [...readers.values()][0]
+  if (!reader || reader.health() !== 'ok') return undefined
+  const s = reader.latest()
+  return s ? Math.max(s.i1A ?? 0, s.i2A ?? 0, s.i3A ?? 0) : undefined
 }
 
 export interface LpDecision {

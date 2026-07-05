@@ -24,10 +24,12 @@ AGENTS.md → "Declarative config & soft-reload").
   `/api/settings`, because the breaker is site-level and the zone is per-tariff — cleaner + multi-entity-safe.
 
 ## 2. Balancer settings ✅
-`PUT /api/balancers/:name { mainBreakerA, phases, safeStaticCurrentA, meterStaleAfterSec, intervalSec }`
-(partial — send only what changed; reloads the balancer module, which also fixes the old
-`mainBreakerA` dual-reader). **Type/source change is not a field edit** (it's a different module) — model
-it as remove + re-add; not wired as a single call.
+`PUT /api/balancers/:name { mainBreakerA, phases, nightMarginA, daytimeFraction }`
+(partial — send only what changed; reloads the balancer module). The old flat `safeStaticCurrentA` /
+`meterStaleAfterSec` / `intervalSec` are gone: the balancer is now a pure splitter, the meter (and its
+staleness) lives on a `meterReader`, and `nightMarginA`/`daytimeFraction` are the per-breaker static-tod
+fallback margins. **Type/source change is not a field edit** (it's a different module) — model it as
+remove + re-add; not wired as a single call.
 
 ## 3. Charger management ✅
 - `GET /api/chargers/pending` → stations connected over OCPP but unclaimed
