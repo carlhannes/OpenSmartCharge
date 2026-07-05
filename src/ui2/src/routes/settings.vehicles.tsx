@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useOsc, type Vehicle } from "@/lib/mock/store";
 import { Trash2, Undo2, Check } from "lucide-react";
 import { useRef, useState } from "react";
+import { ConfigLockNote } from "@/components/settings/ConfigLockNote";
 
 export const Route = createFileRoute("/settings/vehicles")({ component: VehiclesSettings });
 
@@ -11,6 +12,9 @@ function VehiclesSettings() {
   const add = useOsc((s) => s.addVehicle);
   const remove = useOsc((s) => s.removeVehicle);
   const restore = useOsc((s) => s.restoreVehicle);
+  // Live backend → vehicles are configured in osc.yaml (no write API); the list stays real but
+  // add/remove are disabled. Demo mode keeps them interactive.
+  const locked = useOsc((s) => s.source === "live");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [justAdded, setJustAdded] = useState(false);
@@ -72,13 +76,15 @@ function VehiclesSettings() {
               SoC {Math.round(v.soc)}% · {Math.round(v.rangeKm)} km · {v.batteryKwh} kWh
             </div>
           </div>
-          <button
-            onClick={() => removeVehicle(v)}
-            aria-label={`Remove ${v.brand} ${v.name}`}
-            className="text-muted-foreground hover:text-destructive"
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
+          {!locked && (
+            <button
+              onClick={() => removeVehicle(v)}
+              aria-label={`Remove ${v.brand} ${v.name}`}
+              className="text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
         </div>
       ))}
 
@@ -89,19 +95,21 @@ function VehiclesSettings() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="email"
-            className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            disabled={locked}
+            className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm disabled:opacity-60"
           />
           <input
             value={pw}
             onChange={(e) => setPw(e.target.value)}
             placeholder="password"
             type="password"
-            className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            disabled={locked}
+            className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm disabled:opacity-60"
           />
         </div>
         <button
           onClick={connect}
-          disabled={justAdded}
+          disabled={locked || justAdded}
           className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-full bg-primary py-2.5 text-sm font-medium text-primary-foreground disabled:opacity-70"
         >
           {justAdded ? (
@@ -112,9 +120,13 @@ function VehiclesSettings() {
             "Connect"
           )}
         </button>
-        <div className="mt-2 text-[11px] text-muted-foreground">
-          Any credentials work — this is a mock.
-        </div>
+        {locked ? (
+          <ConfigLockNote>Vehicles are configured in your config file (osc.yaml)</ConfigLockNote>
+        ) : (
+          <div className="mt-2 text-[11px] text-muted-foreground">
+            Any credentials work — this is a mock.
+          </div>
+        )}
       </div>
     </div>
   );

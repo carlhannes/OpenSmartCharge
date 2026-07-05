@@ -105,6 +105,22 @@ export function useLiveSync() {
       }
 
       if (site) {
+        // Real site config → the read-only Settings display (region/breaker). There's no write
+        // API for these yet, so we only READ them here; the Settings UI locks the controls in
+        // live mode. In demo mode this block never runs (the hook returns into the mock tick).
+        const zone = site.tariffs[0]?.zone;
+        const siteBreaker = site.site.mainBreakerA ?? site.balancers[0]?.mainBreakerA;
+        if (!cancelled) {
+          store.setConfig({
+            ...(zone ? { region: zone } : {}),
+            ...(siteBreaker != null ? { breakerAmps: siteBreaker } : {}),
+            // No dynamic balancer configured → the main breaker is a static safe limit.
+            ...(site.balancers.length === 0 && siteBreaker != null
+              ? { balancerMode: "static" as const, staticLimitA: siteBreaker }
+              : {}),
+          });
+        }
+
         const vehicles = (
           await Promise.all(
             site.vehicles.map((v) =>

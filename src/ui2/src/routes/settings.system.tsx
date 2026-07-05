@@ -1,20 +1,51 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useOsc } from "@/lib/mock/store";
+import { setTimezone } from "@/lib/live/commands";
 import { InlineStatus, type InlineStatusState } from "@/components/ui/inline-status";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 export const Route = createFileRoute("/settings/system")({ component: SystemSettings });
 
 const tone = { ok: "bg-status-ok", warn: "bg-status-warn", bad: "bg-status-bad" };
+const TZ_FALLBACK = [
+  "UTC",
+  "Europe/Stockholm",
+  "Europe/Oslo",
+  "Europe/Copenhagen",
+  "Europe/Helsinki",
+  "Europe/Berlin",
+  "Europe/London",
+];
 
 function SystemSettings() {
   const modules = useOsc((s) => s.moduleHealth);
+  const timezone = useOsc((s) => s.timezone);
   const fileRef = useRef<HTMLInputElement>(null);
   const importJson = useOsc((s) => s.importSnapshot);
   const [status, setStatus] = useState<{ state: InlineStatusState; msg: string }>({
     state: "idle",
     msg: "",
   });
+  const [tzStatus, setTzStatus] = useState<InlineStatusState>("idle");
+
+  // Full IANA list when the runtime supports it (all modern browsers); else a small Nordic set.
+  const zones = useMemo(() => {
+    const supported = (Intl as unknown as { supportedValuesOf?: (k: "timeZone") => string[] })
+      .supportedValuesOf;
+    try {
+      const all = supported?.("timeZone");
+      if (all && all.length) return all;
+    } catch {
+      /* older runtime → fall back */
+    }
+    return TZ_FALLBACK;
+  }, []);
+  const tzOptions = zones.includes(timezone) ? zones : [timezone, ...zones];
+
+  const changeTz = (tz: string) => {
+    void setTimezone(tz); // optimistic local + PUT /api/settings when live
+    setTzStatus("success");
+  };
 
   const exportJson = () => {
     // Serialize the real store state (functions stripped) so the "Downloaded" status is honest.
@@ -34,6 +65,29 @@ function SystemSettings() {
 
   return (
     <div className="space-y-4">
+      <div className="rounded-2xl border border-border/60 bg-card p-4">
+        <label className="mb-1 block text-xs uppercase tracking-widest text-muted-foreground">
+          Timezone
+        </label>
+        <p className="mb-2 text-xs text-muted-foreground">
+          Used for night windows, plan “ready by” times, and price alignment.
+        </p>
+        <select
+          value={timezone}
+          onChange={(e) => changeTz(e.target.value)}
+          className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+        >
+          {tzOptions.map((z) => (
+            <option key={z} value={z}>
+              {z}
+            </option>
+          ))}
+        </select>
+        <InlineStatus state={tzStatus} className="mt-2">
+          Timezone saved
+        </InlineStatus>
+      </div>
+
       <div className="space-y-2">
         {modules.map((m) => (
           <div

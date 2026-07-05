@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useOsc, type Charger, type Plan } from "@/lib/mock/store";
 import { Trash2, Undo2 } from "lucide-react";
 import { useRef, useState } from "react";
+import { ConfigLockNote } from "@/components/settings/ConfigLockNote";
 
 export const Route = createFileRoute("/settings/chargers")({ component: ChargersSettings });
 
@@ -15,6 +16,9 @@ function ChargersSettings() {
   const pending = useOsc((s) => s.pendingChargers);
   const emit = useOsc((s) => s.emitPending);
   const claim = useOsc((s) => s.claimPending);
+  // Live backend → chargers are configured in osc.yaml (no write API); name/amps are read-only and
+  // the mock "pending"/remove affordances are hidden. Demo mode keeps everything interactive.
+  const locked = useOsc((s) => s.source === "live");
 
   const [undo, setUndo] = useState<{ charger: Charger; plans: Plan[] } | null>(null);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -35,6 +39,9 @@ function ChargersSettings() {
 
   return (
     <div className="space-y-4">
+      {locked && (
+        <ConfigLockNote>Chargers are configured in your config file (osc.yaml)</ConfigLockNote>
+      )}
       {undo && (
         <div className="flex items-center justify-between rounded-2xl border border-border/60 bg-secondary px-4 py-3 text-sm">
           <span>
@@ -55,15 +62,18 @@ function ChargersSettings() {
             <input
               value={c.name}
               onChange={(e) => rename(c.id, e.target.value)}
-              className="w-full bg-transparent font-display text-lg font-semibold outline-none"
+              disabled={locked}
+              className="w-full bg-transparent font-display text-lg font-semibold outline-none disabled:opacity-70"
             />
-            <button
-              onClick={() => removeCharger(c)}
-              aria-label={`Remove ${c.name}`}
-              className="text-muted-foreground hover:text-destructive"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
+            {!locked && (
+              <button
+                onClick={() => removeCharger(c)}
+                aria-label={`Remove ${c.name}`}
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            )}
           </div>
           <label className="mb-1 block text-xs text-muted-foreground">Max amps</label>
           <input
@@ -71,43 +81,47 @@ function ChargersSettings() {
             min={6}
             max={32}
             value={c.maxAmps}
+            disabled={locked}
             onChange={(e) => setAmps(c.id, parseInt(e.target.value, 10) || 0)}
-            className="w-32 rounded-lg border border-input bg-background px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 focus:ring-ring/40"
+            className="w-32 rounded-lg border border-input bg-background px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
           />
         </div>
       ))}
 
-      <div className="rounded-2xl border border-dashed border-border p-5">
-        <div className="mb-2 font-medium">Pending connections</div>
-        {pending.length === 0 && (
-          <div className="text-sm text-muted-foreground">
-            No unclaimed chargers.
-            <button onClick={() => emit()} className="ml-2 text-primary hover:underline">
-              Simulate one
-            </button>
-          </div>
-        )}
-        {pending.map((p) => (
-          <div
-            key={p.id}
-            className="mt-2 flex items-center justify-between rounded-xl bg-secondary p-3"
-          >
-            <div className="text-sm">
-              ✓ Detected <span className="font-mono">{p.stationId}</span>
+      {!locked && (
+        <div className="rounded-2xl border border-dashed border-border p-5">
+          <div className="mb-2 font-medium">Pending connections</div>
+          {pending.length === 0 && (
+            <div className="text-sm text-muted-foreground">
+              No unclaimed chargers.
+              <button onClick={() => emit()} className="ml-2 text-primary hover:underline">
+                Simulate one
+              </button>
             </div>
-            <button
-              onClick={() => claim(p.id, p.stationId, 16)}
-              className="rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
+          )}
+          {pending.map((p) => (
+            <div
+              key={p.id}
+              className="mt-2 flex items-center justify-between rounded-xl bg-secondary p-3"
             >
-              Claim
-            </button>
-          </div>
-        ))}
-      </div>
+              <div className="text-sm">
+                ✓ Detected <span className="font-mono">{p.stationId}</span>
+              </div>
+              <button
+                onClick={() => claim(p.id, p.stationId, 16)}
+                className="rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
+              >
+                Claim
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <Link
         to="/onboarding/$step"
         params={{ step: "charger" }}
+        search={{ add: true }}
         className="block rounded-2xl bg-primary py-3 text-center text-sm font-medium text-primary-foreground"
       >
         Add another charger

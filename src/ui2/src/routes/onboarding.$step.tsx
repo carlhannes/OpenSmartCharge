@@ -1,4 +1,10 @@
-import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  useNavigate,
+  useRouter,
+  useCanGoBack,
+  Link,
+} from "@tanstack/react-router";
 import { useOsc } from "@/lib/mock/store";
 import {
   addPlan as addPlanCmd,
@@ -6,6 +12,7 @@ import {
   setTimezone,
 } from "@/lib/live/commands";
 import { REGIONS } from "@/lib/copy";
+import { ConfigLockNote } from "@/components/settings/ConfigLockNote";
 import { useEffect, useState } from "react";
 import { Copy, Check } from "lucide-react";
 
@@ -13,13 +20,29 @@ const STEPS = ["welcome", "charger", "region", "house", "car", "plan"] as const;
 type Step = (typeof STEPS)[number];
 
 export const Route = createFileRoute("/onboarding/$step")({
+  // `add` marks the focused "add another charger" entry from Settings (vs the first-run wizard).
+  validateSearch: (s: Record<string, unknown>): { add?: boolean } => ({
+    add: s.add === true || s.add === "true",
+  }),
   component: OnboardingStep,
 });
 
 function OnboardingStep() {
   const { step } = Route.useParams() as { step: Step };
+  const { add } = Route.useSearch();
   const nav = useNavigate();
+  const router = useRouter();
+  const canGoBack = useCanGoBack();
   const idx = STEPS.indexOf(step);
+
+  // Back returns to wherever the user actually came from (Settings / Home / previous step) rather
+  // than walking the fixed STEPS array — which used to dump mid-flow entrants onto the Welcome page.
+  const goBack = () => {
+    if (canGoBack) router.history.back();
+    else if (add) nav({ to: "/settings/chargers" });
+    else if (idx > 0) nav({ to: "/onboarding/$step", params: { step: STEPS[idx - 1] } });
+    else nav({ to: "/" });
+  };
   const next = () => {
     if (idx < STEPS.length - 1) nav({ to: "/onboarding/$step", params: { step: STEPS[idx + 1] } });
     else {
@@ -29,7 +52,32 @@ function OnboardingStep() {
       nav({ to: "/" });
     }
   };
-  const back = () => idx > 0 && nav({ to: "/onboarding/$step", params: { step: STEPS[idx - 1] } });
+
+  // Focused "add another charger" mode (entered from Settings): just the charger step, no first-run
+  // wizard and no Finish — "Done" returns to Settings without re-running setup / resetting timezone.
+  if (add) {
+    return (
+      <div className="mx-auto flex min-h-screen max-w-lg flex-col px-5 py-8">
+        <div className="flex-1">
+          <ChargerStep addMode />
+        </div>
+        <div className="mt-8 flex items-center justify-between gap-3">
+          <button
+            onClick={goBack}
+            className="rounded-full px-4 py-2.5 text-sm font-medium text-muted-foreground"
+          >
+            Back
+          </button>
+          <button
+            onClick={() => nav({ to: "/settings/chargers" })}
+            className="rounded-full bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto flex min-h-screen max-w-lg flex-col px-5 py-8">
@@ -54,8 +102,8 @@ function OnboardingStep() {
 
       <div className="mt-8 flex items-center justify-between gap-3">
         <button
-          onClick={back}
-          disabled={idx === 0}
+          onClick={goBack}
+          disabled={idx === 0 && !canGoBack}
           className="rounded-full px-4 py-2.5 text-sm font-medium text-muted-foreground disabled:opacity-40"
         >
           Back
@@ -130,10 +178,12 @@ function Welcome() {
   );
 }
 
-function ChargerStep() {
+function ChargerStep({ addMode }: { addMode?: boolean }) {
   const emit = useOsc((s) => s.emitPending);
   const pending = useOsc((s) => s.pendingChargers);
   const claim = useOsc((s) => s.claimPending);
+  // Against a live backend, chargers are paired in osc.yaml — this flow is a preview (no write API).
+  const locked = useOsc((s) => s.source === "live");
   const [copied, setCopied] = useState(false);
   const [claimed, setClaimed] = useState(false);
   const [name, setName] = useState("Garage");
@@ -150,7 +200,12 @@ function ChargerStep() {
   const detected = pending[0];
 
   return (
-    <StepShell eyebrow="Step 1" title="Connect your charger">
+    <StepShell eyebrow={addMode ? "Add charger" : "Step 1"} title="Connect your charger">
+      {locked && (
+        <ConfigLockNote>
+          New chargers are paired in your config file (osc.yaml) — this is a preview.
+        </ConfigLockNote>
+      )}
       <p className="text-sm text-muted-foreground">Point your OCPP 1.6J charger at this address:</p>
       <div className="mt-3 flex items-center gap-2 rounded-2xl border border-border/60 bg-card p-3">
         <code className="flex-1 truncate font-mono text-sm">{url}</code>

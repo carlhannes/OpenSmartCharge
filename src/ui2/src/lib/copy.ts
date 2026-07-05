@@ -29,6 +29,10 @@ export const statusTone = (s: ChargerRuntimeStatus): "ok" | "warn" | "muted" | "
 
 export const modeLabel = { off: "Off", smart: "Smart", fast: "Fast" } as const;
 
+// Shown on config controls that have no write API yet (region, breaker, chargers, vehicles):
+// they reflect the real value read from /api/site but can only be changed in the config file.
+export const CONFIG_LOCK_NOTE = "Set in your config file (osc.yaml) — live editing coming soon";
+
 export const REGIONS = [
   { id: "SE1", label: "SE1 · Northern Sweden" },
   { id: "SE2", label: "SE2 · Northern-Central Sweden" },
