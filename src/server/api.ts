@@ -338,6 +338,100 @@ export function createApiRouter(deps: ApiDeps): Router {
     res.status(204).end()
   })
 
+  // ── Vehicle management: add (with provider credentials), remove, bind to a loadpoint ────────
+
+  // POST /api/vehicles — add a vehicle with provider credentials. Creds are stored in the DB
+  // (config_overrides) and NEVER returned or logged. Auth + first fetch run in the background so the
+  // slow provider login doesn't block the response — poll GET /api/vehicles/:name for status.
+  router.post('/vehicles', async (req: Request, res: Response) => {
+    const b = req.body as {
+      name?: unknown
+      type?: unknown
+      username?: unknown
+      password?: unknown
+      vin?: unknown
+    }
+    const name = typeof b.name === 'string' ? b.name.trim() : ''
+    const type = typeof b.type === 'string' && b.type.trim() ? b.type.trim() : 'skoda'
+    const username = typeof b.username === 'string' ? b.username : ''
+    const password = typeof b.password === 'string' ? b.password : ''
+    const vin = typeof b.vin === 'string' ? b.vin.trim().toUpperCase() : ''
+    if (!name) {
+      res.status(400).json({ error: 'name is required' })
+      return
+    }
+    if (deps.vehicles.has(name) || deps.config.vehicles.some((v) => v.name === name)) {
+      res.status(409).json({ error: `name "${name}" already in use` })
+      return
+    }
+    if (type !== 'skoda') {
+      res.status(400).json({ error: 'only vehicle type "skoda" is supported' })
+      return
+    }
+    if (!username || !password) {
+      res.status(400).json({ error: 'username and password are required' })
+      return
+    }
+    if (vin.length !== 17) {
+      res.status(400).json({ error: 'vin must be 17 characters' })
+      return
+    }
+    setOverride(deps.db, 'vehicle', name, { type, username, password, vin })
+    await deps.reconcile.addVehicle(name)
+    void deps.vehicles
+      .get(name)
+      ?.refresh()
+      .catch(() => {}) // background auth + fetch
+    res.status(201).json({ name, type, vin }) // never echo credentials
+  })
+
+  // DELETE /api/vehicles/:name — remove a vehicle + drop its cached data. A loadpoint bound to it
+  // falls back to no-SoC (graceful).
+  router.delete('/vehicles/:name', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    if (!deps.vehicles.has(name) && !deps.config.vehicles.some((v) => v.name === name)) {
+      res.status(404).json({ error: 'vehicle not found' })
+      return
+    }
+    await deps.reconcile.removeVehicle(name)
+    deleteOverride(deps.db, 'vehicle', name)
+    deps.db.prepare('DELETE FROM vehicle_cache WHERE vehicle_name = ?').run(name)
+    res.status(204).end()
+  })
+
+  // PUT /api/loadpoints/:name — bind a vehicle (and/or tariff/balancer) to a loadpoint. The ref must
+  // exist; resolveLoadpoint reads the binding live, so no module rebuild is needed.
+  router.put('/loadpoints/:name', (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    if (!deps.loadpoints.has(name)) {
+      res.status(404).json({ error: 'loadpoint not found' })
+      return
+    }
+    const b = req.body as { vehicle?: unknown; tariff?: unknown; balancer?: unknown }
+    const refs = [
+      ['vehicle', b.vehicle, deps.vehicles] as const,
+      ['tariff', b.tariff, deps.tariffs] as const,
+      ['balancer', b.balancer, deps.balancers] as const,
+    ]
+    const patch: Record<string, unknown> = {}
+    for (const [field, val, pool] of refs) {
+      if (val === undefined) continue
+      if (typeof val !== 'string' || !val.trim() || !pool.has(val)) {
+        res.status(400).json({ error: `${field} must be an existing ${field} name` })
+        return
+      }
+      patch[field] = val
+    }
+    if (Object.keys(patch).length === 0) {
+      res.status(400).json({ error: 'nothing to bind (vehicle/tariff/balancer)' })
+      return
+    }
+    setOverride(deps.db, 'loadpoint', name, patch)
+    deps.reconcile.reloadLoadpoint(name)
+    const lp = deps.config.loadpoints.find((l) => l.name === name)!
+    res.json({ name, vehicle: lp.vehicle, tariff: lp.tariff, balancer: lp.balancer })
+  })
+
   // ── Charging plans (per loadpoint) ──────────────────────────────────────────
 
   // GET /api/loadpoints/:name/plans

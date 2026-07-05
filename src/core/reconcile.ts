@@ -9,7 +9,7 @@ import type { Balancer } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import type { MeterReader } from '../sdk/meter-reader.js'
 import { loadLoadpointStates, configToLoadpointInits, type LoadpointState } from './loadpoint.js'
-import { createTariff, createBalancer, createCharger } from './registry.js'
+import { createTariff, createBalancer, createCharger, createVehicle } from './registry.js'
 import { getEffectiveConfig } from './config-overrides.js'
 
 // The reconcile seam: after an API write persists a config override, the lifecycle rebuilds the
@@ -49,6 +49,9 @@ export interface Reconciler {
   removeCharger(name: string): Promise<void>
   addLoadpoint(name: string): void
   removeLoadpoint(name: string): void
+  addVehicle(name: string): Promise<void>
+  removeVehicle(name: string): Promise<void>
+  reloadLoadpoint(name: string): void
 }
 
 export function createReconciler(d: ReconcileDeps): Reconciler {
@@ -176,6 +179,38 @@ export function createReconciler(d: ReconcileDeps): Reconciler {
       d.chargerLimitMap.delete(name)
       d.loadpointStates.delete(name)
       d.rebuildCircuits()
+      d.events.emit('config.changed', { kind: 'loadpoint', name })
+    },
+
+    async addVehicle(name) {
+      const cfg = desired<{ name: string; type: string }>('vehicles', name)
+      if (!cfg) return
+      const v = createVehicle(cfg.type, cfg, d.ctx) // no start() — vehicles own no timer
+      syncEntity('vehicles', cfg)
+      d.vehicles.set(name, v)
+      updateHealth(d.health, name, v.health())
+      d.events.emit('config.changed', { kind: 'vehicle', name })
+    },
+
+    async removeVehicle(name) {
+      const old = d.vehicles.get(name)
+      d.vehicles.delete(name)
+      removeHealth(d.health, name)
+      const i = d.config.vehicles.findIndex((v) => v.name === name)
+      if (i >= 0) d.config.vehicles.splice(i, 1)
+      // Drop any loadpoint binding to the removed vehicle (in place); resolveLoadpoint tolerates a
+      // missing vehicle ref (degrades to no-SoC).
+      for (const lp of d.config.loadpoints) if (lp.vehicle === name) lp.vehicle = undefined
+      if (old) await old.stop()
+      d.events.emit('config.changed', { kind: 'vehicle', name })
+    },
+
+    // Loadpoint binding/field edits (vehicle/tariff/balancer refs). No module owns the loadpoint;
+    // resolveLoadpoint reads lpCfg.* + the module Maps live, so syncing the config is enough.
+    reloadLoadpoint(name) {
+      const cfg = desired<LoadpointConfig>('loadpoints', name)
+      if (!cfg) return
+      syncEntity('loadpoints', cfg)
       d.events.emit('config.changed', { kind: 'loadpoint', name })
     },
   }

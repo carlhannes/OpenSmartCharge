@@ -372,6 +372,103 @@ test('charger management: pending list, claim (+ loadpoint), edit (merge), remov
   }
 })
 
+test('vehicle management: add (creds hidden + persisted), bind to loadpoint, remove', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-veh-'))
+  const db = openDb(dir)
+  try {
+    const config = configSchema.parse({
+      vehicles: [],
+      loadpoints: [{ name: 'garage', charger: 'garage' }],
+    })
+    const vehicles = new Map<string, unknown>()
+    const reconcile = {
+      addVehicle: async (name: string) => {
+        config.vehicles.push({ name, ...getOverride(db, 'vehicle', name) } as never)
+        vehicles.set(name, {
+          refresh: async () => ({}),
+          health: () => 'ok',
+          stop: async () => {},
+        })
+      },
+      removeVehicle: async (name: string) => {
+        config.vehicles = config.vehicles.filter((v) => v.name !== name)
+        vehicles.delete(name)
+        for (const lp of config.loadpoints) if (lp.vehicle === name) lp.vehicle = undefined
+      },
+      reloadLoadpoint: (name: string) => {
+        const lp = config.loadpoints.find((l) => l.name === name)
+        if (lp) Object.assign(lp, getOverride(db, 'loadpoint', name))
+      },
+    }
+    const deps = {
+      db,
+      config,
+      vehicles,
+      loadpoints: new Map([['garage', { name: 'garage' }]]),
+      tariffs: new Map(),
+      balancers: new Map(),
+      events: { emit() {} },
+      reconcile,
+    } as unknown as ApiDeps
+
+    await withApi(deps, async (baseUrl) => {
+      const vin = 'A'.repeat(17)
+      const r = await postJson(`${baseUrl}/api/vehicles`, {
+        name: 'enyaq2',
+        username: 'u',
+        password: 'p',
+        vin,
+      })
+      expect(r.status).toBe(201)
+      expect(await r.json()).toEqual({ name: 'enyaq2', type: 'skoda', vin }) // NO credentials echoed
+      expect(getOverride(db, 'vehicle', 'enyaq2')).toMatchObject({
+        username: 'u',
+        password: 'p',
+        vin,
+      }) // stored server-side
+
+      expect(
+        (
+          await postJson(`${baseUrl}/api/vehicles`, {
+            name: 'enyaq2',
+            username: 'u',
+            password: 'p',
+            vin,
+          })
+        ).status,
+      ).toBe(409)
+      expect(
+        (
+          await postJson(`${baseUrl}/api/vehicles`, {
+            name: 'x',
+            username: 'u',
+            password: 'p',
+            vin: 'short',
+          })
+        ).status,
+      ).toBe(400)
+      expect(
+        (await postJson(`${baseUrl}/api/vehicles`, { name: 'x', username: 'u', vin })).status,
+      ).toBe(400) // no password
+
+      // bind to a loadpoint (ref must exist)
+      expect(
+        (await putJson(`${baseUrl}/api/loadpoints/garage`, { vehicle: 'enyaq2' })).status,
+      ).toBe(200)
+      expect(getOverride(db, 'loadpoint', 'garage')).toMatchObject({ vehicle: 'enyaq2' })
+      expect((await putJson(`${baseUrl}/api/loadpoints/garage`, { vehicle: 'ghost' })).status).toBe(
+        400,
+      )
+
+      expect((await fetch(`${baseUrl}/api/vehicles/enyaq2`, { method: 'DELETE' })).status).toBe(204)
+      expect(getOverride(db, 'vehicle', 'enyaq2')).toBeUndefined()
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('POST /target validates minSoc and passes it through', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'osc-api-minsoc-'))
   const db = openDb(dir)
