@@ -78,6 +78,35 @@ export function listOverrides(db: DatabaseSync): OverrideRow[] {
 }
 
 /**
+ * `config:apply` reconciliation for structural overrides. Entities PRESENT in osc.yaml have their
+ * overrides CLEARED (the file re-asserts itself); runtime-added entities with no osc.yaml counterpart
+ * (a claimed charger / added vehicle) are PRESERVED — deleting one the user is actively using would
+ * be a footgun. `prune: true` clears everything (DB == file). Returns what it did, for the CLI diff.
+ */
+export function applyConfigOverrides(
+  base: Config,
+  db: DatabaseSync,
+  opts: { prune?: boolean } = {},
+): { cleared: OverrideRow[]; preserved: OverrideRow[] } {
+  const inBase = (kind: OverrideKind, name: string): boolean => {
+    if (kind === 'site') return true
+    const arr = (base[KIND_ARRAY[kind]] as Array<{ name: string }>) ?? []
+    return arr.some((e) => e.name === name)
+  }
+  const cleared: OverrideRow[] = []
+  const preserved: OverrideRow[] = []
+  for (const row of listOverrides(db)) {
+    if (opts.prune || inBase(row.kind, row.name)) {
+      deleteOverride(db, row.kind, row.name)
+      cleared.push(row)
+    } else {
+      preserved.push(row)
+    }
+  }
+  return { cleared, preserved }
+}
+
+/**
  * The EFFECTIVE config the lifecycle runs on: the parsed osc.yaml (`base`) with every override
  * layered on — a partial patch merged onto the matching entity, or a full entity appended when
  * there's no match (a runtime-added charger/vehicle). `site` merges onto the site object. The

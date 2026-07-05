@@ -8,6 +8,7 @@ import { loadConfig, CONFIG_PATH, DATA_DIR } from '../core/config.js'
 import { openDb } from '../core/db.js'
 import { configToLoadpointInits, applyConfigToLoadpoints } from '../core/loadpoint.js'
 import { applyConfigSettings, getTimezone } from '../core/settings.js'
+import { applyConfigOverrides } from '../core/config-overrides.js'
 
 interface StateRow {
   mode: string
@@ -17,6 +18,7 @@ interface StateRow {
 }
 
 function main(): void {
+  const prune = process.argv.includes('--prune')
   const config = loadConfig(CONFIG_PATH)
   const db = openDb(DATA_DIR)
   try {
@@ -29,6 +31,9 @@ function main(): void {
 
     applyConfigSettings(db, config)
     applyConfigToLoadpoints(db, inits)
+    // Re-assert structural config: clear overrides for entities the file defines; preserve
+    // runtime-added ones (claimed chargers / added vehicles) unless --prune.
+    const { cleared, preserved } = applyConfigOverrides(config, db, { prune })
 
     console.log(`Applied ${CONFIG_PATH} → ${DATA_DIR}:`)
     console.log(`  settings.timezone → ${getTimezone(db)}`)
@@ -38,6 +43,10 @@ function main(): void {
         `  ${i.name}: ${JSON.stringify(before.get(i.name) ?? null)} → ${JSON.stringify(read(i.name) ?? null)}`,
       )
     }
+    console.log(
+      `  config overrides: cleared ${cleared.length}, preserved ${preserved.length}${prune ? ' (--prune)' : ''}`,
+    )
+    for (const o of preserved) console.log(`    preserved (runtime-added): ${o.kind}/${o.name}`)
   } finally {
     db.close()
   }

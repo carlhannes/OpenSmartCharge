@@ -235,6 +235,19 @@ It prints a before→after diff per loadpoint and exits; it does not start the s
 
 **It writes the database, so restart (or start) the server for it to take effect** — a running server holds its loadpoint state in memory and won't pick up the change until it reboots.
 
+#### Structural config (runtime-editable, applied live)
+
+Beyond mode/targets, **structural** config is runtime-editable too: the tariff region, the main breaker (`site.mainBreakerA` and balancer params), and even claiming a newly-connected charger or adding a vehicle. These persist as JSON overrides in the `config_overrides` table (layered over `osc.yaml` to form the *effective* config, re-validated by the same schema) and — unlike loadpoint state — **apply immediately**: the lifecycle soft-reloads just the affected module, no restart. Endpoints: `PUT /api/site`, `PUT /api/tariffs/:name`, `PUT /api/balancers/:name`, the charger `POST`/`PUT`/`DELETE /api/chargers` (+ `GET /api/chargers/pending`), and `POST`/`DELETE /api/vehicles` (+ `PUT /api/loadpoints/:name` to bind a vehicle/tariff/balancer). Every change emits a `config.changed` SSE.
+
+`npm run config:apply` reconciles these overrides too: it **clears** overrides for entities defined in `osc.yaml` (so the file re-asserts region/breaker/etc.) and **preserves** runtime-added entities (a claimed charger, an added vehicle) so applying config never silently deletes one you're using. Add `-- --prune` to clear everything (the DB then matches the file exactly):
+
+```bash
+npm run config:apply            # file wins for file-defined entities; keep runtime-added ones
+npm run config:apply -- --prune # DB == osc.yaml (drop runtime-added entities too)
+```
+
+Credentials added via the API (a vehicle login) are stored in `config_overrides` in `data/osc.db` — plaintext at rest, same posture as `osc.yaml`; `chmod 700 data/` and treat backups as secret. They are never returned by the API (`GET /api/site` shows only `name`/`type`/`vin`) or logged.
+
 ### Charging plans
 
 Recurring, per-charger plans are the primary way to express intent — *"ready by 07:00 at 80% on weekdays."* Unlike the single ad-hoc target above, plans are **managed at runtime via the UI/API**, not `osc.yaml`, and live in the database (they're edited often, so they're not config).

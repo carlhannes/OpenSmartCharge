@@ -129,6 +129,32 @@ Worked examples:
 When you're tempted to add a `setInterval`, a "poll every N seconds", or cross-module coordination to a
 module — stop. That belongs in the lifecycle. The module should just expose a pure "do it now" method.
 
+### Declarative config & soft-reload (modules must survive a reboot)
+
+OSC is **declarative**: the effective config = `osc.yaml` (the seed) + runtime DB overrides
+(`config_overrides`, persist-wins) — see `core/config-overrides.ts`. The lifecycle runs on that
+effective config; an API write (region, breaker, a claimed charger, an added vehicle) persists an
+override, and the **reconcile seam** (`core/reconcile.ts`) applies it live: it mutates the in-memory
+config in place *and* **rebuilds the affected module** from the new config, swaps it in the Map, and
+re-wires listeners — no process restart.
+
+That only works because **a module must survive being torn down and rebuilt at any time.** A module
+holds *no* critical in-memory state:
+
+- **Durable** state → SQLite (transactions, tariff slots, the vehicle refresh token + cache, loadpoint
+  mode/targets/plans). Survives a rebuild for free.
+- **Desired** state (the amps to command) → re-derived every control tick by the lifecycle. Never stored
+  in the module.
+- **Observed** state (connected / charging / SoC) → re-reported by the hardware/API on reconnect (OCPP
+  Boot/StatusNotification; the vehicle's next poll). The charger even keeps charging on its last profile
+  through a backend blip, and the open transaction is rehydrated from SQLite on reconnect.
+
+This is the same property that makes **degradation and flaky connectivity** safe: a module that rebuilds
+cleanly is one that can drop, reconnect, and re-sync without losing anything. So when you write or change
+a module: **never park important state in a field a rebuild would lose** — push it to SQLite, re-derive
+it each tick, or re-read it from the source on (re)connect. And reconcile builds + starts the new
+instance *before* stopping the old, so an in-flight tick never sees a half-dead module.
+
 ---
 
 ## Degradation model (core design constraint)

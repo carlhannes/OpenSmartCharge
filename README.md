@@ -112,6 +112,17 @@ All degraded states are surfaced on the UI and on MQTT (`osc/health/<module>`).
 
 Copy `osc.dist.yaml` to `osc.yaml` and edit. Full reference: [docs/config.md](docs/config.md).
 
+### Runtime configuration (declarative)
+
+`osc.yaml` is the **seed**, not the live source of truth. Structural config — tariff region, main
+breaker, balancer params, and even claiming a newly-connected charger or adding a vehicle — is editable
+at runtime through the API/UI; changes persist in the database (`config_overrides`) and **win over
+`osc.yaml` on restart**. The system applies them by **soft-reloading just the affected module** — no
+process restart. `npm run config:apply` re-asserts the file over runtime edits (clearing them for
+file-defined entities, preserving runtime-added ones; `-- --prune` clears everything). This declarative
+model — desired state in config/DB, the running system continuously reconciling toward it — is also what
+keeps charging resilient to flaky connectivity (see [AGENTS.md](AGENTS.md) → "Declarative config & soft-reload").
+
 ### Credentials
 
 `osc.yaml` is listed in `.gitignore` — **never commit it**. It may contain your MySkoda email and password in plain text.
@@ -121,6 +132,8 @@ chmod 600 osc.yaml   # restrict read access to your user only
 ```
 
 Credentials are never logged. OSC redacts tokens in all debug output. If you are deploying on a shared machine, consider using a secrets manager or environment-variable injection (see [docs/config.md](docs/config.md)).
+
+Vehicle credentials added at runtime via the API (the car onboarding flow) are stored in `data/osc.db` — the same plaintext-at-rest posture as `osc.yaml`, so `chmod 700 data/` and treat backups as secret. They are never returned by the API (`GET /api/site` exposes only `name`/`type`/`vin`) or written to logs. Encryption-at-rest is a planned improvement.
 
 ### Backup & restore
 

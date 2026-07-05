@@ -11,6 +11,7 @@ import {
   deleteOverride,
   listOverrides,
   getEffectiveConfig,
+  applyConfigOverrides,
 } from './config-overrides.js'
 
 const dirs: string[] = []
@@ -72,4 +73,34 @@ test('an invalid override throws through the schema rather than half-applying', 
   const db = freshDb()
   setOverride(db, 'site', 'site', { mainBreakerA: -5 }) // must be positive
   expect(() => getEffectiveConfig(base, db)).toThrow()
+})
+
+test('setOverride merges into an existing override (partial updates compose)', () => {
+  const db = freshDb()
+  setOverride(db, 'charger', 'garage', { type: 'ocpp16', stationId: 'ST1' })
+  setOverride(db, 'charger', 'garage', { maxA: 20 }) // partial — must keep type/stationId
+  expect(getOverride(db, 'charger', 'garage')).toEqual({
+    type: 'ocpp16',
+    stationId: 'ST1',
+    maxA: 20,
+  })
+})
+
+test('applyConfigOverrides clears file-defined overrides, preserves runtime-added (prune clears all)', () => {
+  const db = freshDb()
+  setOverride(db, 'tariff', 'home', { zone: 'SE4' }) // 'home' is in base → file-defined
+  setOverride(db, 'vehicle', 'newcar', {
+    type: 'skoda',
+    vin: 'C'.repeat(17),
+    username: 'u',
+    password: 'p',
+  }) // not in base → runtime-added
+  const { cleared, preserved } = applyConfigOverrides(base, db)
+  expect(cleared.map((o) => o.name)).toEqual(['home'])
+  expect(preserved.map((o) => o.name)).toEqual(['newcar'])
+  expect(getOverride(db, 'tariff', 'home')).toBeUndefined() // reverted to osc.yaml
+  expect(getOverride(db, 'vehicle', 'newcar')).toBeDefined() // kept
+
+  applyConfigOverrides(base, db, { prune: true })
+  expect(getOverride(db, 'vehicle', 'newcar')).toBeUndefined() // prune clears runtime-added too
 })
