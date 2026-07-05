@@ -40,6 +40,8 @@ remove + re-add; not wired as a single call.
 - `PUT /api/chargers/:name { label?, maxA? }` — rename is a cosmetic `label` (identity/`stationId` immutable —
   a true key-rename would rewrite loadpoint refs + `transactions` rows for no functional gain).
 - `DELETE /api/chargers/:name` — removes the charger + its loadpoint; the socket reverts to pending.
+  Refused with `409 { error, hint }` if a loadpoint on it is actively charging (`hint: "Please disable
+  this charger before deleting it."` — safe to show verbatim), unless you pass `?force=true`.
 - **Safety fix:** an unclaimed connected charger now defaults `autoStart: false` — OSC won't start a
   session on a charger it doesn't manage yet.
 
@@ -84,11 +86,9 @@ local + `if (isLive()) await api.…`), drop the `disabled`/`ConfigLockNote` gat
 
 ---
 
-## One follow-up found while wiring — charger `label` isn't observable
-`PUT /api/chargers/:name { label }` accepts a rename, but no read endpoint surfaces it:
-`GET /api/site.chargers[]` is `{ name, type, stationId, maxA }` and `GET /api/loadpoints[]` has no
-display-name field — both return only the immutable `name`. So the UI can't display or reconcile a
-rename (it would flash locally then revert on the next `config.changed`), and we've kept the charger
-**name field read-only** for now. To make rename usable, please surface `label` on the charger DTO (e.g.
-`GET /api/site.chargers[].label`, falling back to `name`). Everything else on this list is wired
-(Phase 1: region + breaker + charger maxA; the rest queued behind their flows).
+## One follow-up found while wiring — charger `label` isn't observable ✅ RESOLVED
+`PUT /api/chargers/:name { label }` accepts a rename, but no read endpoint surfaced it. **Fixed:**
+`GET /api/site.chargers[]` now returns `{ name, label, type, stationId, maxA }`, where `label` falls
+back to `name` when unset — so a rename displays and reconciles without flashing. The charger `name`
+stays the immutable key. Everything else on this list is wired (Phase 1: region + breaker + charger
+maxA; the rest queued behind their flows).

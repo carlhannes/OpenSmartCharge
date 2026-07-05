@@ -337,6 +337,21 @@ export function createApiRouter(deps: ApiDeps): Router {
       res.status(404).json({ error: 'charger not found' })
       return
     }
+    // Refuse to delete a charger mid-session unless forced — yanking it out from under an active
+    // transaction would strand the car. Disabling the loadpoint first stops charging cleanly (next
+    // tick commands 0 A). ?force=true overrides for the rare "the hardware is already gone" case.
+    if (String(req.query.force) !== 'true') {
+      const active = deps.config.loadpoints
+        .filter((l) => l.charger === name && deps.loadpoints.get(l.name)?.charging)
+        .map((l) => l.name)
+      if (active.length > 0) {
+        res.status(409).json({
+          error: `charger '${name}' has an active charging session (${active.join(', ')})`,
+          hint: 'Please disable this charger before deleting it.',
+        })
+        return
+      }
+    }
     const stationId = (chargerCfg as { stationId?: string }).stationId
     // Snapshot referencing loadpoints before removeLoadpoint mutates config.loadpoints.
     for (const lp of deps.config.loadpoints.filter((l) => l.charger === name)) {
@@ -817,6 +832,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       }),
       chargers: c.chargers.map((ch) => ({
         name: ch.name,
+        label: (ch as { label?: string }).label ?? ch.name,
         type: ch.type,
         stationId: (ch as { stationId?: string }).stationId,
         maxA: (ch as { maxA?: number }).maxA ?? 16,

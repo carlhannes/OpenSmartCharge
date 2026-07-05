@@ -377,7 +377,27 @@ test('charger management: pending list, claim (+ loadpoint), edit (merge), remov
       }) // merged
       expect((await putJson(`${baseUrl}/api/chargers/nope`, { maxA: 10 })).status).toBe(404)
 
-      expect((await fetch(`${baseUrl}/api/chargers/g2`, { method: 'DELETE' })).status).toBe(204)
+      // label surfaces on GET /api/site.chargers[] (defaults to the name) — the ui2 follow-up.
+      const siteChargers = (
+        (await (await fetch(`${baseUrl}/api/site`)).json()) as {
+          chargers: { name: string; label: string }[]
+        }
+      ).chargers
+      expect(siteChargers.find((ch) => ch.name === 'g2')?.label).toBe('g2')
+
+      // Guard: deleting a charger mid-session is refused with 409 + a user-facing hint …
+      loadpoints.set('g2', { name: 'g2', charging: true })
+      const blocked = await fetch(`${baseUrl}/api/chargers/g2`, { method: 'DELETE' })
+      expect(blocked.status).toBe(409)
+      expect(await blocked.json()).toMatchObject({
+        hint: 'Please disable this charger before deleting it.',
+      })
+      expect(getOverride(db, 'charger', 'g2')).toBeDefined() // refused — still there
+
+      // … unless ?force=true (the "hardware is already gone" escape hatch).
+      expect(
+        (await fetch(`${baseUrl}/api/chargers/g2?force=true`, { method: 'DELETE' })).status,
+      ).toBe(204)
       expect(getOverride(db, 'charger', 'g2')).toBeUndefined()
       expect(getOverride(db, 'loadpoint', 'g2')).toBeUndefined() // its loadpoint cleaned up too
     })

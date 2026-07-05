@@ -49,16 +49,15 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
       publishState(client, prefix, state)
     }
 
-    // Subscribe to command topics
-    const cmdTopics = [...deps.loadpoints.keys()].flatMap((name) => [
-      `${prefix}/loadpoints/${name}/cmd/mode`,
-      `${prefix}/loadpoints/${name}/cmd/target`,
-    ])
-    if (cmdTopics.length > 0) {
-      client.subscribe(cmdTopics, (err) => {
-        if (err) log.warn({ err }, 'MQTT subscribe failed')
-      })
-    }
+    // One wildcard covers every loadpoint's command topics — current AND runtime-added — so a
+    // loadpoint created after connect is controllable without re-subscribing (the handler parses the
+    // name from the topic path). This bridge is a fail-safe MIRROR + convenience command surface: the
+    // control loop never READS from MQTT, so a broker outage never affects charging, and a command
+    // here is exactly equivalent to the matching REST call (same onModeChange/onTargetChange — it goes
+    // through the identical path and bypasses no safety).
+    client.subscribe(`${prefix}/loadpoints/+/cmd/+`, (err) => {
+      if (err) log.warn({ err }, 'MQTT subscribe failed')
+    })
 
     // Publish health (all modules including balancers)
     for (const [module, entry] of deps.health) {
@@ -167,6 +166,18 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
     const state = deps.loadpoints.get(p.name)
     if (state) publishState(client, prefix, state)
   })
+
+  // Keep the retained state mirror in sync as loadpoints are added/removed at runtime (reconcile).
+  // The wildcard command subscription already covers a new loadpoint; here we (re)publish its state
+  // on add/edit and CLEAR the retained topics on remove, so a deleted loadpoint doesn't linger on the
+  // broker. (HA autodiscovery stays boot-only — deferred; runtime entities appear on next restart.)
+  deps.events.on('config.changed', (payload) => {
+    const p = payload as { kind: string; name: string }
+    if (p.kind !== 'loadpoint') return
+    const state = deps.loadpoints.get(p.name)
+    if (state) publishState(client, prefix, state)
+    else clearState(client, prefix, p.name)
+  })
 }
 
 function publishState(client: mqtt.MqttClient, prefix: string, state: LoadpointState): void {
@@ -175,6 +186,15 @@ function publishState(client: mqtt.MqttClient, prefix: string, state: LoadpointS
   client.publish(`${lpPrefix}/current_a`, String(state.currentA), { retain: true })
   client.publish(`${lpPrefix}/energy_kwh`, String(state.sessionEnergyKWh), { retain: true })
   client.publish(`${lpPrefix}/state`, JSON.stringify(state), { retain: true })
+}
+
+// Clear a removed loadpoint's retained topics — an empty retained payload deletes the retained
+// message on the broker, so subscribers (HA, dashboards) stop seeing a ghost loadpoint.
+function clearState(client: mqtt.MqttClient, prefix: string, name: string): void {
+  const lpPrefix = `${prefix}/loadpoints/${name}`
+  for (const leaf of ['mode', 'current_a', 'energy_kwh', 'state']) {
+    client.publish(`${lpPrefix}/${leaf}`, '', { retain: true })
+  }
 }
 
 async function publishOneTariffNow(
