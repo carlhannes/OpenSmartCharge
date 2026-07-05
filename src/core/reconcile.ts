@@ -65,12 +65,13 @@ export function createReconciler(d: ReconcileDeps): Reconciler {
     async reloadTariff(name) {
       const cfg = desired<{ name: string; type: string }>('tariffs', name)
       if (!cfg) return
-      syncEntity('tariffs', cfg)
-      // Create + start the new module BEFORE stopping the old, so an in-flight tick (which reads
-      // tariffs.get() at its top) never sees a stopped module.
+      // Build + start the new module FIRST; only on success mutate config + swap the Map, so a
+      // failed build leaves config and the running module untouched. Then stop the old — an
+      // in-flight tick reads tariffs.get() at its top, so it finishes on the old instance.
       const old = d.tariffs.get(name)
       const t = createTariff(cfg.type, cfg, d.ctx)
       await t.start()
+      syncEntity('tariffs', cfg)
       d.tariffs.set(name, t)
       updateHealth(d.health, name, t.health())
       if (old) await old.stop()
@@ -80,10 +81,10 @@ export function createReconciler(d: ReconcileDeps): Reconciler {
     async reloadBalancer(name) {
       const cfg = desired<{ name: string; type: string }>('balancers', name)
       if (!cfg) return
-      syncEntity('balancers', cfg)
       const old = d.balancers.get(name)
       const b = createBalancer(cfg.type, cfg, d.ctx)
       await b.start()
+      syncEntity('balancers', cfg)
       d.balancers.set(name, b)
       updateHealth(d.health, name, b.health())
       if (old) await old.stop() // stop() unwires its meter listener + ends its MQTT client

@@ -13,6 +13,7 @@ import type { Vehicle } from '../sdk/vehicle.js'
 import type { Charger } from '../sdk/charger.js'
 import { getTimezone, setTimezone } from '../core/settings.js'
 import type { Reconciler } from '../core/reconcile.js'
+import { setOverride } from '../core/config-overrides.js'
 import { isValidTimeZone } from '../sdk/local-time.js'
 import {
   listPlans,
@@ -147,6 +148,83 @@ export function createApiRouter(deps: ApiDeps): Router {
     setTimezone(deps.db, timezone)
     deps.events.emit('settings.changed', { timezone })
     res.json({ timezone })
+  })
+
+  // ── Runtime structural config (persist an override, then reconcile soft-reloads the module) ──
+  // Each validates, writes to config_overrides, and calls the reconcile seam, which mutates the
+  // effective config in place + emits `config.changed` (forwarded to SSE via the `*` wildcard).
+
+  // PUT /api/site — the site-level main breaker (amps per phase, the circuit ceiling for
+  // balancer-less loadpoints). Read live each control tick, so it applies without a restart.
+  router.put('/site', (req: Request, res: Response) => {
+    const n = (req.body as { mainBreakerA?: unknown }).mainBreakerA
+    if (typeof n !== 'number' || !(n > 0)) {
+      res.status(400).json({ error: 'mainBreakerA must be a positive number' })
+      return
+    }
+    setOverride(deps.db, 'site', 'site', { mainBreakerA: n })
+    deps.reconcile.reloadSite()
+    res.json({ mainBreakerA: deps.config.site.mainBreakerA })
+  })
+
+  // PUT /api/tariffs/:name — the price zone/region (e.g. SE3 → SE4). Reloads the tariff module,
+  // which re-fetches the new zone immediately (brief gap degrades to the price fallback).
+  router.put('/tariffs/:name', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    if (!deps.config.tariffs.some((t) => t.name === name)) {
+      res.status(404).json({ error: 'tariff not found' })
+      return
+    }
+    const zone = (req.body as { zone?: unknown }).zone
+    if (typeof zone !== 'string' || !zone.trim()) {
+      res.status(400).json({ error: 'zone must be a non-empty string' })
+      return
+    }
+    setOverride(deps.db, 'tariff', name, { zone })
+    await deps.reconcile.reloadTariff(name)
+    const t = deps.config.tariffs.find((x) => x.name === name)!
+    res.json({ name, type: t.type, zone: (t as { zone?: string }).zone })
+  })
+
+  // PUT /api/balancers/:name — circuit breaker + phase/limit params (partial; send only what changed).
+  router.put('/balancers/:name', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    if (!deps.config.balancers.some((b) => b.name === name)) {
+      res.status(404).json({ error: 'balancer not found' })
+      return
+    }
+    const body = req.body as Record<string, unknown>
+    const patch: Record<string, unknown> = {}
+    for (const f of [
+      'mainBreakerA',
+      'safeStaticCurrentA',
+      'meterStaleAfterSec',
+      'intervalSec',
+    ] as const) {
+      if (body[f] !== undefined) {
+        if (typeof body[f] !== 'number' || !((body[f] as number) > 0)) {
+          res.status(400).json({ error: `${f} must be a positive number` })
+          return
+        }
+        patch[f] = body[f]
+      }
+    }
+    if (body.phases !== undefined) {
+      const p = body.phases
+      if (typeof p !== 'number' || !Number.isInteger(p) || p < 1 || p > 3) {
+        res.status(400).json({ error: 'phases must be an integer 1–3' })
+        return
+      }
+      patch.phases = p
+    }
+    if (Object.keys(patch).length === 0) {
+      res.status(400).json({ error: 'no editable balancer fields provided' })
+      return
+    }
+    setOverride(deps.db, 'balancer', name, patch)
+    await deps.reconcile.reloadBalancer(name)
+    const b = deps.config.balancers.find((x) => x.name === name)!
+    res.json({ name, type: b.type, mainBreakerA: b.mainBreakerA, phases: b.phases })
   })
 
   // ── Charging plans (per loadpoint) ──────────────────────────────────────────
@@ -496,21 +574,31 @@ export function createApiRouter(deps: ApiDeps): Router {
   router.get('/site', (_req: Request, res: Response) => {
     const c = deps.config
     res.json({
-      site: c.site,
-      loadpoints: c.loadpoints.map((lp) => ({
-        name: lp.name,
-        charger: lp.charger,
-        balancer: lp.balancer,
-        tariff: lp.tariff,
-        vehicle: lp.vehicle,
-        maxCurrentA:
-          (c.chargers.find((ch) => ch.name === lp.charger) as { maxA?: number } | undefined)
-            ?.maxA ?? 16,
-        autoStart: lp.autoStart,
-        targetSoc: lp.targetSoc,
-        targetTime: lp.targetTime,
-        targetKWh: lp.targetKWh,
-      })),
+      // timezone is a runtime setting (settings KV) that diverges from the osc.yaml seed after a
+      // PUT /api/settings — serve the live value so clients see one truth.
+      site: { ...c.site, timezone: getTimezone(deps.db) },
+      loadpoints: c.loadpoints.map((lp) => {
+        // targets/autoStart/maxCurrentA are RUNTIME state (edited via /loadpoints + /plans and
+        // persisted), not config seeds — read the live LoadpointState so /api/site doesn't lie.
+        const st = deps.loadpoints.get(lp.name)
+        return {
+          name: lp.name,
+          charger: lp.charger,
+          balancer: lp.balancer,
+          tariff: lp.tariff,
+          vehicle: lp.vehicle,
+          maxCurrentA:
+            st?.maxCurrentA ??
+            (c.chargers.find((ch) => ch.name === lp.charger) as { maxA?: number } | undefined)
+              ?.maxA ??
+            16,
+          autoStart: st?.autoStart ?? lp.autoStart,
+          targetSoc: st?.targetSoc,
+          targetTime: st?.targetTime,
+          targetKWh: st?.targetKWh,
+          minSoc: st?.minSoc,
+        }
+      }),
       chargers: c.chargers.map((ch) => ({
         name: ch.name,
         type: ch.type,

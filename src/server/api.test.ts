@@ -5,7 +5,16 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDb } from '../core/db.js'
+import { configSchema } from '../core/config.js'
+import { getEffectiveConfig, getOverride } from '../core/config-overrides.js'
 import { createApiRouter, type ApiDeps } from './api.js'
+
+const putJson = (url: string, body: unknown) =>
+  fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
 
 async function withApi(deps: ApiDeps, fn: (baseUrl: string) => Promise<void>): Promise<void> {
   const app = express()
@@ -221,6 +230,66 @@ test('no vehicle → km plan resolvedSoc null, only kwh offered', async () => {
         availableTargetUnits: string[]
       }[]
       expect(lps[0].availableTargetUnits).toEqual(['kwh'])
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('PUT site/tariff/balancer persist overrides + reconcile; GET /api/site reflects them', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-cfg-'))
+  const db = openDb(dir)
+  try {
+    const config = configSchema.parse({
+      site: { mainBreakerA: 25 },
+      tariffs: [{ name: 'home', type: 'elprisetjustnu', zone: 'SE3' }],
+      balancers: [{ name: 'main', type: 'mqtt-circuit', mainBreakerA: 25, phases: 3 }],
+      chargers: [{ name: 'garage', type: 'ocpp16', stationId: 'ST1' }],
+      loadpoints: [{ name: 'garage', charger: 'garage' }],
+    })
+    const base = structuredClone(config)
+    // Faithful mini-reconcile: recompute the effective config from base + DB overrides and mutate
+    // the live config object in place (what the real reconcile does, minus the module rebuild).
+    const applyEff = () => Object.assign(config, getEffectiveConfig(base, db))
+    const deps = {
+      db,
+      config,
+      loadpoints: new Map([['garage', { name: 'garage', maxCurrentA: 16, autoStart: true }]]),
+      events: { emit: () => true },
+      reconcile: {
+        reloadSite: () => applyEff(),
+        reloadTariff: async () => applyEff(),
+        reloadBalancer: async () => applyEff(),
+      },
+    } as unknown as ApiDeps
+
+    await withApi(deps, async (baseUrl) => {
+      expect((await putJson(`${baseUrl}/api/site`, { mainBreakerA: -1 })).status).toBe(400)
+      expect((await putJson(`${baseUrl}/api/site`, { mainBreakerA: 16 })).status).toBe(200)
+
+      const t = await putJson(`${baseUrl}/api/tariffs/home`, { zone: 'SE4' })
+      expect(((await t.json()) as { zone: string }).zone).toBe('SE4')
+      expect((await putJson(`${baseUrl}/api/tariffs/nope`, { zone: 'SE4' })).status).toBe(404)
+
+      expect(
+        (await putJson(`${baseUrl}/api/balancers/main`, { mainBreakerA: 20, phases: 1 })).status,
+      ).toBe(200)
+      expect((await putJson(`${baseUrl}/api/balancers/main`, { phases: 5 })).status).toBe(400)
+
+      const site = (await (await fetch(`${baseUrl}/api/site`)).json()) as {
+        site: { mainBreakerA: number; timezone: string }
+        tariffs: { zone?: string }[]
+        balancers: { mainBreakerA: number; phases: number }[]
+      }
+      expect(site.site.mainBreakerA).toBe(16)
+      expect(typeof site.site.timezone).toBe('string') // runtime value, always present
+      expect(site.tariffs[0].zone).toBe('SE4')
+      expect(site.balancers[0].mainBreakerA).toBe(20)
+      expect(site.balancers[0].phases).toBe(1)
+      // overrides persisted for config:apply / reboot
+      expect(getOverride(db, 'tariff', 'home')).toEqual({ zone: 'SE4' })
+      expect(getOverride(db, 'site', 'site')).toEqual({ mainBreakerA: 16 })
     })
   } finally {
     db.close()
