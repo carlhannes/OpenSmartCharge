@@ -207,7 +207,7 @@ export function ChargerDetail({ charger, onClose }: Props) {
                 </div>
               )}
               {plans.map((p) => (
-                <PlanRow key={p.id} planId={p.id} />
+                <PlanRow key={p.id} planId={p.id} availableUnits={charger.availableTargetUnits} />
               ))}
             </div>
           </div>
@@ -307,10 +307,14 @@ export function ChargerDetail({ charger, onClose }: Props) {
   );
 }
 
-function PlanRow({ planId }: { planId: string }) {
+function PlanRow({
+  planId,
+  availableUnits,
+}: {
+  planId: string;
+  availableUnits: Charger["availableTargetUnits"];
+}) {
   const plan = useOsc((s) => s.plans.find((p) => p.id === planId)!);
-  const vehicles = useOsc((s) => s.vehicles);
-  const veh = vehicles[0];
   if (!plan) return null;
 
   const toggleDay = (d: DayKey) => {
@@ -320,12 +324,11 @@ function PlanRow({ planId }: { planId: string }) {
     void updatePlanCmd(plan.id, { days: Array.from(set) });
   };
 
-  const derivedPct =
-    plan.unit === "km" && veh
-      ? Math.min(100, Math.round((plan.target / (veh.batteryKwh * 6.5)) * 100))
-      : plan.unit === "kwh" && veh
-        ? Math.min(100, Math.round((plan.target / veh.batteryKwh) * 100))
-        : plan.target;
+  // Units the picker offers: what the loadpoint's data can back now, plus the plan's current unit
+  // (so the active selection is never hidden). The backend computes resolvedSoc — never recomputed here.
+  const units = (["pct", "km", "kwh"] as const).filter(
+    (u) => availableUnits.includes(u) || u === plan.unit,
+  );
 
   return (
     <div
@@ -386,7 +389,7 @@ function PlanRow({ planId }: { planId: string }) {
               className="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm tabular-nums outline-none focus:ring-2 focus:ring-ring/40"
             />
             <div className="flex rounded-lg bg-secondary p-0.5">
-              {(["pct", "km", "kwh"] as const).map((u) => (
+              {units.map((u) => (
                 <button
                   key={u}
                   onClick={() => void updatePlanCmd(plan.id, { unit: u })}
@@ -401,9 +404,12 @@ function PlanRow({ planId }: { planId: string }) {
           </div>
         </div>
       </div>
-      {plan.unit !== "pct" && (
+      {plan.unit !== "pct" && plan.resolvedSoc != null && (
+        <div className="mt-2 text-[11px] text-muted-foreground">≈ {plan.resolvedSoc}%</div>
+      )}
+      {plan.unit === "km" && plan.resolvedSoc == null && (
         <div className="mt-2 text-[11px] text-muted-foreground">
-          ≈ {derivedPct}% {!veh && "· needs a connected car"}
+          Needs a connected car to estimate %
         </div>
       )}
     </div>

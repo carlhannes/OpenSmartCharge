@@ -18,13 +18,13 @@ export function ChargerCard({ charger, onOpen }: Props) {
   );
 
   const soc = vehicle?.soc ?? 0;
-  const target = plan?.target ?? 80;
-  const targetPct = plan?.unit === "pct" ? target : 80;
+  // Backend-computed display %; null for kwh/no-car → no target arc, just the SoC ring.
+  const targetPct = plan?.resolvedSoc ?? null;
 
   const R = 44;
   const C = 2 * Math.PI * R;
-  const socOffset = C - (Math.min(soc, targetPct) / 100) * C;
-  const targetOffset = C - (targetPct / 100) * C;
+  const socOffset = C - (Math.min(soc, targetPct ?? 100) / 100) * C;
+  const targetOffset = targetPct != null ? C - (targetPct / 100) * C : C;
 
   return (
     <button
@@ -77,7 +77,7 @@ export function ChargerCard({ charger, onOpen }: Props) {
               {vehicle ? fmtPct(vehicle.soc) : "—"}
             </span>
             <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
-              of {targetPct}%
+              {targetPct != null ? `of ${targetPct}%` : " "}
             </span>
           </div>
         </div>

@@ -24,6 +24,7 @@ export interface Plan {
   target: number;
   unit: "pct" | "km" | "kwh";
   enabled: boolean;
+  resolvedSoc: number | null; // backend display %: pct→value, km→ratio, kwh/no-car→null
 }
 
 export interface Charger {
@@ -39,6 +40,7 @@ export interface Charger {
   guestTargetKwh: number | null;
   minSoc: number | null; // keep-above floor (%), from POST /target { minSoc }
   constraintAmps: number | null; // when limited by balancer
+  availableTargetUnits: Plan["unit"][]; // units the plan editor may offer (from the backend)
 }
 
 export interface Session {
@@ -168,6 +170,7 @@ function seed(): Pick<
     guestTargetKwh: null,
     minSoc: null,
     constraintAmps: null,
+    availableTargetUnits: ["pct", "km", "kwh"],
   };
   const plan: Plan = {
     id: "p_default",
@@ -177,6 +180,7 @@ function seed(): Pick<
     target: 80,
     unit: "pct",
     enabled: true,
+    resolvedSoc: 80, // pct passthrough; demo-only (live replaces plans from the backend)
   };
 
   const sessions: Session[] = [];
@@ -274,6 +278,7 @@ export const useOsc = create<OscState>()((set, get) => ({
       target: 80,
       unit: "pct",
       enabled: true,
+      resolvedSoc: null, // backend fills this via the loadpoint.plans SSE re-fetch
     };
     set((s) => ({ plans: [...s.plans, plan] }));
     return plan;
@@ -322,6 +327,7 @@ export const useOsc = create<OscState>()((set, get) => ({
       guestTargetKwh: null,
       minSoc: null,
       constraintAmps: null,
+      availableTargetUnits: ["pct", "km", "kwh"],
     };
     set((s) => ({
       chargers: [...s.chargers, charger],

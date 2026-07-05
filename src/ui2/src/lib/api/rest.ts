@@ -19,6 +19,7 @@ export interface LoadpointStateDto {
   sessionEnergyKWh: number;
   maxCurrentA: number;
   autoStart: boolean;
+  availableTargetUnits?: PlanDto["unit"][]; // units the data can back now (kwh always; pct/km need car data)
 }
 
 export interface PlanDto {
@@ -29,6 +30,7 @@ export interface PlanDto {
   target: number;
   unit: "pct" | "km" | "kwh";
   enabled: boolean;
+  resolvedSoc: number | null; // backend display %: pct→value, km→range/soc ratio, kwh/no-car→null
 }
 
 export interface SettingsDto {
@@ -202,8 +204,10 @@ export const setProfile = (name: string, amps: number) =>
 
 // Plans (per loadpoint)
 export const getPlans = (name: string) => apiFetch<PlanDto[]>(`/api/loadpoints/${name}/plans`);
-export const createPlan = (name: string, body: Omit<PlanDto, "id" | "loadpointName">) =>
-  apiFetch<PlanDto>(`/api/loadpoints/${name}/plans`, jsonBody("POST", body));
+export const createPlan = (
+  name: string,
+  body: Omit<PlanDto, "id" | "loadpointName" | "resolvedSoc">,
+) => apiFetch<PlanDto>(`/api/loadpoints/${name}/plans`, jsonBody("POST", body));
 export const updatePlanApi = (name: string, id: string, patch: Partial<PlanDto>) =>
   apiFetch<PlanDto>(`/api/loadpoints/${name}/plans/${id}`, jsonBody("PUT", patch));
 export const deletePlan = (name: string, id: string) =>

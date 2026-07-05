@@ -55,7 +55,24 @@ const loadpointDto = () => ({
   sessionEnergyKWh: +lp.sessionEnergyKWh.toFixed(2),
   maxCurrentA: lp.maxCurrentA,
   autoStart: lp.autoStart,
+  availableTargetUnits: [
+    ...(veh.soc != null && veh.batteryCapacity != null ? ["pct"] : []),
+    ...(veh.range != null ? ["km"] : []),
+    "kwh",
+  ],
 });
+
+// Backend computes each plan's display SoC%: pct→value, km→via range/soc ratio, kwh/no-car→null.
+const resolvedSocFor = (p) => {
+  if (p.unit === "pct") return p.target;
+  if (p.unit === "km") {
+    if (!veh.soc || !veh.range) return null;
+    const fullRangeKm = veh.range / (veh.soc / 100);
+    return Math.min(100, Math.round((p.target / fullRangeKm) * 100));
+  }
+  return null; // kwh
+};
+const planDto = (p) => ({ ...p, resolvedSoc: resolvedSocFor(p) });
 
 const txRow = (id) => ({
   id,
@@ -154,7 +171,8 @@ const server = http.createServer((req, res) => {
   if (planMatch) {
     const name = planMatch[1];
     const id = planMatch[2];
-    if (req.method === "GET") return send(res, plans.filter((pl) => pl.loadpointName === name));
+    if (req.method === "GET")
+      return send(res, plans.filter((pl) => pl.loadpointName === name).map(planDto));
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => {
@@ -176,7 +194,7 @@ const server = http.createServer((req, res) => {
         };
         plans.push(plan);
         emit("loadpoint.plans", { name });
-        return send(res, plan, 201);
+        return send(res, planDto(plan), 201);
       }
       if (req.method === "PUT" && id) {
         const plan = plans.find((pl) => pl.id === id && pl.loadpointName === name);
@@ -186,7 +204,7 @@ const server = http.createServer((req, res) => {
         }
         Object.assign(plan, b);
         emit("loadpoint.plans", { name });
-        return send(res, plan);
+        return send(res, planDto(plan));
       }
       if (req.method === "DELETE" && id) {
         plans = plans.filter((pl) => !(pl.id === id && pl.loadpointName === name));

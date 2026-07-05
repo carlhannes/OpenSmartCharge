@@ -51,6 +51,7 @@ export function mapLoadpoint(lp: LoadpointStateDto, site?: SiteDto): Charger {
     guestTargetKwh: lp.targetKWh ?? null,
     minSoc: lp.minSoc ?? null,
     constraintAmps: null, // filled from the balancer allocation, not the loadpoint
+    availableTargetUnits: lp.availableTargetUnits ?? ["pct", "km", "kwh"],
   };
 }
 
@@ -63,6 +64,7 @@ export function mapPlan(dto: PlanDto): Plan {
     target: dto.target,
     unit: dto.unit,
     enabled: dto.enabled,
+    resolvedSoc: dto.resolvedSoc,
   };
 }
 
