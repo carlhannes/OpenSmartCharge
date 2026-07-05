@@ -218,6 +218,14 @@ export const getSettings = () => apiFetch<SettingsDto>("/api/settings");
 export const setSettings = (s: SettingsDto) =>
   apiFetch<SettingsDto>("/api/settings", jsonBody("PUT", s));
 
+// Runtime config writes — persist to config_overrides (DB-wins, no restart); each emits config.changed.
+export const setSiteBreaker = (mainBreakerA: number) =>
+  apiFetch<unknown>("/api/site", jsonBody("PUT", { mainBreakerA }));
+export const setTariffZone = (name: string, zone: string) =>
+  apiFetch<unknown>(`/api/tariffs/${name}`, jsonBody("PUT", { zone }));
+export const updateChargerApi = (name: string, patch: { maxA?: number; label?: string }) =>
+  apiFetch<unknown>(`/api/chargers/${name}`, jsonBody("PUT", patch));
+
 export const getHealth = () => apiFetch<Record<string, ModuleHealth>>("/api/health");
 export const getSite = () => apiFetch<SiteDto>("/api/site");
 export const getTariffPrices = (name: string, from: Date, to: Date) =>

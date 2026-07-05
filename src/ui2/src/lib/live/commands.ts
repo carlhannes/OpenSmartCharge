@@ -95,3 +95,22 @@ export async function setTimezone(tz: string): Promise<void> {
   useOsc.getState().setTimezone(tz);
   if (isLive()) await api.setSettings({ timezone: tz });
 }
+
+/** Region (tariff zone): optimistic; PUT /api/tariffs/:name when live (SSE `config.changed` reconciles). */
+export async function setRegion(zone: string): Promise<void> {
+  useOsc.getState().setConfig({ region: zone });
+  const tariffName = useOsc.getState().config.tariffName;
+  if (isLive() && tariffName) await api.setTariffZone(tariffName, zone);
+}
+
+/** Main breaker (site-level): optimistic; PUT /api/site when live. */
+export async function setBreaker(amps: number): Promise<void> {
+  useOsc.getState().setConfig({ breakerAmps: amps });
+  if (isLive()) await api.setSiteBreaker(amps);
+}
+
+/** Charger max current: optimistic; PUT /api/chargers/:name when live (charger id == charger name). */
+export async function setChargerMaxAmps(chargerId: string, maxA: number): Promise<void> {
+  useOsc.getState().setChargerMaxAmps(chargerId, maxA);
+  if (isLive()) await api.updateChargerApi(chargerId, { maxA });
+}

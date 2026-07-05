@@ -3,6 +3,7 @@ import { useOsc, type Charger, type Plan } from "@/lib/mock/store";
 import { Trash2, Undo2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { ConfigLockNote } from "@/components/settings/ConfigLockNote";
+import { setChargerMaxAmps as setChargerMaxAmpsCmd } from "@/lib/live/commands";
 
 export const Route = createFileRoute("/settings/chargers")({ component: ChargersSettings });
 
@@ -10,7 +11,6 @@ function ChargersSettings() {
   const chargers = useOsc((s) => s.chargers);
   const allPlans = useOsc((s) => s.plans);
   const rename = useOsc((s) => s.renameCharger);
-  const setAmps = useOsc((s) => s.setChargerMaxAmps);
   const remove = useOsc((s) => s.removeCharger);
   const restore = useOsc((s) => s.restoreCharger);
   const pending = useOsc((s) => s.pendingChargers);
@@ -40,7 +40,9 @@ function ChargersSettings() {
   return (
     <div className="space-y-4">
       {locked && (
-        <ConfigLockNote>Chargers are configured in your config file (osc.yaml)</ConfigLockNote>
+        <ConfigLockNote>
+          Charger name &amp; pairing are set in your config file (osc.yaml)
+        </ConfigLockNote>
       )}
       {undo && (
         <div className="flex items-center justify-between rounded-2xl border border-border/60 bg-secondary px-4 py-3 text-sm">
@@ -81,9 +83,8 @@ function ChargersSettings() {
             min={6}
             max={32}
             value={c.maxAmps}
-            disabled={locked}
-            onChange={(e) => setAmps(c.id, parseInt(e.target.value, 10) || 0)}
-            className="w-32 rounded-lg border border-input bg-background px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
+            onChange={(e) => void setChargerMaxAmpsCmd(c.id, parseInt(e.target.value, 10) || 0)}
+            className="w-32 rounded-lg border border-input bg-background px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 focus:ring-ring/40"
           />
         </div>
       ))}

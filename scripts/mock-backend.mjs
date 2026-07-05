@@ -41,6 +41,8 @@ let plans = [
 ];
 let nextPlanId = 2;
 let settings = { timezone: "Europe/Stockholm" };
+let siteBreaker = 25; // site-level main breaker (A) — PUT /api/site
+let tariffZone = "SE3"; // primary tariff zone — PUT /api/tariffs/:name
 
 const loadpointDto = () => ({
   name: lp.name,
@@ -162,6 +164,45 @@ const server = http.createServer((req, res) => {
       }
       emit("settings.changed", settings);
       return send(res, settings);
+    });
+    return;
+  }
+
+  // Runtime config writes — each mutates state + emits config.changed (ui2 reconciles from /api/site).
+  const readBody = (cb) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      try {
+        cb(JSON.parse(body || "{}"));
+      } catch {
+        cb({});
+      }
+    });
+  };
+  if (p === "/api/site" && req.method === "PUT") {
+    readBody((b) => {
+      if (b.mainBreakerA != null) siteBreaker = b.mainBreakerA;
+      emit("config.changed", { kind: "site", name: "site" });
+      send(res, { ok: true });
+    });
+    return;
+  }
+  const tariffPut = p.match(/^\/api\/tariffs\/([^/]+)$/);
+  if (tariffPut && req.method === "PUT") {
+    readBody((b) => {
+      if (b.zone) tariffZone = b.zone;
+      emit("config.changed", { kind: "tariff", name: tariffPut[1] });
+      send(res, { ok: true });
+    });
+    return;
+  }
+  const chargerPut = p.match(/^\/api\/chargers\/([^/]+)$/);
+  if (chargerPut && req.method === "PUT") {
+    readBody((b) => {
+      if (b.maxA != null) lp.maxCurrentA = b.maxA;
+      emit("config.changed", { kind: "charger", name: chargerPut[1] });
+      send(res, { ok: true });
     });
     return;
   }
@@ -300,13 +341,13 @@ const server = http.createServer((req, res) => {
     });
   if (p === "/api/site")
     return send(res, {
-      site: { name: "Mock Home", port: PORT },
+      site: { name: "Mock Home", port: PORT, mainBreakerA: siteBreaker, timezone: settings.timezone },
       loadpoints: [
         { name: "garage", charger: "garage", tariff: "home", balancer: "house", vehicle: "enyaq", maxCurrentA: lp.maxCurrentA, autoStart: true },
       ],
       chargers: [{ name: "garage", type: "ocpp16", stationId: "MOCK-1", maxA: lp.maxCurrentA }],
-      balancers: [{ name: "house", type: "mqtt-circuit", mainBreakerA: 25, phases: 3 }],
-      tariffs: [{ name: "home", type: "nordpool", zone: "SE3" }],
+      balancers: [{ name: "house", type: "mqtt-circuit", mainBreakerA: siteBreaker, phases: 3 }],
+      tariffs: [{ name: "home", type: "nordpool", zone: tariffZone }],
       vehicles: [{ name: "enyaq", type: "skoda", vin: "MOCKVIN" }],
       meterReaders: [{ name: "pulse", type: "tibber-pulse" }],
     });

@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useOsc } from "@/lib/mock/store";
+import { setBreaker } from "@/lib/live/commands";
 import { ConfigLockNote } from "@/components/settings/ConfigLockNote";
 
 export const Route = createFileRoute("/settings/house")({ component: HouseSettings });
@@ -13,7 +14,6 @@ function HouseSettings() {
 
   return (
     <div className="space-y-4">
-      {locked && <ConfigLockNote />}
       <div className="rounded-2xl border border-border/60 bg-card p-4">
         <label className="mb-1 block text-xs uppercase tracking-widest text-muted-foreground">
           Main breaker
@@ -24,9 +24,8 @@ function HouseSettings() {
             min={6}
             max={200}
             value={config.breakerAmps}
-            disabled={locked}
-            onChange={(e) => setConfig({ breakerAmps: parseInt(e.target.value, 10) || 0 })}
-            className="w-24 rounded-lg border border-input bg-background px-3 py-2 text-sm tabular-nums disabled:opacity-60"
+            onChange={(e) => void setBreaker(parseInt(e.target.value, 10) || 0)}
+            className="w-24 rounded-lg border border-input bg-background px-3 py-2 text-sm tabular-nums"
           />
           <span className="text-sm text-muted-foreground">A</span>
         </div>
@@ -73,6 +72,7 @@ function HouseSettings() {
             </div>
           </div>
         )}
+        {locked && <ConfigLockNote />}
       </div>
     </div>
   );

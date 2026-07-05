@@ -41,10 +41,51 @@ async function refetchPlansFor(name: string) {
 }
 
 /**
+ * Re-hydrate everything derived from GET /api/site (+ loadpoints): chargers and the site config
+ * (region / breaker / tariffName). Called on startup and on every `config.changed` SSE, so runtime
+ * config writes reconcile to the backend's truth. Returns the fetched site so startup can reuse it
+ * for the downstream vehicle/price/balancer blocks (no double-fetch).
+ */
+async function rehydrateSite(
+  loadpoints?: api.LoadpointStateDto[],
+): Promise<api.SiteDto | undefined> {
+  let lps = loadpoints;
+  if (!lps) {
+    try {
+      lps = await api.getLoadpoints();
+    } catch {
+      return undefined;
+    }
+  }
+  let site: api.SiteDto | undefined;
+  try {
+    site = await api.getSite();
+  } catch {
+    /* topology optional */
+  }
+  useOsc.getState().hydrate({ chargers: lps.map((lp) => mapLoadpoint(lp, site)) });
+  if (site) {
+    const zone = site.tariffs[0]?.zone;
+    const tariffName = site.tariffs[0]?.name;
+    const siteBreaker = site.site.mainBreakerA ?? site.balancers[0]?.mainBreakerA;
+    useOsc.getState().setConfig({
+      ...(zone ? { region: zone } : {}),
+      ...(tariffName ? { tariffName } : {}),
+      ...(siteBreaker != null ? { breakerAmps: siteBreaker } : {}),
+      // No dynamic balancer configured → the main breaker is a static safe limit.
+      ...(site.balancers.length === 0 && siteBreaker != null
+        ? { balancerMode: "static" as const, staticLimitA: siteBreaker }
+        : {}),
+    });
+  }
+  return site;
+}
+
+/**
  * Backend auto-detect + live sync. Mounted once (client-only) from __root.
  * Success → hydrate the store from REST, subscribe to SSE, poll health, stay "live".
  * Failure (backend unreachable) → fall back to the mock tick ("demo") so parallel dev works.
- * Only the API-backed slices are hydrated; plans/config/pendingChargers keep their local values.
+ * Site-derived slices (chargers + region/breaker config) reconcile via rehydrateSite on `config.changed`.
  */
 export function useLiveSync() {
   useEffect(() => {
@@ -69,16 +110,10 @@ export function useLiveSync() {
       if (cancelled) return;
       store.setSource("live");
 
-      // Topology (optional — used to bind vehicles + pick tariff/balancer).
-      let site: api.SiteDto | undefined;
-      try {
-        site = await api.getSite();
-      } catch {
-        /* topology optional */
-      }
+      // Chargers + site config (region/breaker/tariffName) via the shared reconcile fn — reused on
+      // every `config.changed` SSE. Returns the fetched site so we reuse it below (no double-fetch).
+      const site = await rehydrateSite(loadpoints);
       if (cancelled) return;
-
-      store.hydrate({ chargers: loadpoints.map((lp) => mapLoadpoint(lp, site)) });
 
       // Plans per loadpoint + site timezone.
       try {
@@ -105,22 +140,6 @@ export function useLiveSync() {
       }
 
       if (site) {
-        // Real site config → the read-only Settings display (region/breaker). There's no write
-        // API for these yet, so we only READ them here; the Settings UI locks the controls in
-        // live mode. In demo mode this block never runs (the hook returns into the mock tick).
-        const zone = site.tariffs[0]?.zone;
-        const siteBreaker = site.site.mainBreakerA ?? site.balancers[0]?.mainBreakerA;
-        if (!cancelled) {
-          store.setConfig({
-            ...(zone ? { region: zone } : {}),
-            ...(siteBreaker != null ? { breakerAmps: siteBreaker } : {}),
-            // No dynamic balancer configured → the main breaker is a static safe limit.
-            ...(site.balancers.length === 0 && siteBreaker != null
-              ? { balancerMode: "static" as const, staticLimitA: siteBreaker }
-              : {}),
-          });
-        }
-
         const vehicles = (
           await Promise.all(
             site.vehicles.map((v) =>
@@ -222,6 +241,10 @@ export function useLiveSync() {
         subscribe("settings.changed", (d) => {
           const e = d as { timezone: string };
           useOsc.getState().setTimezone(e.timezone);
+        }),
+        subscribe("config.changed", () => {
+          // Any runtime config write (region/breaker/charger/…) → reconcile from GET /api/site.
+          void rehydrateSite();
         }),
       );
 

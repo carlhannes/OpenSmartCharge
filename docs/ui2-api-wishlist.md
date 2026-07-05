@@ -79,3 +79,14 @@ Shipped in the target-model rework — `PlanDto.resolvedSoc` + `availableTargetU
 Same shape as the `timezone`/mode controls you already wired: add a `commands.ts` wrapper (optimistic
 local + `if (isLive()) await api.…`), drop the `disabled`/`ConfigLockNote` gate, and re-fetch on
 `config.changed`. If you extend `scripts/mock-backend.mjs`, add these routes there too for demo mode.
+
+---
+
+## One follow-up found while wiring — charger `label` isn't observable
+`PUT /api/chargers/:name { label }` accepts a rename, but no read endpoint surfaces it:
+`GET /api/site.chargers[]` is `{ name, type, stationId, maxA }` and `GET /api/loadpoints[]` has no
+display-name field — both return only the immutable `name`. So the UI can't display or reconcile a
+rename (it would flash locally then revert on the next `config.changed`), and we've kept the charger
+**name field read-only** for now. To make rename usable, please surface `label` on the charger DTO (e.g.
+`GET /api/site.chargers[].label`, falling back to `name`). Everything else on this list is wired
+(Phase 1: region + breaker + charger maxA; the rest queued behind their flows).

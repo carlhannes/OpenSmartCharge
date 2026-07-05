@@ -77,6 +77,7 @@ export interface Config {
   staticLimitA: number;
   houseUsageKw: number;
   currencySymbol: string;
+  tariffName?: string; // primary tariff name — target for region writes (PUT /api/tariffs/:name)
 }
 
 interface OscState {
