@@ -106,6 +106,21 @@ function runMigrations(db: DatabaseSync): void {
       updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_charge_plans_lp ON charge_plans (loadpoint_name);
+
+    -- Runtime overrides of STRUCTURAL config (osc.yaml seeds; DB wins; config:apply re-asserts).
+    -- Each row is a JSON patch onto an existing osc.yaml entity, OR a full entity added at runtime
+    -- (a claimed charger / added vehicle). Layered over the parsed config by getEffectiveConfig
+    -- (core/config-overrides.ts) and re-validated through the same zod schema. Distinct from the
+    -- settings KV (site scalars) and loadpoint_state (operational mode/target): this is the
+    -- module-topology layer the reconcile seam rebuilds modules from.
+    CREATE TABLE IF NOT EXISTS config_overrides (
+      kind       TEXT NOT NULL,
+      name       TEXT NOT NULL,
+      patch      TEXT NOT NULL,
+      origin     TEXT NOT NULL DEFAULT 'runtime',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (kind, name)
+    );
   `)
 
   // Additive migrations for pre-existing DBs — `CREATE TABLE IF NOT EXISTS` won't add a

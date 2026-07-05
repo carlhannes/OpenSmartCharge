@@ -104,7 +104,7 @@ const siteConfigSchema = z.object({
     .default('Europe/Stockholm'),
 })
 
-const configSchema = z.object({
+export const configSchema = z.object({
   site: siteConfigSchema.default({}),
   smartCharging: smartChargingConfigSchema,
   mqtt: mqttConfigSchema.optional(),

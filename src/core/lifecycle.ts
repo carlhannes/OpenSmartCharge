@@ -35,6 +35,8 @@ import type { MeterReader, MeterSnapshot } from '../sdk/meter-reader.js'
 import { recordHouseholdLoad, pruneHouseholdLoad, worstCaseLoadA } from './smart-charging/rollup.js'
 import { localDateKey, localHour, msUntilLocalTime } from '../sdk/local-time.js'
 import { getTimezone, seedSettings } from './settings.js'
+import { getEffectiveConfig } from './config-overrides.js'
+import { createReconciler } from './reconcile.js'
 import { listPlans, selectActivePlan, planTargetTime } from './plans.js'
 import type { Balancer, LoadpointSnapshot } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
@@ -60,11 +62,14 @@ async function main() {
   const log = createLogger()
   log.info('OpenSmartCharge starting')
 
-  const config = loadConfig(CONFIG_PATH)
-  log.info({ site: config.site.name, port: config.site.port }, 'config loaded')
-
   const db = openDb(DATA_DIR)
   log.info({ dataDir: DATA_DIR }, 'database ready')
+
+  // Effective config = parsed osc.yaml (seed) + runtime DB overrides (persist-wins). The lifecycle
+  // runs on this object; the reconcile seam keeps it in sync IN PLACE on API-driven config changes.
+  const baseConfig = loadConfig(CONFIG_PATH)
+  const config = getEffectiveConfig(baseConfig, db)
+  log.info({ site: config.site.name, port: config.site.port }, 'config loaded')
 
   // Seed system settings (e.g. site timezone) from config into the DB on first boot; runtime
   // values (UI setup auto-detect) win thereafter. Re-assert declaratively via `npm run config:apply`.
@@ -232,23 +237,30 @@ async function main() {
   const loadpointStates = loadLoadpointStates(db, configToLoadpointInits(config))
   log.info({ loadpoints: [...loadpointStates.keys()] }, 'loadpoints initialized')
 
-  // Group loadpoints into circuits once (balancer-shared vs bare). The single control loop
-  // ticks every circuit regardless of whether a balancer is configured.
-  const circuits = buildCircuits(config)
+  // Group loadpoints into circuits (balancer-shared vs bare). The single control loop ticks every
+  // circuit. Rebuildable IN PLACE so reconcile (add/remove loadpoint) can regroup without replacing
+  // the array reference the control loop closes over.
+  const circuits: Circuit[] = []
+  const rebuildCircuits = () => {
+    circuits.length = 0
+    circuits.push(...buildCircuits(config))
+  }
+  rebuildCircuits()
 
-  // Wire charger status events → loadpoint state → event bus
-  for (const lpCfg of config.loadpoints) {
-    const charger = chargers.get(lpCfg.charger)
-    if (!charger) continue
-
-    const state = loadpointStates.get(lpCfg.name)!
-
-    charger.onStatus((status) => {
+  // Wire a charger's status → loadpoint state → event bus. Extracted into a helper AND the returned
+  // unsubscribe is KEPT (by loadpoint name), so reconcile can re-wire or drop a charger without
+  // leaking or double-firing listeners. Calling it again for the same loadpoint drops the prior sub.
+  const chargerUnsubs = new Map<string, () => void>()
+  function wireChargerStatus(
+    lpCfg: LoadpointConfig,
+    charger: Charger,
+    state: LoadpointState,
+  ): void {
+    chargerUnsubs.get(lpCfg.name)?.()
+    const unsub = charger.onStatus((status) => {
       Object.assign(state, foldChargerStatus(state, status))
-
       // Charger module health tracks connection state — refresh on connect/disconnect.
       updateHealth(health, lpCfg.charger, charger.health())
-
       // Persist energy for estimation when vehicle is offline
       events.emit('loadpoint.state', {
         name: state.name,
@@ -258,6 +270,13 @@ async function main() {
         sessionEnergyKWh: state.sessionEnergyKWh,
       })
     })
+    chargerUnsubs.set(lpCfg.name, unsub)
+  }
+
+  for (const lpCfg of config.loadpoints) {
+    const charger = chargers.get(lpCfg.charger)
+    if (!charger) continue
+    wireChargerStatus(lpCfg, charger, loadpointStates.get(lpCfg.name)!)
   }
 
   // Control surface helpers (shared by REST + MQTT)
@@ -775,6 +794,27 @@ async function main() {
     if (charger) chargerLimitMap.set(lpCfg.name, charger)
   }
 
+  // Declarative reconcile seam: API config writes rebuild the affected module from the effective
+  // config and mutate `config` in place (see core/reconcile.ts).
+  const reconcile = createReconciler({
+    base: baseConfig,
+    config,
+    db,
+    ctx,
+    events,
+    health,
+    chargers,
+    tariffs,
+    meterReaders,
+    vehicles,
+    balancers,
+    loadpointStates,
+    chargerLimitMap,
+    chargerUnsubs,
+    wireChargerStatus,
+    rebuildCircuits,
+  })
+
   const httpServer = startServer(config.site.port, {
     db,
     events,
@@ -787,6 +827,7 @@ async function main() {
     balancers,
     vehicles,
     lastTickByBalancer,
+    reconcile,
     onModeChange: handleModeChange,
     onTargetChange: handleTargetChange,
     onPlansChanged: handlePlansChanged,

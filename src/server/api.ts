@@ -12,6 +12,7 @@ import type { Balancer } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import type { Charger } from '../sdk/charger.js'
 import { getTimezone, setTimezone } from '../core/settings.js'
+import type { Reconciler } from '../core/reconcile.js'
 import { isValidTimeZone } from '../sdk/local-time.js'
 import {
   listPlans,
@@ -39,6 +40,8 @@ export interface ApiDeps {
   balancers: Map<string, Balancer>
   vehicles: Map<string, Vehicle>
   lastTickByBalancer: Map<string, { allocations: Record<string, number>; freeAmps: number }>
+  /** Declarative reconcile seam — soft-reload a module after a config override write. */
+  reconcile: Reconciler
   onModeChange(name: string, mode: ChargeMode): Promise<void>
   onTargetChange(
     name: string,
