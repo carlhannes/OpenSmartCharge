@@ -11,6 +11,7 @@ import '../modules/vehicle-skoda/index.js'
 import { loadConfig, CONFIG_PATH, DATA_DIR } from './config.js'
 import { openDb } from './db.js'
 import { createLogger } from './logger.js'
+import { createLogCaptureStream, patchConsole, pruneLogs } from './log-store.js'
 import { loadPlugins } from './plugin-loader.js'
 import {
   loadLoadpointStates,
@@ -36,7 +37,7 @@ import type { Tariff, TariffSlot } from '../sdk/tariff.js'
 import type { MeterReader, MeterSnapshot } from '../sdk/meter-reader.js'
 import { recordHouseholdLoad, pruneHouseholdLoad, worstCaseLoadA } from './smart-charging/rollup.js'
 import { localDateKey, localHour, msUntilLocalTime } from '../sdk/local-time.js'
-import { getTimezone, seedSettings } from './settings.js'
+import { getTimezone, seedSettings, getLogRetentionDays } from './settings.js'
 import { getEffectiveConfig } from './config-overrides.js'
 import { createReconciler } from './reconcile.js'
 import { listPlans, selectActivePlan, planTargetTime } from './plans.js'
@@ -65,10 +66,12 @@ import {
 const PLUGINS_DIR = process.env.OSC_PLUGINS_DIR ?? './plugins'
 
 async function main() {
-  const log = createLogger()
-  log.info('OpenSmartCharge starting')
-
+  // Open the DB first so the logger's capture leg (core/log-store.ts) can persist from the very first
+  // line, then tee console.* — both before loadPlugins, so non-conforming plugins/deps are captured too.
   const db = openDb(DATA_DIR)
+  const log = createLogger([createLogCaptureStream(db)])
+  patchConsole(db)
+  log.info('OpenSmartCharge starting')
   log.info({ dataDir: DATA_DIR }, 'database ready')
 
   // Effective config = parsed osc.yaml (seed) + runtime DB overrides (persist-wins). The lifecycle
@@ -1012,6 +1015,11 @@ async function main() {
     () => void runAllCircuits(),
     config.smartCharging.controlIntervalSec * 1000,
   )
+
+  // Rotate the runtime log ring: prune now, then hourly. Retention (days) is re-read each run, so a UI
+  // change applies within the hour (and immediately via PUT /api/logs/config).
+  pruneLogs(db, getLogRetentionDays(db))
+  const logPruneInterval = setInterval(() => pruneLogs(db, getLogRetentionDays(db)), 3600_000)
   log.info(
     { intervalSec: config.smartCharging.controlIntervalSec, circuits: circuits.length },
     'control loop started',
@@ -1022,6 +1030,7 @@ async function main() {
   const shutdown = () => {
     log.info('shutting down gracefully')
     clearInterval(controlInterval)
+    clearInterval(logPruneInterval)
     httpServer.close()
     if (ocppServer) void ocppServer.close()
     for (const b of balancers.values()) void b.stop()

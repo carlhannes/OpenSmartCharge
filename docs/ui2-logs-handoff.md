@@ -5,6 +5,17 @@ the contract below. It's live in the mock (`scripts/mock-backend.mjs` `GET /api/
 demo/dev today; against the real backend it shows a graceful "Logs unavailable" until this ships. No ui2
 changes needed once you implement it — it flips to real automatically (same as the config/label handoffs).
 
+> **✅ Implemented (2026-07-06) on `feat/ocpp-zaptec-charging`.** The contract below is live on the real
+> backend; the viewer flips to real automatically. Capture is a `pino.multistream` leg on the single app
+> logger (so all core + modules) **plus** a `console.*` tee for non-conforming plugins; the base level
+> dropped to `trace` so **everything** is persisted (no minimum level — the old "circuit resolve" debug
+> line is now queryable). Storage = the `logs` table (`src/core/db.ts`); logic in
+> **`src/core/log-store.ts`**; routes in `src/server/api.ts`. **Retention defaults to 3 days** (not the 7
+> suggested below) and is a runtime knob — **`GET`/`PUT /api/logs/config { retentionDays }`** (1–365),
+> stored in the `settings` KV, pruned by age + a hard row-cap backstop. §4 (live-tail SSE) is **still
+> deferred** — the viewer polls every 5 s. The mock implements `/api/logs/config` too. The retention UI
+> lives in `src/ui2/src/components/logs-retention.tsx`.
+
 Today the backend logs via **pino to stdout only** — no persistence, no `logs` table, no `/api/logs`
 (`src/core/logger.ts` is a bare pino instance; `src/server/api.ts` has no logs route). This asks for a
 small **capture → queryable store → GET** slice, mirroring the existing **transactions** pattern

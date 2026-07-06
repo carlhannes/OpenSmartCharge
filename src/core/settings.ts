@@ -33,6 +33,26 @@ export function setTimezone(db: DatabaseSync, tz: string): void {
   setSetting(db, 'timezone', tz)
 }
 
+const DEFAULT_LOG_RETENTION_DAYS = 3
+
+/**
+ * How many days of runtime logs to keep before auto-rotation drops them (default 3). Pure runtime — a
+ * user knob on the Logs page, not seeded from config. Falls back to the default on a missing/corrupt value.
+ */
+export function getLogRetentionDays(db: DatabaseSync): number {
+  const raw = getSetting(db, 'logs.retention_days')
+  const n = raw != null ? Number(raw) : NaN
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : DEFAULT_LOG_RETENTION_DAYS
+}
+
+/** Set the log-retention window (days); throws outside 1–365 (guards the API). */
+export function setLogRetentionDays(db: DatabaseSync, days: number): void {
+  if (!Number.isInteger(days) || days < 1 || days > 365) {
+    throw new Error(`logRetentionDays must be an integer 1–365, got ${days}`)
+  }
+  setSetting(db, 'logs.retention_days', String(days))
+}
+
 /** Seed settings from config on boot — new DB only (INSERT OR IGNORE); runtime values win after. */
 export function seedSettings(db: DatabaseSync, config: Config): void {
   db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run(

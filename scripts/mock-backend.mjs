@@ -42,6 +42,7 @@ let plans = [
 let nextPlanId = 2;
 let settings = { timezone: "Europe/Stockholm" };
 let siteBreaker = 25; // site-level main breaker (A) — PUT /api/site
+let logRetentionDays = 3; // days of logs kept before rotation — GET/PUT /api/logs/config
 let tariffZone = "SE3"; // primary tariff zone — PUT /api/tariffs/:name
 let chargerLabel = "garage"; // charger display label — PUT /api/chargers/:name { label }
 
@@ -458,6 +459,58 @@ const server = http.createServer((req, res) => {
         soc: 40 + i * 2,
       })),
     });
+
+  if (p === "/api/logs/config") {
+    if (req.method === "GET") return send(res, { retentionDays: logRetentionDays });
+    if (req.method === "PUT") {
+      readBody((b) => {
+        const d = Number(b.retentionDays);
+        if (!Number.isInteger(d) || d < 1 || d > 365)
+          return send(res, { error: "retentionDays must be an integer 1–365" }, 400);
+        logRetentionDays = d;
+        const cutoff = Date.now() - d * 86400000; // best-effort demo prune, mirrors the backend
+        logs = logs.filter((l) => Date.parse(l.time) >= cutoff);
+        send(res, { retentionDays: logRetentionDays });
+      });
+      return;
+    }
+  }
+
+  if (p === "/api/logs/export" && req.method === "GET") {
+    const u = new URL(req.url, "http://x");
+    const order = ["debug", "info", "warn", "error"];
+    const lvl = u.searchParams.get("level");
+    const minRank = lvl ? order.indexOf(lvl) : 0;
+    const sinceMs = u.searchParams.get("since") ? Date.parse(u.searchParams.get("since")) : -Infinity;
+    const untilMs = u.searchParams.get("until") ? Date.parse(u.searchParams.get("until")) : Infinity;
+    const q = (u.searchParams.get("q") || "").toLowerCase();
+    const fmt = (e) => {
+      let line = `${e.time} ${e.level.toUpperCase().padEnd(5)}`;
+      if (e.module) line += ` [${e.module}]`;
+      line += ` ${e.msg}`;
+      if (e.fields) line += ` ${JSON.stringify(e.fields)}`;
+      if (e.err) line += "\n" + e.err.split("\n").map((l) => `    ${l}`).join("\n");
+      return line;
+    };
+    const text =
+      logs
+        .filter((l) => order.indexOf(l.level) >= minRank)
+        .filter((l) => {
+          const t = Date.parse(l.time);
+          return t >= sinceMs && t <= untilMs;
+        })
+        .filter((l) => !q || `${l.module || ""} ${l.msg}`.toLowerCase().includes(q))
+        .sort((a, b) => a.id - b.id) // chronological, like a real logfile
+        .map(fmt)
+        .join("\n") + (logs.length ? "\n" : "");
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    res.writeHead(200, {
+      "content-type": "text/plain; charset=utf-8",
+      "content-disposition": `attachment; filename="osc-logs-${stamp}.log"`,
+      "access-control-allow-origin": "*",
+    });
+    return res.end(text);
+  }
 
   if (p === "/api/logs" && req.method === "GET") {
     const u = new URL(req.url, "http://x");

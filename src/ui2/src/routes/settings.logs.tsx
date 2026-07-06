@@ -3,6 +3,8 @@ import { useOsc } from "@/lib/mock/store";
 import { getLogs, type LogEntry, type LogLevel } from "@/lib/api/rest";
 import { LEVELS, levelText, fmtClock, timeAgo, groupByDay, RANGES, filterLogs } from "@/lib/logs";
 import { InlineStatus } from "@/components/ui/inline-status";
+import { LogsRetention } from "@/components/logs-retention";
+import { LogsExport } from "@/components/logs-export";
 import { Bug, Info, AlertTriangle, XCircle, ChevronDown, RefreshCw, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -144,6 +146,14 @@ function LogsSettings() {
           >
             <RefreshCw className={`h-4 w-4 ${status === "loading" ? "animate-spin" : ""}`} />
           </button>
+          <LogsExport
+            level={level}
+            since={bounds.since}
+            until={bounds.until}
+            q={q || undefined}
+            source={source}
+            entries={entries}
+          />
         </div>
 
         {rangeKey === "custom" && (
@@ -263,6 +273,8 @@ function LogsSettings() {
           ))}
         </div>
       )}
+
+      <LogsRetention />
     </div>
   );
 }

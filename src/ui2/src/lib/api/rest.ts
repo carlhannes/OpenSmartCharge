@@ -285,3 +285,28 @@ export const getLogs = (opts?: {
   const qs = params.size > 0 ? `?${params}` : "";
   return apiFetch<LogEntry[]>(`/api/logs${qs}`);
 };
+
+// Downloadable .log of the full filtered set (no viewer limit) — same filters as getLogs, minus limit.
+// Returned as a text/plain attachment by the backend; the UI fetches it and triggers a file download.
+export const logsExportUrl = (opts?: {
+  level?: LogLevel;
+  since?: string;
+  until?: string;
+  q?: string;
+}) => {
+  const params = new URLSearchParams();
+  if (opts?.level) params.set("level", opts.level);
+  if (opts?.since) params.set("since", opts.since);
+  if (opts?.until) params.set("until", opts.until);
+  if (opts?.q) params.set("q", opts.q);
+  const qs = params.size > 0 ? `?${params}` : "";
+  return `/api/logs/export${qs}`;
+};
+
+// Log retention (days before auto-rotation). Everything is logged; rotation is the only space control.
+export interface LogsConfigDto {
+  retentionDays: number; // 1–365
+}
+export const getLogsConfig = () => apiFetch<LogsConfigDto>("/api/logs/config");
+export const setLogsConfig = (cfg: LogsConfigDto) =>
+  apiFetch<LogsConfigDto>("/api/logs/config", jsonBody("PUT", cfg));

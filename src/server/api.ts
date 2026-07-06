@@ -11,7 +11,13 @@ import type { MeterReader } from '../sdk/meter-reader.js'
 import type { Balancer } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import type { Charger } from '../sdk/charger.js'
-import { getTimezone, setTimezone } from '../core/settings.js'
+import {
+  getTimezone,
+  setTimezone,
+  getLogRetentionDays,
+  setLogRetentionDays,
+} from '../core/settings.js'
+import { queryLogs, pruneLogs, exportLogsText, type LogLevel } from '../core/log-store.js'
 import type { Reconciler } from '../core/reconcile.js'
 import { setOverride, deleteOverride } from '../core/config-overrides.js'
 import { getOcppServer } from '../modules/charger-ocpp16/index.js'
@@ -923,6 +929,53 @@ export function createApiRouter(deps: ApiDeps): Router {
       )
       .all(startKwh, id)
     res.json({ transaction: tx, samples })
+  })
+
+  // GET /api/logs — runtime log ring, newest-first (see core/log-store.ts). All filters optional:
+  // level (minimum severity), since/until (ISO), q (substring on msg+module), limit (default 200, cap 500).
+  router.get('/logs', (req: Request, res: Response) => {
+    res.json(
+      queryLogs(deps.db, {
+        level: req.query.level as LogLevel | undefined,
+        since: req.query.since as string | undefined,
+        until: req.query.until as string | undefined,
+        q: req.query.q as string | undefined,
+        limit: req.query.limit != null ? Number(req.query.limit) : undefined,
+      }),
+    )
+  })
+
+  // GET /api/logs/export — the full filtered set (no viewer limit) as a downloadable .log text file.
+  // Honors the same level/since/until/q as GET /api/logs, so it exports exactly the selected state.
+  router.get('/logs/export', (req: Request, res: Response) => {
+    const text = exportLogsText(deps.db, {
+      level: req.query.level as LogLevel | undefined,
+      since: req.query.since as string | undefined,
+      until: req.query.until as string | undefined,
+      q: req.query.q as string | undefined,
+    })
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    res.set('Content-Type', 'text/plain; charset=utf-8')
+    res.set('Content-Disposition', `attachment; filename="osc-logs-${stamp}.log"`)
+    res.send(text)
+  })
+
+  // GET /api/logs/config — the log-retention window (days).
+  router.get('/logs/config', (_req: Request, res: Response) => {
+    res.json({ retentionDays: getLogRetentionDays(deps.db) })
+  })
+
+  // PUT /api/logs/config — set retention (days, 1–365). Prunes immediately so lowering it takes effect now.
+  router.put('/logs/config', (req: Request, res: Response) => {
+    const body = req.body as { retentionDays?: unknown }
+    const days = typeof body.retentionDays === 'number' ? body.retentionDays : NaN
+    if (!Number.isInteger(days) || days < 1 || days > 365) {
+      res.status(400).json({ error: 'retentionDays must be an integer 1–365' })
+      return
+    }
+    setLogRetentionDays(deps.db, days)
+    pruneLogs(deps.db, days)
+    res.json({ retentionDays: days })
   })
 
   return router

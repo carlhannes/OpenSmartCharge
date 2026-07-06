@@ -308,7 +308,7 @@ Every `create(cfg, ctx)` factory receives a `ModuleCtx`:
 interface ModuleCtx {
   db: DatabaseSync     // node:sqlite (Node 22.5+ built-in) — persistence
   events: EventEmitter // internal pub/sub
-  log: Logger          // pino child, pre-scoped to your module name
+  log: Logger          // pino — the shared app logger; every line is captured to the Logs viewer
   fetch: typeof globalThis.fetch  // drop-in fetch() with 0–120 s anti-thundering-herd jitter
   mqtt?: { host: string; port: number; user?: string; password?: string }
 }
@@ -320,7 +320,7 @@ interface ModuleCtx {
 
 **`ctx.db`** — your tables, your `CREATE TABLE IF NOT EXISTS` in `start()`. Don't collide with OSC core table names: `loadpoint_state`, `transactions`, `meter_values`, `tariff_slots`, `vehicle_cache`.
 
-Use `ctx.log.info(...)`, `ctx.log.warn(...)`, etc. Don't use `console.log`.
+**`ctx.log`** — log through it (`ctx.log.info(...)`, `.warn(...)`, `.debug(...)`, …), **not `console.log`**. Everything logged this way is captured to the runtime `logs` store and shown in the app's **Logs viewer** (Settings → Logs) — at every level (there's no minimum; logs rotate out by age, default 3 days). To get a clean **module label** on your lines, include a module-type field the capturer recognizes (`charger`/`vehicle`/`tariff`/`balancer`/`meter`/`loadpoint` — e.g. `ctx.log.info({ tariff: name }, 'ready')`) or set your own with `ctx.log.child({ module: 'my-mod' })`. `console.*` is *also* captured as a safety net (so a stray `console.log` from a dependency isn't lost) but arrives unlabeled — and a logger you construct yourself that writes straight to stdout is **not** captured. Prefer `ctx.log`.
 
 ## Module health
 

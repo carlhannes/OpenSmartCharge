@@ -121,6 +121,20 @@ function runMigrations(db: DatabaseSync): void {
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (kind, name)
     );
+
+    -- Runtime log ring buffer, auto-rotated by age (settings 'logs.retention_days', default 3) with a
+    -- hard row-cap backstop. Captured from the single pino instance (all core + modules) plus a console
+    -- tee for non-conforming plugins; queried newest-first by GET /api/logs. Pure runtime, never seeded.
+    CREATE TABLE IF NOT EXISTS logs (
+      id     INTEGER PRIMARY KEY AUTOINCREMENT,
+      time   TEXT NOT NULL,   -- ISO 8601 UTC (sorts chronologically = by insert order)
+      level  TEXT NOT NULL,   -- 'debug' | 'info' | 'warn' | 'error'
+      module TEXT,            -- best-effort component label (nullable)
+      msg    TEXT NOT NULL,
+      fields TEXT,            -- JSON of remaining structured context (nullable)
+      err    TEXT             -- stack / error string when present (nullable)
+    );
+    CREATE INDEX IF NOT EXISTS idx_logs_time ON logs (time);
   `)
 
   // Additive migrations for pre-existing DBs — `CREATE TABLE IF NOT EXISTS` won't add a
