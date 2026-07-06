@@ -96,8 +96,6 @@ const loadpointConfigSchema = z.object({
   // Minimum SoC (%) safety floor. In smart mode, if the car's SoC drops below this, OSC
   // force-charges immediately (bypassing the price wait). See docs/config.md.
   minSoc: z.number().min(0).max(100).optional(),
-  /** Auto-start a transaction when a vehicle connects (default: true) */
-  autoStart: z.boolean().default(true),
 })
 
 const mqttConfigSchema = z.object({

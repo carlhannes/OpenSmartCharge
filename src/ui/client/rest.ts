@@ -16,7 +16,6 @@ export interface LoadpointStateDto {
   currentA: number
   sessionEnergyKWh: number
   maxCurrentA: number
-  autoStart: boolean
 }
 
 export interface TariffSlotDto {
@@ -89,7 +88,6 @@ export interface SiteLoadpointDto {
   tariff?: string
   vehicle?: string
   maxCurrentA: number
-  autoStart: boolean
   targetSoc?: number
   targetTime?: string
   targetKWh?: number

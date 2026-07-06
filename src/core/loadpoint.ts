@@ -17,8 +17,6 @@ export interface LoadpointState {
   sessionEnergyKWh: number
   /** Config-derived ceiling, not persisted */
   maxCurrentA: number
-  /** Whether to auto-start a transaction on plug-in */
-  autoStart: boolean
 }
 
 /** The live, charger-driven subset of loadpoint state. */
@@ -60,7 +58,6 @@ interface DbRow {
 export interface LoadpointInit {
   name: string
   maxCurrentA?: number
-  autoStart?: boolean
   defaultMode?: ChargeMode
   /** Config-provided targets, seeded into a NEW loadpoint's persisted row. */
   targetSoc?: number
@@ -83,7 +80,7 @@ export function loadLoadpointStates(
 
   const states = new Map<string, LoadpointState>()
   for (const init of inits) {
-    const { name, maxCurrentA = 16, autoStart = true, defaultMode = 'smart' } = init
+    const { name, maxCurrentA = 16, defaultMode = 'smart' } = init
     insert.run(
       name,
       defaultMode,
@@ -105,7 +102,6 @@ export function loadLoadpointStates(
       currentA: 0,
       sessionEnergyKWh: 0,
       maxCurrentA,
-      autoStart,
     })
   }
   return states
@@ -119,7 +115,6 @@ export function configToLoadpointInits(config: Config): LoadpointInit[] {
     return {
       name: lp.name,
       maxCurrentA: (chargerCfg as { maxA?: number } | undefined)?.maxA ?? 16,
-      autoStart: lp.autoStart,
       defaultMode: lp.defaultMode,
       targetSoc: lp.targetSoc,
       targetTime: lp.targetTime,

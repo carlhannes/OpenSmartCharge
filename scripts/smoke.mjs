@@ -94,7 +94,6 @@ writeFileSync(SMOKE_CONFIG, [
   `  - name: ${LOADPOINT}`,
   `    charger: smoke-charger`,
   `    defaultMode: smart`,
-  `    autoStart: false`,
 ].join('\n'))
 
 if (!existsSync('./dist/core/lifecycle.js')) {

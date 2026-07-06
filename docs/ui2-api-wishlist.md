@@ -42,8 +42,9 @@ remove + re-add; not wired as a single call.
 - `DELETE /api/chargers/:name` — removes the charger + its loadpoint; the socket reverts to pending.
   Refused with `409 { error, hint }` if a loadpoint on it is actively charging (`hint: "Please disable
   this charger before deleting it."` — safe to show verbatim), unless you pass `?force=true`.
-- **Safety fix:** an unclaimed connected charger now defaults `autoStart: false` — OSC won't start a
-  session on a charger it doesn't manage yet.
+- **Safety fix:** an unclaimed connected charger now defaults `autoStartTransaction: false` — OSC won't
+  start a session on a charger it doesn't manage yet. (Renamed from `autoStart`; it's a charger-config
+  field now — the dead `loadpoints[].autoStart` duplicate was removed, so drop it from the loadpoint DTO.)
 
 ## 4. Vehicle management ✅
 - `POST /api/vehicles { name, type:"skoda", username, password, vin }` — returns 201 immediately; auth +
@@ -64,8 +65,8 @@ No new SSE plumbing — it rides the existing `*` wildcard → `/events`. Re-fet
 
 ## 6. `GET /api/site` consistency ✅
 - `site.timezone` now returns the **runtime** value (`getTimezone`), matching `GET /api/settings`.
-- `loadpoints[].{ targetSoc, targetTime, targetKWh, maxCurrentA, autoStart, minSoc }` now come from the
-  **live** `LoadpointState`, not config seeds.
+- `loadpoints[].{ targetSoc, targetTime, targetKWh, maxCurrentA, minSoc }` now come from the
+  **live** `LoadpointState`, not config seeds. (`autoStart` was removed from the loadpoint DTO.)
 - Structural fields (chargers/balancers/tariffs/vehicles, incl. runtime-added ones) reflect the effective
   config automatically.
 

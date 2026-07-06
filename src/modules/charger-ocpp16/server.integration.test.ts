@@ -55,10 +55,10 @@ async function connectCharger(
   h: Harness,
   stationId: string,
   opts: Parameters<typeof createMockCharger>[2] = {},
-  autoStart = false,
+  autoStartTransaction = false,
 ): Promise<{ charger: MockCharger; statuses: ChargerStatus[] }> {
   const statuses: ChargerStatus[] = []
-  h.ocpp.registerStation(stationId, autoStart)
+  h.ocpp.registerStation(stationId, autoStartTransaction)
   h.ocpp.onStatus(stationId, (s) => statuses.push(s))
   const charger = createMockCharger(stationId, `ws://localhost:${h.port}/ocpp`, opts)
   await charger.connect()

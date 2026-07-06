@@ -46,7 +46,7 @@ import {
   triggerMessage as cmdTriggerMessage,
   type CompositeScheduleResp,
 } from './commands.js'
-import { computeConnectionState, shouldAutoStart, computeHealth } from './status.js'
+import { computeConnectionState, shouldAutoStartTransaction, computeHealth } from './status.js'
 import { latestReadings } from './meter-parser.js'
 
 type StatusCallback = (status: ChargerStatus) => void
@@ -65,7 +65,7 @@ interface StationState {
   activeTransactionId?: number
   connectorId: number
   statusCallbacks: Set<StatusCallback>
-  autoStart: boolean
+  autoStartTransaction: boolean
 }
 
 export class OcppServer {
@@ -117,12 +117,12 @@ export class OcppServer {
 
   private readonly _loadpointNames = new Map<string, string>()
 
-  registerStation(stationId: string, autoStart: boolean): void {
-    this._pendingAutoStart.set(stationId, autoStart)
-    // If the station is ALREADY connected (claiming an unclaimed charger), update its live autoStart
-    // too — otherwise the flag captured at connect (false for unclaimed) sticks until the next reconnect.
+  registerStation(stationId: string, autoStartTransaction: boolean): void {
+    this._pendingAutoStart.set(stationId, autoStartTransaction)
+    // If the station is ALREADY connected (claiming an unclaimed charger), update its live flag too —
+    // otherwise the value captured at connect (false for unclaimed) sticks until the next reconnect.
     const s = this.stations.get(stationId)
-    if (s) s.autoStart = autoStart
+    if (s) s.autoStartTransaction = autoStartTransaction
     this.log.debug({ stationId }, 'station registered')
   }
 
@@ -132,7 +132,7 @@ export class OcppServer {
     this._loadpointNames.delete(stationId)
     this.phasesByStation.delete(stationId)
     const s = this.stations.get(stationId)
-    if (s) s.autoStart = false
+    if (s) s.autoStartTransaction = false
   }
 
   setLoadpointName(stationId: string, loadpointName: string): void {
@@ -312,15 +312,15 @@ export class OcppServer {
 
     this.log.info({ stationId }, 'OCPP station connected')
 
-    // Unregistered (unclaimed) stations default autoStart=false — never auto-start a transaction on
-    // a charger OSC doesn't manage yet. Registered stations use their configured autoStart.
-    const autoStart = this._pendingAutoStart.get(stationId) ?? false
+    // Unregistered (unclaimed) stations default to autoStartTransaction=false — never auto-start a
+    // transaction on a charger OSC doesn't manage yet. Registered stations use their configured value.
+    const autoStartTransaction = this._pendingAutoStart.get(stationId) ?? false
     this.pendingInfo.set(stationId, { firstSeenAt: new Date() })
     const state: StationState = {
       client,
       connectorId: 1,
       statusCallbacks: this.subsFor(stationId), // persistent set — survives reconnects
-      autoStart,
+      autoStartTransaction,
       // Rehydrate any in-progress transaction from SQLite: on an OSC restart or a bare WS
       // reconnect the charger does NOT re-send StartTransaction, so without this the in-memory id
       // is lost (remoteStop breaks, meter values get dropped). MeterValues below re-adopt the
@@ -436,7 +436,13 @@ export class OcppServer {
       })
 
       // Auto-start: send RemoteStartTransaction when vehicle plugs in and no tx is active
-      if (shouldAutoStart(p.status, !!state.activeTransactionId, state.autoStart)) {
+      if (
+        shouldAutoStartTransaction(
+          p.status,
+          !!state.activeTransactionId,
+          state.autoStartTransaction,
+        )
+      ) {
         this.log.info({ stationId }, 'auto-starting transaction')
         setImmediate(() => {
           void remoteStart(state.client, 'osc-auto', p.connectorId).catch((err) =>

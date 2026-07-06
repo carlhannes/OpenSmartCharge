@@ -80,6 +80,8 @@ chargers:
     stationId: MYCHARGER01   # must match the chargepoint identifier in your charger's settings
     maxA: 16                 # maximum current the charger may deliver — ceiling for smart/fast modes
     phases: 3                # physical phase count (default 3) — sent as numberPhases in the charging profile
+    autoStartTransaction: true  # auto-send RemoteStartTransaction when a car plugs in (Preparing);
+                                # default true — set false to require app/RFID start on the charger
 
 # Loadpoints: the control unit that connects a charger to a circuit + pricing + vehicle.
 # One loadpoint per charger. Multiple loadpoints can share a balancer.
@@ -90,8 +92,6 @@ loadpoints:
     tariff: home
     balancer: house-main
     defaultMode: smart       # disabled | smart | fast
-    autoStart: true          # send RemoteStartTransaction when a vehicle plugs in (Preparing state)
-                             # set false to require app/RFID start on the charger itself
     targetSoc: 80            # default charge target (%)
     # targetTime: "07:00"    # daily departure time (HH:MM, local time)
                              # smart mode will plan cheap-slot charging to hit targetSoc by this time

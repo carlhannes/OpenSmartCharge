@@ -288,7 +288,6 @@ export function createApiRouter(deps: ApiDeps): Router {
       balancer: refName(b.balancer),
       vehicle: refName(b.vehicle),
       defaultMode: 'smart',
-      autoStart: true,
     })
     await deps.reconcile.addCharger(name)
     deps.reconcile.addLoadpoint(name)
@@ -833,7 +832,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       // PUT /api/settings — serve the live value so clients see one truth.
       site: { ...c.site, timezone: getTimezone(deps.db) },
       loadpoints: c.loadpoints.map((lp) => {
-        // targets/autoStart/maxCurrentA are RUNTIME state (edited via /loadpoints + /plans and
+        // targets/maxCurrentA are RUNTIME state (edited via /loadpoints + /plans and
         // persisted), not config seeds — read the live LoadpointState so /api/site doesn't lie.
         const st = deps.loadpoints.get(lp.name)
         return {
@@ -847,7 +846,6 @@ export function createApiRouter(deps: ApiDeps): Router {
             (c.chargers.find((ch) => ch.name === lp.charger) as { maxA?: number } | undefined)
               ?.maxA ??
             16,
-          autoStart: st?.autoStart ?? lp.autoStart,
           targetSoc: st?.targetSoc,
           targetTime: st?.targetTime,
           targetKWh: st?.targetKWh,

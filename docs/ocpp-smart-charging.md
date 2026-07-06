@@ -141,7 +141,7 @@ known VW-group trait; the same current-only pause/resume works on many other car
 `~0 A` beyond a ramp-grace window, the control loop issues `RemoteStop`+`RemoteStart`. It is guarded
 by a grace window (absorbs the normal `SuspendedEVSE→Charging` ramp), a cooldown between attempts, and
 a max-retries cap (never stop/starts a genuinely stuck car forever). It requires an **open** session,
-so it only ever *resumes* — never *starts* a transaction — which keeps `autoStart: false` meaningful.
+so it only ever *resumes* — never *starts* a transaction — which keeps `autoStartTransaction: false` meaningful.
 
 ## References
 - Zaptec native OCPP 1.6J docs & release notes: <https://docs.zaptec.com/docs/ocpp16j>,

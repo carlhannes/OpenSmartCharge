@@ -855,8 +855,8 @@ async function main() {
 
       // Resume-nudge: a car that WANTS current but sits at ~0 A inside an open session (a SuspendedEV
       // latch — VW group after a 0 A pause) won't restart from a limit change; kick it with
-      // RemoteStop+RemoteStart. Only resumes an open transaction (never starts one → autoStart is
-      // respected); guarded by ramp-grace / cooldown / max-retries inside resumeNudgeDecision.
+      // RemoteStop+RemoteStart. Only resumes an open transaction (never starts one → autoStartTransaction
+      // is respected); guarded by ramp-grace / cooldown / max-retries inside resumeNudgeDecision.
       const nudgeNowMs = now.getTime()
       for (const r of resolved) {
         const lpId = r.state.name

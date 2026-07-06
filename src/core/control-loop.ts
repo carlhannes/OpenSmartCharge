@@ -129,8 +129,8 @@ export interface ResumeNudgeCfg {
  * ~0 A, we resume it.
  *
  * Requiring an active session is deliberate: it means we only ever RESUME an open transaction, never
- * START one — so `autoStart: false` is respected (only connect-time autostart or a manual start opens
- * a session). Guards: `graceMs` absorbs the normal ramp, `cooldownMs` spaces retries so a fresh
+ * START one — so `autoStartTransaction: false` is respected (only connect-time auto-start or a manual
+ * start opens a session). Guards: `graceMs` absorbs the normal ramp, `cooldownMs` spaces retries so a fresh
  * transaction can ramp, and `maxNudges` stops us stop/starting a genuinely-stuck car forever.
  *
  * Pure: returns the decision + the next state (no mutation).

@@ -17,15 +17,15 @@ export function computeConnectionState(status: string): { charging: boolean; con
 }
 
 /**
- * Auto-start fires once when a vehicle plugs in (`Preparing`) and no transaction is
- * already active, provided the loadpoint has auto-start enabled.
+ * Auto-start-transaction fires once when a vehicle plugs in (`Preparing`) and no transaction is
+ * already active, provided the charger has `autoStartTransaction` enabled.
  */
-export function shouldAutoStart(
+export function shouldAutoStartTransaction(
   status: string,
   hasActiveTransaction: boolean,
-  autoStartEnabled: boolean,
+  enabled: boolean,
 ): boolean {
-  return status === 'Preparing' && !hasActiveTransaction && autoStartEnabled
+  return status === 'Preparing' && !hasActiveTransaction && enabled
 }
 
 /**

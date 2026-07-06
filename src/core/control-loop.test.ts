@@ -25,7 +25,7 @@ const snap = (i1: number, i2: number, i3: number): MeterSnapshot => ({
 })
 
 const lp = (name: string, balancer?: string): LoadpointConfig =>
-  ({ name, charger: name, balancer, defaultMode: 'smart', autoStart: true }) as LoadpointConfig
+  ({ name, charger: name, balancer, defaultMode: 'smart' }) as LoadpointConfig
 
 test('circuitOwnDrawA sums max(currentA, commandedA) across the circuit (generalized credit-back)', () => {
   const states = new Map([
@@ -104,7 +104,7 @@ test('resumeNudgeDecision: nudges a stuck active session after grace, then respe
   expect(resumeNudgeDecision(r.next, { ...stuck, now: 700_000 }, cfg).nudge).toBe(false)
 })
 
-test('resumeNudgeDecision: no nudge without an active session (respects autoStart), when drawing, paused, or unplugged', () => {
+test('resumeNudgeDecision: no nudge without an active session (respects autoStartTransaction), when drawing, paused, or unplugged', () => {
   const cfg = { minDrawA: 1, graceMs: 90_000, cooldownMs: 180_000, maxNudges: 3 }
   const base = {
     wantsCharge: true,
@@ -113,7 +113,7 @@ test('resumeNudgeDecision: no nudge without an active session (respects autoStar
     drawingA: 0,
     now: 200_000,
   }
-  // Preparing (no open transaction) → must NOT start one here — that's autoStart's job
+  // Preparing (no open transaction) → must NOT start one here — that's autoStartTransaction's job
   expect(resumeNudgeDecision({ nudges: 0 }, { ...base, sessionActive: false }, cfg).nudge).toBe(
     false,
   )

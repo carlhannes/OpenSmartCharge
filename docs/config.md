@@ -201,11 +201,14 @@ chargers:
     stationId: MYCHARGER01   # must match the chargepoint identifier configured in the charger
     maxA: 16                 # optional, default 16 — maximum current this charger may deliver
     phases: 3                # optional, default 3 — physical phases; sent as numberPhases in the charging profile
+    autoStartTransaction: true  # optional, default true — auto-send RemoteStartTransaction on plug-in
 ```
 
 **Built-in types:** `ocpp16`
 
 `maxA` is the ceiling used by the loadpoint when issuing `SetChargingProfile`. The balancer (M3) may set a lower value based on circuit headroom, but it will never exceed `maxA`.
+
+`autoStartTransaction` (default `true`) makes OSC send `RemoteStartTransaction` as soon as a car plugs in (the charger reports `Preparing`) — on by default because many chargers/cars won't open a transaction on their own. Set it `false` to require an app/RFID start on the charger.
 
 ### `loadpoints[]`
 
@@ -219,11 +222,6 @@ loadpoints:
     tariff: home              # optional — must match a name in tariffs[]
     balancer: house-main      # optional — must match a name in balancers[]
     defaultMode: smart        # disabled | smart | fast
-    autoStart: true           # optional, default true — send RemoteStartTransaction when a
-                              # vehicle plugs in (Preparing status). Set false to require
-                              # app/RFID start on the charger itself.
-                              # On by default because many cheap OCPP chargers won't initiate
-                              # a transaction without it.
     targetSoc: 80             # default charge target (%) — used when a vehicle SoC is available
     targetTime: "07:00"       # daily departure time (HH:MM, site-local — see site.timezone)
                               # if omitted, smart mode charges as cheaply as possible
@@ -260,7 +258,7 @@ To declaratively re-apply the config file onto the database — overwriting the 
 npm run config:apply    # reads osc.yaml (OSC_CONFIG) → writes data/osc.db (OSC_DATA_DIR)
 ```
 
-It prints a before→after diff per loadpoint and exits; it does not start the server. Use it after editing `osc.yaml`, or to reset runtime tweaks back to the declared config. (`maxA` and `autoStart` are re-read from config on every boot and are not persisted.)
+It prints a before→after diff per loadpoint and exits; it does not start the server. Use it after editing `osc.yaml`, or to reset runtime tweaks back to the declared config. (`maxA` and `autoStartTransaction` are re-read from config on every boot and are not persisted.)
 
 **It writes the database, so restart (or start) the server for it to take effect** — a running server holds its loadpoint state in memory and won't pick up the change until it reboots.
 

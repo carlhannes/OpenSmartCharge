@@ -302,7 +302,7 @@ test('PUT site/tariff/balancer persist overrides + reconcile; GET /api/site refl
     const deps = {
       db,
       config,
-      loadpoints: new Map([['garage', { name: 'garage', maxCurrentA: 16, autoStart: true }]]),
+      loadpoints: new Map([['garage', { name: 'garage', maxCurrentA: 16 }]]),
       events: { emit: () => true },
       reconcile: {
         reloadSite: () => applyEff(),
@@ -398,7 +398,10 @@ test('charger management: pending list, claim (+ loadpoint), edit (merge), remov
         stationId: 'ST9',
         maxA: 20,
       })
-      expect(getOverride(db, 'loadpoint', 'g2')).toMatchObject({ charger: 'g2', autoStart: true })
+      expect(getOverride(db, 'loadpoint', 'g2')).toMatchObject({
+        charger: 'g2',
+        defaultMode: 'smart',
+      })
 
       expect(
         (await postJson(`${baseUrl}/api/chargers`, { stationId: 'ST9', name: 'g2' })).status,
