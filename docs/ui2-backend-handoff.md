@@ -93,6 +93,7 @@ interface PlanDto {
   when not charging — use it for the kW readout rather than deriving from `currentA`) and
   **`resolve?: { shouldChargeNow?, budgetA, sources:{energy,price,current} }`** — the control loop's latest
   decision (the "why": wants-to-charge, the circuit amp budget, which ladder rung each resolver used).
+  `shouldChargeNow` is smart-mode-only — absent in fast/disabled; don't read absent as `false`.
 - `powerW` also rides the **`loadpoint.state`** SSE. A new **`loadpoint.resolve`** SSE `{ name, ...resolve }`
   fires when the decision changes (change-guarded, not every tick). Both are in the mock. See wishlist §8.
 

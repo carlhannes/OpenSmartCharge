@@ -21,7 +21,9 @@ export interface LoadpointState {
   maxCurrentA: number
   /** Latest control-loop decision — the "why" behind charging/pausing. Resolver-derived,
    * recomputed each tick, not persisted; undefined until the first tick. `budgetA` is the CIRCUIT
-   * budget (bare loadpoint = its own; balancer = the shared pool it splits). */
+   * budget (bare loadpoint = its own; balancer = the shared pool it splits). `shouldChargeNow` is a
+   * SMART-mode decision only — undefined in fast (charges unconditionally) and disabled (never charges),
+   * where `mode` itself is the "why"; consumers must read its absence as "mode decides", not false. */
   resolve?: {
     shouldChargeNow?: boolean
     budgetA: number

@@ -84,7 +84,9 @@ fetch/poll), plus one new SSE event. No new settings — pure readout.
   loadpoint = its own; balancer = the shared pool it splits), and which ladder rung each resolver used
   (`sources.energy`/`price`/`current` strings, e.g. `soc-capacity` / `live-tariff` / `live-meter`).
   `undefined` until the first tick. This is the structured "why is it charging / paused" that previously
-  lived only in the `circuit resolve` debug log.
+  lived only in the `circuit resolve` debug log. **`shouldChargeNow` is smart-mode-only** — a boolean in
+  smart mode, **absent** in fast/disabled (where `mode` is the answer: fast charges unconditionally,
+  disabled never does). Read absent as "mode decides", **not** as `false`.
 - **`loadpoint.resolve` SSE** `{ name, ...resolve }` — pushed when the decision **changes** (change-guarded,
   not every tick), on the `*` wildcard → `/events` like the others. `powerW` also now rides the existing
   **`loadpoint.state`** event. The mock (`scripts/mock-backend.mjs`) emits both.

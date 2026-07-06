@@ -45,11 +45,13 @@ let siteBreaker = 25; // site-level main breaker (A) — PUT /api/site
 let tariffZone = "SE3"; // primary tariff zone — PUT /api/tariffs/:name
 let chargerLabel = "garage"; // charger display label — PUT /api/chargers/:name { label }
 
-// The control loop's per-tick decision — mirrors LoadpointState.resolve. shouldChargeNow tracks the
-// sim's "still below target"; budgetA is the amp cap being applied; sources name a plausible ladder rung.
+// The control loop's per-tick decision — mirrors LoadpointState.resolve. budgetA is the amp cap being
+// applied; sources name a plausible ladder rung. shouldChargeNow is a SMART-mode-only decision (like the
+// real resolver): present in smart, OMITTED in fast/disabled where `mode` is the "why".
 const resolveDto = () => ({
-  shouldChargeNow:
-    lp.connected && lp.mode !== "disabled" && (lp.targetSoc == null || veh.soc < lp.targetSoc),
+  ...(lp.mode === "smart"
+    ? { shouldChargeNow: lp.connected && (lp.targetSoc == null || veh.soc < lp.targetSoc) }
+    : {}),
   budgetA: oneShotCap ?? lp.maxCurrentA,
   sources: { energy: "soc-capacity", price: "live-tariff", current: "live-meter" },
 });
