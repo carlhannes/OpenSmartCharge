@@ -16,6 +16,7 @@ const sections = [
   },
   { to: "/settings/house", label: "House & load balancing", desc: "Breaker, Tibber Pulse, meter." },
   { to: "/settings/system", label: "System status", desc: "Modules, health, backup." },
+  { to: "/settings/logs", label: "Logs", desc: "System logs — filter by level and date." },
   { to: "/settings/about", label: "About", desc: "Version, docs, reset." },
 ];
 

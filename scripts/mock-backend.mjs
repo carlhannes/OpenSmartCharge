@@ -45,6 +45,37 @@ let siteBreaker = 25; // site-level main breaker (A) — PUT /api/site
 let tariffZone = "SE3"; // primary tariff zone — PUT /api/tariffs/:name
 let chargerLabel = "garage"; // charger display label — PUT /api/chargers/:name { label }
 
+// Logs (ring buffer) for the /api/logs viewer — seeded across ~a day + appended live below.
+const logModules = ["charger", "vehicle", "tariff", "balancer", "ocpp", "loadpoint"];
+const logMsgs = {
+  info: ["module started", "charger connected", "tariff prices updated", "plan resolved", "session finished"],
+  debug: ["tick ok", "poll ok (312ms)", "cache hit", "allocation computed"],
+  warn: ["vehicle poll slow (2.3s)", "meter reading stale", "price fallback used", "reconnecting"],
+  error: ["OCPP reset failed: timeout", "vehicle auth failed", "meter unreachable"],
+};
+const logCycle = ["info", "info", "debug", "info", "warn", "info", "debug", "warn", "info", "error"];
+const pick = (arr, i) => arr[((i % arr.length) + arr.length) % arr.length];
+let logSeq = 1001;
+let logs = Array.from({ length: 30 }, (_, i) => {
+  const level = pick(logCycle, i);
+  const module = pick(logModules, i);
+  const msg = pick(logMsgs[level], i);
+  return {
+    id: 1000 - i, // newest = highest id
+    time: new Date(Date.now() - i * 47 * 60000).toISOString(), // ~47 min apart → ~1 day span
+    level,
+    module,
+    msg,
+    ...(level === "error"
+      ? {
+          err: `Error: ${msg}\n    at Module.tick (charger.ts:142)\n    at Loop.run (lifecycle.ts:820)`,
+          fields: { attempt: 2, code: "ETIMEDOUT" },
+        }
+      : {}),
+    ...(level === "warn" ? { fields: { latencyMs: 2300 } } : {}),
+  };
+});
+
 // The control loop's per-tick decision — mirrors LoadpointState.resolve. budgetA is the amp cap being
 // applied; sources name a plausible ladder rung. shouldChargeNow is a SMART-mode-only decision (like the
 // real resolver): present in smart, OMITTED in fast/disabled where `mode` is the "why".
@@ -143,6 +174,19 @@ setInterval(() => {
 setInterval(() => {
   for (const res of clients) res.write(": heartbeat\n\n");
 }, 30000);
+
+// Append a synthetic log line periodically so the viewer's auto-refresh visibly updates.
+setInterval(() => {
+  const level = pick(["info", "debug", "info", "warn"], logSeq);
+  logs.push({
+    id: logSeq++,
+    time: new Date().toISOString(),
+    level,
+    module: pick(logModules, logSeq),
+    msg: pick(logMsgs[level], logSeq),
+  });
+  if (logs.length > 500) logs = logs.slice(-500);
+}, 10000);
 
 const send = (res, obj, code = 200) => {
   res.writeHead(code, { "content-type": "application/json", "access-control-allow-origin": "*" });
@@ -414,6 +458,27 @@ const server = http.createServer((req, res) => {
         soc: 40 + i * 2,
       })),
     });
+
+  if (p === "/api/logs" && req.method === "GET") {
+    const u = new URL(req.url, "http://x");
+    const order = ["debug", "info", "warn", "error"];
+    const lvl = u.searchParams.get("level");
+    const minRank = lvl ? order.indexOf(lvl) : 0;
+    const sinceMs = u.searchParams.get("since") ? Date.parse(u.searchParams.get("since")) : -Infinity;
+    const untilMs = u.searchParams.get("until") ? Date.parse(u.searchParams.get("until")) : Infinity;
+    const q = (u.searchParams.get("q") || "").toLowerCase();
+    const limit = Math.min(Number(u.searchParams.get("limit") || 200), 500);
+    const out = logs
+      .filter((l) => order.indexOf(l.level) >= minRank)
+      .filter((l) => {
+        const t = Date.parse(l.time);
+        return t >= sinceMs && t <= untilMs;
+      })
+      .filter((l) => !q || `${l.module || ""} ${l.msg}`.toLowerCase().includes(q))
+      .sort((a, b) => b.id - a.id)
+      .slice(0, limit);
+    return send(res, out);
+  }
 
   res.writeHead(404, { "access-control-allow-origin": "*" });
   res.end("not found");

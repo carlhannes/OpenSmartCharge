@@ -16,9 +16,23 @@ export interface LoadpointStateDto {
   connected: boolean;
   charging: boolean;
   currentA: number;
+  powerW: number; // instantaneous draw (W) from MeterValues; 0 when not charging
   sessionEnergyKWh: number;
   maxCurrentA: number;
   availableTargetUnits?: PlanDto["unit"][]; // units the data can back now (kwh always; pct/km need car data)
+  resolve?: LoadpointResolveDto; // latest control-loop decision (the "why"); undefined until first tick
+}
+
+// The control loop's per-tick decision: whether to charge now, the circuit budget it's splitting, and
+// which ladder rung each resolver fell back to. Mirrors src/core/loadpoint.ts LoadpointState.resolve.
+// Also arrives live via the `loadpoint.resolve` SSE event as `{ name, ...LoadpointResolveDto }`.
+export interface LoadpointResolveDto {
+  // SMART-mode decision only: present (boolean) in smart mode, ABSENT in fast/disabled — where `mode`
+  // is the "why" (fast charges unconditionally, disabled never does). Treat absent as "mode decides",
+  // NOT as false.
+  shouldChargeNow?: boolean;
+  budgetA: number; // CIRCUIT budget (bare loadpoint = its own; balancer = the shared pool it splits)
+  sources: { energy: string; price: string; current: string };
 }
 
 export interface PlanDto {
@@ -243,3 +257,31 @@ export const getTransactions = (opts?: { loadpoint?: string; limit?: number }) =
 };
 export const getTransaction = (id: number) =>
   apiFetch<TransactionDetailDto>(`/api/transactions/${id}`);
+
+// Logs (read-only viewer). See docs/ui2-logs-handoff.md for the backend contract.
+export type LogLevel = "debug" | "info" | "warn" | "error";
+export interface LogEntry {
+  id: number;
+  time: string; // ISO
+  level: LogLevel;
+  module?: string;
+  msg: string;
+  fields?: Record<string, unknown>; // structured context
+  err?: string; // stack / error string when present
+}
+export const getLogs = (opts?: {
+  level?: LogLevel; // minimum severity
+  since?: string; // ISO
+  until?: string; // ISO
+  limit?: number;
+  q?: string;
+}) => {
+  const params = new URLSearchParams();
+  if (opts?.level) params.set("level", opts.level);
+  if (opts?.since) params.set("since", opts.since);
+  if (opts?.until) params.set("until", opts.until);
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.q) params.set("q", opts.q);
+  const qs = params.size > 0 ? `?${params}` : "";
+  return apiFetch<LogEntry[]>(`/api/logs${qs}`);
+};

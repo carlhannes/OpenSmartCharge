@@ -17,6 +17,7 @@ import { Route as SettingsIndexRouteImport } from './routes/settings.index'
 import { Route as SettingsVehiclesRouteImport } from './routes/settings.vehicles'
 import { Route as SettingsSystemRouteImport } from './routes/settings.system'
 import { Route as SettingsRegionRouteImport } from './routes/settings.region'
+import { Route as SettingsLogsRouteImport } from './routes/settings.logs'
 import { Route as SettingsHouseRouteImport } from './routes/settings.house'
 import { Route as SettingsChargersRouteImport } from './routes/settings.chargers'
 import { Route as SettingsAboutRouteImport } from './routes/settings.about'
@@ -63,6 +64,11 @@ const SettingsRegionRoute = SettingsRegionRouteImport.update({
   path: '/region',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsLogsRoute = SettingsLogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsHouseRoute = SettingsHouseRouteImport.update({
   id: '/house',
   path: '/house',
@@ -99,6 +105,7 @@ export interface FileRoutesByFullPath {
   '/settings/about': typeof SettingsAboutRoute
   '/settings/chargers': typeof SettingsChargersRoute
   '/settings/house': typeof SettingsHouseRoute
+  '/settings/logs': typeof SettingsLogsRoute
   '/settings/region': typeof SettingsRegionRoute
   '/settings/system': typeof SettingsSystemRoute
   '/settings/vehicles': typeof SettingsVehiclesRoute
@@ -113,6 +120,7 @@ export interface FileRoutesByTo {
   '/settings/about': typeof SettingsAboutRoute
   '/settings/chargers': typeof SettingsChargersRoute
   '/settings/house': typeof SettingsHouseRoute
+  '/settings/logs': typeof SettingsLogsRoute
   '/settings/region': typeof SettingsRegionRoute
   '/settings/system': typeof SettingsSystemRoute
   '/settings/vehicles': typeof SettingsVehiclesRoute
@@ -129,6 +137,7 @@ export interface FileRoutesById {
   '/settings/about': typeof SettingsAboutRoute
   '/settings/chargers': typeof SettingsChargersRoute
   '/settings/house': typeof SettingsHouseRoute
+  '/settings/logs': typeof SettingsLogsRoute
   '/settings/region': typeof SettingsRegionRoute
   '/settings/system': typeof SettingsSystemRoute
   '/settings/vehicles': typeof SettingsVehiclesRoute
@@ -146,6 +155,7 @@ export interface FileRouteTypes {
     | '/settings/about'
     | '/settings/chargers'
     | '/settings/house'
+    | '/settings/logs'
     | '/settings/region'
     | '/settings/system'
     | '/settings/vehicles'
@@ -160,6 +170,7 @@ export interface FileRouteTypes {
     | '/settings/about'
     | '/settings/chargers'
     | '/settings/house'
+    | '/settings/logs'
     | '/settings/region'
     | '/settings/system'
     | '/settings/vehicles'
@@ -175,6 +186,7 @@ export interface FileRouteTypes {
     | '/settings/about'
     | '/settings/chargers'
     | '/settings/house'
+    | '/settings/logs'
     | '/settings/region'
     | '/settings/system'
     | '/settings/vehicles'
@@ -246,6 +258,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsRegionRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/logs': {
+      id: '/settings/logs'
+      path: '/logs'
+      fullPath: '/settings/logs'
+      preLoaderRoute: typeof SettingsLogsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/house': {
       id: '/settings/house'
       path: '/house'
@@ -311,6 +330,7 @@ interface SettingsRouteChildren {
   SettingsAboutRoute: typeof SettingsAboutRoute
   SettingsChargersRoute: typeof SettingsChargersRoute
   SettingsHouseRoute: typeof SettingsHouseRoute
+  SettingsLogsRoute: typeof SettingsLogsRoute
   SettingsRegionRoute: typeof SettingsRegionRoute
   SettingsSystemRoute: typeof SettingsSystemRoute
   SettingsVehiclesRoute: typeof SettingsVehiclesRoute
@@ -321,6 +341,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAboutRoute: SettingsAboutRoute,
   SettingsChargersRoute: SettingsChargersRoute,
   SettingsHouseRoute: SettingsHouseRoute,
+  SettingsLogsRoute: SettingsLogsRoute,
   SettingsRegionRoute: SettingsRegionRoute,
   SettingsSystemRoute: SettingsSystemRoute,
   SettingsVehiclesRoute: SettingsVehiclesRoute,
