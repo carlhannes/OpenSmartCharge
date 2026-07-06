@@ -18,7 +18,6 @@ export interface LoadpointStateDto {
   currentA: number;
   sessionEnergyKWh: number;
   maxCurrentA: number;
-  autoStart: boolean;
   availableTargetUnits?: PlanDto["unit"][]; // units the data can back now (kwh always; pct/km need car data)
 }
 
@@ -114,7 +113,6 @@ export interface SiteLoadpointDto {
   tariff?: string;
   vehicle?: string;
   maxCurrentA: number;
-  autoStart: boolean;
   targetSoc?: number;
   targetTime?: string;
   targetKWh?: number;

@@ -21,7 +21,6 @@ const lp = {
   currentA: 10,
   sessionEnergyKWh: 3.2,
   maxCurrentA: 16,
-  autoStart: true,
   minSoc: 20,
 };
 const veh = { soc: 62, range: 310, batteryCapacity: 77 };
@@ -56,7 +55,6 @@ const loadpointDto = () => ({
   currentA: lp.charging ? lp.currentA : 0,
   sessionEnergyKWh: +lp.sessionEnergyKWh.toFixed(2),
   maxCurrentA: lp.maxCurrentA,
-  autoStart: lp.autoStart,
   availableTargetUnits: [
     ...(veh.soc != null && veh.batteryCapacity != null ? ["pct"] : []),
     ...(veh.range != null ? ["km"] : []),
@@ -343,7 +341,7 @@ const server = http.createServer((req, res) => {
     return send(res, {
       site: { name: "Mock Home", port: PORT, mainBreakerA: siteBreaker, timezone: settings.timezone },
       loadpoints: [
-        { name: "garage", charger: "garage", tariff: "home", balancer: "house", vehicle: "enyaq", maxCurrentA: lp.maxCurrentA, autoStart: true },
+        { name: "garage", charger: "garage", tariff: "home", balancer: "house", vehicle: "enyaq", maxCurrentA: lp.maxCurrentA },
       ],
       chargers: [{ name: "garage", type: "ocpp16", stationId: "MOCK-1", maxA: lp.maxCurrentA }],
       balancers: [{ name: "house", type: "mqtt-circuit", mainBreakerA: siteBreaker, phases: 3 }],
