@@ -42,6 +42,7 @@ let nextPlanId = 2;
 let settings = { timezone: "Europe/Stockholm" };
 let siteBreaker = 25; // site-level main breaker (A) — PUT /api/site
 let tariffZone = "SE3"; // primary tariff zone — PUT /api/tariffs/:name
+let chargerLabel = "garage"; // charger display label — PUT /api/chargers/:name { label }
 
 const loadpointDto = () => ({
   name: lp.name,
@@ -199,6 +200,7 @@ const server = http.createServer((req, res) => {
   if (chargerPut && req.method === "PUT") {
     readBody((b) => {
       if (b.maxA != null) lp.maxCurrentA = b.maxA;
+      if (b.label != null) chargerLabel = b.label;
       emit("config.changed", { kind: "charger", name: chargerPut[1] });
       send(res, { ok: true });
     });
@@ -343,7 +345,7 @@ const server = http.createServer((req, res) => {
       loadpoints: [
         { name: "garage", charger: "garage", tariff: "home", balancer: "house", vehicle: "enyaq", maxCurrentA: lp.maxCurrentA },
       ],
-      chargers: [{ name: "garage", type: "ocpp16", stationId: "MOCK-1", maxA: lp.maxCurrentA }],
+      chargers: [{ name: "garage", label: chargerLabel, type: "ocpp16", stationId: "MOCK-1", maxA: lp.maxCurrentA }],
       balancers: [{ name: "house", type: "mqtt-circuit", mainBreakerA: siteBreaker, phases: 3 }],
       tariffs: [{ name: "home", type: "nordpool", zone: tariffZone }],
       vehicles: [{ name: "enyaq", type: "skoda", vin: "MOCKVIN" }],

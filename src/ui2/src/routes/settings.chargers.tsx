@@ -2,8 +2,10 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useOsc, type Charger, type Plan } from "@/lib/mock/store";
 import { Trash2, Undo2 } from "lucide-react";
 import { useRef, useState } from "react";
-import { ConfigLockNote } from "@/components/settings/ConfigLockNote";
-import { setChargerMaxAmps as setChargerMaxAmpsCmd } from "@/lib/live/commands";
+import {
+  setChargerMaxAmps as setChargerMaxAmpsCmd,
+  renameCharger as renameChargerCmd,
+} from "@/lib/live/commands";
 
 export const Route = createFileRoute("/settings/chargers")({ component: ChargersSettings });
 
@@ -39,11 +41,6 @@ function ChargersSettings() {
 
   return (
     <div className="space-y-4">
-      {locked && (
-        <ConfigLockNote>
-          Charger name &amp; pairing are set in your config file (osc.yaml)
-        </ConfigLockNote>
-      )}
       {undo && (
         <div className="flex items-center justify-between rounded-2xl border border-border/60 bg-secondary px-4 py-3 text-sm">
           <span>
@@ -64,8 +61,8 @@ function ChargersSettings() {
             <input
               value={c.name}
               onChange={(e) => rename(c.id, e.target.value)}
-              disabled={locked}
-              className="w-full bg-transparent font-display text-lg font-semibold outline-none disabled:opacity-70"
+              onBlur={(e) => void renameChargerCmd(c.id, e.target.value)}
+              className="w-full bg-transparent font-display text-lg font-semibold outline-none"
             />
             {!locked && (
               <button

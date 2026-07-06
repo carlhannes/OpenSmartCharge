@@ -119,6 +119,7 @@ export interface SiteLoadpointDto {
 }
 export interface SiteChargerDto {
   name: string;
+  label?: string; // cosmetic display name (falls back to `name`); rename via PUT /api/chargers/:name
   type: string;
   stationId?: string;
   maxA: number;

@@ -114,3 +114,9 @@ export async function setChargerMaxAmps(chargerId: string, maxA: number): Promis
   useOsc.getState().setChargerMaxAmps(chargerId, maxA);
   if (isLive()) await api.updateChargerApi(chargerId, { maxA });
 }
+
+/** Charger display label (rename): optimistic; PUT /api/chargers/:name {label} when live. */
+export async function renameCharger(chargerId: string, label: string): Promise<void> {
+  useOsc.getState().renameCharger(chargerId, label);
+  if (isLive()) await api.updateChargerApi(chargerId, { label });
+}

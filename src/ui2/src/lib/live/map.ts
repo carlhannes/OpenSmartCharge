@@ -37,10 +37,13 @@ export function deriveStatus(lp: {
 
 export function mapLoadpoint(lp: LoadpointStateDto, site?: SiteDto): Charger {
   const mode = mapMode(lp.mode);
-  const boundVehicle = site?.loadpoints.find((l) => l.name === lp.name)?.vehicle ?? null;
+  const siteLp = site?.loadpoints.find((l) => l.name === lp.name);
+  const boundVehicle = siteLp?.vehicle ?? null;
+  // Display name = the charger's cosmetic label (falls back to the immutable name); id stays the key.
+  const label = site?.chargers.find((c) => c.name === (siteLp?.charger ?? lp.name))?.label;
   return {
     id: lp.name,
-    name: lp.name,
+    name: label ?? lp.name,
     maxAmps: lp.maxCurrentA,
     mode,
     status: deriveStatus({ connected: lp.connected, charging: lp.charging, mode }),
