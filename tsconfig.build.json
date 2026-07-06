@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "//": "Production build config. The root tsconfig keeps *.test.ts + the test-mock so `tsc --noEmit` typechecks them; this build config drops them so they never ship in dist/. A child `exclude` REPLACES the parent's, so all entries are restated.",
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/ui",
+    "src/ui2",
+    "**/*.test.ts",
+    "src/modules/charger-ocpp16/mock-charger.ts"
+  ]
+}

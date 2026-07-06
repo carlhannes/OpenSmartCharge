@@ -10,7 +10,7 @@
     "dev:ui2": "npm --prefix src/ui2 run dev",
     "dev:ui2:mock": "concurrently -n mock,ui2 -c green,magenta \"npm run mock:ui2\" \"OSC_BACKEND=http://localhost:9099 npm run dev:ui2\"",
     "mock:ui2": "node scripts/mock-backend.mjs",
-    "build": "tsc && vite build --config src/ui/vite.config.ts",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && vite build --config src/ui/vite.config.ts",
     "build:server": "tsc",
     "build:ui": "vite build --config src/ui/vite.config.ts",
     "preview:ui": "vite preview --config src/ui/vite.config.ts",

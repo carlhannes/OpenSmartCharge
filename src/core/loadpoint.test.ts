@@ -34,7 +34,7 @@ test('defaultMode seeds a new loadpoint; a persisted mode wins on restart', () =
   }
 })
 
-test('foldChargerStatus keeps live current across bare status frames, clears it when not charging', () => {
+test('foldChargerStatus keeps live current+power across bare status frames, clears them when not charging', () => {
   const status = (over: Partial<ChargerStatus>): ChargerStatus => ({
     connectorId: 1,
     status: 'Charging',
@@ -46,34 +46,39 @@ test('foldChargerStatus keeps live current across bare status frames, clears it 
     connected: false,
     charging: false,
     currentA: 0,
+    powerW: 0,
     sessionEnergyKWh: 0,
   }
 
-  // MeterValues while charging → live current + energy recorded.
-  live = foldChargerStatus(live, status({ currentA: 9.7, sessionEnergyKWh: 0.1 }))
+  // MeterValues while charging → live current + power + energy recorded.
+  live = foldChargerStatus(live, status({ currentA: 9.7, powerW: 6600, sessionEnergyKWh: 0.1 }))
   expect(live.currentA).toBe(9.7)
+  expect(live.powerW).toBe(6600)
   expect(live.sessionEnergyKWh).toBe(0.1)
 
-  // Bare StatusNotification (still charging, no currentA/energy) → last readings retained,
+  // Bare StatusNotification (still charging, no currentA/powerW/energy) → last readings retained,
   // not blanked between meter frames.
   live = foldChargerStatus(live, status({}))
   expect(live.currentA).toBe(9.7)
+  expect(live.powerW).toBe(6600)
   expect(live.sessionEnergyKWh).toBe(0.1)
 
-  // StopTransaction pushes charging:false with no currentA → current must clear to 0
-  // (the stale-"9.7 A after stop" bug), even though currentA is absent from the update.
+  // StopTransaction pushes charging:false with no currentA/powerW → both must clear to 0
+  // (the stale-"9.7 A after stop" bug), even though they're absent from the update.
   live = foldChargerStatus(
     live,
     status({ status: 'Finishing', charging: false, sessionEnergyKWh: 0 }),
   )
   expect(live.charging).toBe(false)
   expect(live.currentA).toBe(0)
+  expect(live.powerW).toBe(0)
 
-  // Idle/unplugged (Available) also draws no current. (Note: SuspendedEV/EVSE map to
+  // Idle/unplugged (Available) also draws nothing. (Note: SuspendedEV/EVSE map to
   // charging:true — a suspended session still flows MeterValues that self-correct the reading,
   // so the clear-to-0 rule keys off the charging flag, not the status label.)
   live = foldChargerStatus(live, status({ status: 'Available', connected: false, charging: false }))
   expect(live.currentA).toBe(0)
+  expect(live.powerW).toBe(0)
 })
 
 test('config targets (soc/time/kWh) seed a new loadpoint; persisted targets survive restart', () => {

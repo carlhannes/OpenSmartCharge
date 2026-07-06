@@ -25,6 +25,7 @@ const lp = {
 };
 const veh = { soc: 62, range: 310, batteryCapacity: 77 };
 let oneShotCap = null;
+let lastResolveJson = null; // change-guard for the loadpoint.resolve SSE (emit only on decision change)
 
 // Plans (per loadpoint) + site settings.
 let plans = [
@@ -44,6 +45,15 @@ let siteBreaker = 25; // site-level main breaker (A) — PUT /api/site
 let tariffZone = "SE3"; // primary tariff zone — PUT /api/tariffs/:name
 let chargerLabel = "garage"; // charger display label — PUT /api/chargers/:name { label }
 
+// The control loop's per-tick decision — mirrors LoadpointState.resolve. shouldChargeNow tracks the
+// sim's "still below target"; budgetA is the amp cap being applied; sources name a plausible ladder rung.
+const resolveDto = () => ({
+  shouldChargeNow:
+    lp.connected && lp.mode !== "disabled" && (lp.targetSoc == null || veh.soc < lp.targetSoc),
+  budgetA: oneShotCap ?? lp.maxCurrentA,
+  sources: { energy: "soc-capacity", price: "live-tariff", current: "live-meter" },
+});
+
 const loadpointDto = () => ({
   name: lp.name,
   mode: lp.mode,
@@ -54,6 +64,7 @@ const loadpointDto = () => ({
   connected: lp.connected,
   charging: lp.charging,
   currentA: lp.charging ? lp.currentA : 0,
+  powerW: lp.charging ? Math.round(lp.currentA * 230) : 0,
   sessionEnergyKWh: +lp.sessionEnergyKWh.toFixed(2),
   maxCurrentA: lp.maxCurrentA,
   availableTargetUnits: [
@@ -61,6 +72,7 @@ const loadpointDto = () => ({
     ...(veh.range != null ? ["km"] : []),
     "kwh",
   ],
+  resolve: resolveDto(),
 });
 
 // Backend computes each plan's display SoC%: pct→value, km→via range/soc ratio, kwh/no-car→null.
@@ -98,8 +110,18 @@ const stateFrame = () =>
     connected: lp.connected,
     charging: lp.charging,
     currentA: lp.charging ? lp.currentA : 0,
+    powerW: lp.charging ? Math.round(lp.currentA * 230) : 0,
     sessionEnergyKWh: +lp.sessionEnergyKWh.toFixed(2),
   });
+
+// Emit loadpoint.resolve only when the decision changes (change-guarded, like the real backend).
+const resolveFrame = () => {
+  const resolveJson = JSON.stringify(resolveDto());
+  if (resolveJson !== lastResolveJson) {
+    lastResolveJson = resolveJson;
+    emit("loadpoint.resolve", { name: lp.name, ...resolveDto() });
+  }
+};
 
 // Ticking simulation: advance the session while charging and push live SSE.
 setInterval(() => {
@@ -113,6 +135,7 @@ setInterval(() => {
     lp.currentA = 0;
   }
   stateFrame();
+  resolveFrame();
   emit("vehicle.poll", { name: "enyaq", soc: Math.round(veh.soc) });
 }, 2000);
 setInterval(() => {

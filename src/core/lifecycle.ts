@@ -281,6 +281,7 @@ async function main() {
         connected: state.connected,
         charging: state.charging,
         currentA: state.currentA,
+        powerW: state.powerW,
         sessionEnergyKWh: state.sessionEnergyKWh,
       })
     })
@@ -357,6 +358,10 @@ async function main() {
   // the IEC minimum rather than the full circuit budget — the car draws only its climate load, and
   // this avoids topping the battery past the target at full rate. The car chooses how much it pulls.
   const CLIMATE_MAX_OFFER_A = 6
+
+  // Last-emitted resolve per loadpoint (as JSON) — change-guard so `loadpoint.resolve` only fires
+  // when the decision actually changes, not every ~30 s tick with an identical frame.
+  const lastResolveByLoadpoint = new Map<string, string>()
 
   // Lifecycle-owned vehicle polling (the module owns no timer). Per loadpoint: when we last polled
   // + whether we've polled since this connection began; and the SoC "anchor" — a real reading +
@@ -791,6 +796,12 @@ async function main() {
       // Surface WHY each loadpoint decided as it did — the key question in a degradation-first
       // system (which rung of each ladder produced the value).
       for (const r of resolved) {
+        // Surface the decision on the loadpoint state (the "why", readable via GET /api/loadpoints).
+        r.state.resolve = {
+          shouldChargeNow: r.shouldChargeNow,
+          budgetA: circuitBudget.value,
+          sources: r.sources,
+        }
         log.debug(
           {
             loadpoint: r.state.name,
@@ -801,6 +812,13 @@ async function main() {
           },
           'circuit resolve',
         )
+        // Push to SSE only when the decision changes — identical across most ticks, so a change-guard
+        // avoids an idle frame every interval.
+        const key = JSON.stringify(r.state.resolve)
+        if (lastResolveByLoadpoint.get(r.state.name) !== key) {
+          lastResolveByLoadpoint.set(r.state.name, key)
+          events.emit('loadpoint.resolve', { name: r.state.name, ...r.state.resolve })
+        }
       }
 
       // Balancer circuits coordinate the applied amps across their loadpoints via allocate();

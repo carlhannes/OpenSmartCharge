@@ -74,6 +74,21 @@ No new SSE plumbing — it rides the existing `*` wildcard → `/events`. Re-fet
 Shipped in the target-model rework — `PlanDto.resolvedSoc` + `availableTargetUnits`. See
 `docs/ui2-backend-handoff.md`.
 
+## 8. Loadpoint observability — `resolve` (the "why") + `powerW` ✅
+Two read-only fields on `LoadpointStateDto` (so `GET /api/loadpoints` + `/:name` carry them for the initial
+fetch/poll), plus one new SSE event. No new settings — pure readout.
+- **`powerW: number`** — instantaneous draw in watts (from MeterValues); `0` when not charging. Prefer it
+  over `currentA × voltage` for the kW readout: it's the metered value and phase-count-correct.
+- **`resolve?: { shouldChargeNow?, budgetA, sources: { energy, price, current } }`** — the control loop's
+  latest per-tick decision: whether it wants to charge, the **circuit** budget it's working within (bare
+  loadpoint = its own; balancer = the shared pool it splits), and which ladder rung each resolver used
+  (`sources.energy`/`price`/`current` strings, e.g. `soc-capacity` / `live-tariff` / `live-meter`).
+  `undefined` until the first tick. This is the structured "why is it charging / paused" that previously
+  lived only in the `circuit resolve` debug log.
+- **`loadpoint.resolve` SSE** `{ name, ...resolve }` — pushed when the decision **changes** (change-guarded,
+  not every tick), on the `*` wildcard → `/events` like the others. `powerW` also now rides the existing
+  **`loadpoint.state`** event. The mock (`scripts/mock-backend.mjs`) emits both.
+
 ---
 
 ## Persistence & reset (for the UI's mental model)

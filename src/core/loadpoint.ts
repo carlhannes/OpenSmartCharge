@@ -14,25 +14,35 @@ export interface LoadpointState {
   connected: boolean
   charging: boolean
   currentA: number
+  /** Instantaneous power draw (W) from MeterValues; 0 when not charging. */
+  powerW: number
   sessionEnergyKWh: number
   /** Config-derived ceiling, not persisted */
   maxCurrentA: number
+  /** Latest control-loop decision — the "why" behind charging/pausing. Resolver-derived,
+   * recomputed each tick, not persisted; undefined until the first tick. `budgetA` is the CIRCUIT
+   * budget (bare loadpoint = its own; balancer = the shared pool it splits). */
+  resolve?: {
+    shouldChargeNow?: boolean
+    budgetA: number
+    sources: { energy: string; price: string; current: string }
+  }
 }
 
 /** The live, charger-driven subset of loadpoint state. */
 export type LoadpointLiveFields = Pick<
   LoadpointState,
-  'connected' | 'charging' | 'currentA' | 'sessionEnergyKWh'
+  'connected' | 'charging' | 'currentA' | 'powerW' | 'sessionEnergyKWh'
 >
 
 /**
  * Fold a charger status update into the loadpoint's live fields.
  *
- * `currentA` and `sessionEnergyKWh` are sticky: a bare StatusNotification carries neither,
+ * `currentA`/`powerW` and `sessionEnergyKWh` are sticky: a bare StatusNotification carries none,
  * so we keep the last MeterValues reading rather than blanking the display between frames.
- * The exception is `currentA` when the charger isn't charging — a stopped or suspended
- * session draws no current, so it's forced to 0. Otherwise the last live value would stick
- * forever after StopTransaction (which pushes `charging:false` with no `currentA`).
+ * The exception is `currentA`/`powerW` when the charger isn't charging — a stopped or suspended
+ * session draws nothing, so they're forced to 0. Otherwise the last live value would stick
+ * forever after StopTransaction (which pushes `charging:false` with no `currentA`/`powerW`).
  */
 export function foldChargerStatus(
   prev: LoadpointLiveFields,
@@ -42,6 +52,7 @@ export function foldChargerStatus(
     connected: status.connected,
     charging: status.charging,
     currentA: status.charging ? (status.currentA ?? prev.currentA) : 0,
+    powerW: status.charging ? (status.powerW ?? prev.powerW) : 0,
     sessionEnergyKWh: status.sessionEnergyKWh ?? prev.sessionEnergyKWh,
   }
 }
@@ -100,6 +111,7 @@ export function loadLoadpointStates(
       connected: false,
       charging: false,
       currentA: 0,
+      powerW: 0,
       sessionEnergyKWh: 0,
       maxCurrentA,
     })
