@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useOsc } from "@/lib/mock/store";
 import { HeroStatus } from "@/components/home/HeroStatus";
+import { HomePowerCard } from "@/components/home/HomePowerCard";
 import { ChargerCard } from "@/components/home/ChargerCard";
 import { ChargerDetail } from "@/components/charger/ChargerDetail";
 import { useState, useMemo } from "react";
@@ -20,6 +21,8 @@ function Home() {
   return (
     <div className="mx-auto max-w-2xl">
       <HeroStatus />
+
+      <HomePowerCard />
 
       {degraded.length > 0 && (
         <div className="mx-5 mb-4 flex items-start gap-3 rounded-2xl bg-status-warn/10 p-4 text-sm text-status-warn">

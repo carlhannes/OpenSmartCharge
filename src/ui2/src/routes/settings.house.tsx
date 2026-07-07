@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useOsc } from "@/lib/mock/store";
 import { setBreaker } from "@/lib/live/commands";
+import { fmtKW } from "@/lib/format";
 import { ConfigLockNote } from "@/components/settings/ConfigLockNote";
 
 export const Route = createFileRoute("/settings/house")({ component: HouseSettings });
@@ -8,6 +9,7 @@ export const Route = createFileRoute("/settings/house")({ component: HouseSettin
 function HouseSettings() {
   const config = useOsc((s) => s.config);
   const setConfig = useOsc((s) => s.setConfig);
+  const housePowerW = useOsc((s) => s.housePowerW);
   // Live backend → read-only (no write API); values are the real breaker/balancer from /api/site.
   // Demo mode keeps these interactive.
   const locked = useOsc((s) => s.source === "live");
@@ -32,7 +34,17 @@ function HouseSettings() {
       </div>
 
       <div className="rounded-2xl border border-border/60 bg-card p-4">
-        <div className="mb-3 font-medium">Where do we read the house load from?</div>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="font-medium">Where do we read the house load from?</div>
+          {housePowerW != null && (
+            <div className="shrink-0 text-xs text-muted-foreground">
+              House now ·{" "}
+              <span className="font-display text-sm font-semibold tabular-nums text-foreground">
+                {fmtKW(housePowerW)}
+              </span>
+            </div>
+          )}
+        </div>
         <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
           {[
             { id: "tibber", label: "Tibber Pulse", desc: "Live per-phase currents." },

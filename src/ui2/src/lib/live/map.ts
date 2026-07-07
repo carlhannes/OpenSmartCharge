@@ -85,6 +85,17 @@ export function mapVehicle(name: string, dto: VehicleStateDto): Vehicle {
   };
 }
 
+/** Whole-house watts from a meter reading/snapshot: prefer powerW, else Σ phase currents × voltage.
+ *  (Sum, not max — total consumption ≈ 230 V × (i1+i2+i3); max-phase is for breaker headroom, not power.) */
+export function mapMeterWatts(
+  m: { powerW?: number; i1A?: number; i2A?: number; i3A?: number } | null | undefined,
+): number | null {
+  if (!m) return null;
+  if (m.powerW != null) return Math.round(m.powerW);
+  const phases = [m.i1A, m.i2A, m.i3A].filter((a): a is number => a != null);
+  return phases.length ? Math.round(phases.reduce((a, b) => a + b, 0) * VOLTAGE) : null;
+}
+
 export function mapHealth(rec: Record<string, ModuleHealth>): StoreHealth[] {
   const toStatus = (h: ModuleHealth): StoreHealth["status"] =>
     h === "ok" ? "ok" : h === "degraded" ? "warn" : "bad";

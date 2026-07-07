@@ -92,6 +92,10 @@ interface OscState {
   tickMs: number;
   source: "probing" | "live" | "demo"; // probing→ decide; live = backend via REST/SSE; demo = mock tick
   timezone: string; // site timezone (IANA); from GET /api/settings when live
+  housePowerW: number | null; // live whole-house draw (W) from the meter; null = no live reading
+  housePowerSeq: number; // bumps on every meter reading (even unchanged) so the sparkline samples each tick
+  meterName: string | null; // main meter reader name (from /api/site) — matches meter.snapshot
+  _houseBaseW: number; // demo-only: wandering non-EV base for the mock house-power sim
 
   // actions
   setMode: (chargerId: string, mode: Mode) => void;
@@ -123,6 +127,8 @@ interface OscState {
   // Live-sync (populated from the backend when source === "live")
   setSource: (source: "probing" | "live" | "demo") => void;
   setTimezone: (tz: string) => void;
+  setHousePower: (w: number | null) => void;
+  setMeterName: (n: string | null) => void;
   hydrate: (
     patch: Partial<
       Pick<OscState, "chargers" | "vehicles" | "moduleHealth" | "prices" | "sessions" | "plans">
@@ -232,6 +238,10 @@ export const useOsc = create<OscState>()((set, get) => ({
   ...seed(),
   source: "probing",
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  housePowerW: null, // set by the meter (live) or the demo tick; card hides until a real value arrives
+  housePowerSeq: 0,
+  meterName: null,
+  _houseBaseW: 700,
 
   setMode: (chargerId, mode) =>
     set((s) => ({
@@ -373,6 +383,8 @@ export const useOsc = create<OscState>()((set, get) => ({
 
   setSource: (source) => set({ source }),
   setTimezone: (tz) => set({ timezone: tz }),
+  setHousePower: (w) => set((s) => ({ housePowerW: w, housePowerSeq: s.housePowerSeq + 1 })),
+  setMeterName: (n) => set({ meterName: n }),
   hydrate: (patch) => set(patch),
   patchCharger: (id, patch) =>
     set((s) => ({ chargers: s.chargers.map((c) => (c.id === id ? { ...c, ...patch } : c)) })),
@@ -430,7 +442,17 @@ export const useOsc = create<OscState>()((set, get) => ({
       };
     });
 
-    set({ chargers: nextChargers, vehicles: nextVehicles });
+    // Demo house power: a wandering non-EV base + whatever the car is drawing.
+    const evW = nextChargers.reduce((a, c) => a + (c.currentPowerW > 0 ? c.currentPowerW : 0), 0);
+    const houseBase = Math.round(
+      Math.min(1800, Math.max(250, s._houseBaseW + (Math.random() - 0.5) * 350)),
+    );
+    set({
+      chargers: nextChargers,
+      vehicles: nextVehicles,
+      _houseBaseW: houseBase,
+      housePowerW: houseBase + Math.round(evW),
+    });
   },
 }));
 

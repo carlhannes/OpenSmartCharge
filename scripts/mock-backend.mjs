@@ -45,6 +45,15 @@ let siteBreaker = 25; // site-level main breaker (A) — PUT /api/site
 let logRetentionDays = 3; // days of logs kept before rotation — GET/PUT /api/logs/config
 let tariffZone = "SE3"; // primary tariff zone — PUT /api/tariffs/:name
 let chargerLabel = "garage"; // charger display label — PUT /api/chargers/:name { label }
+let houseBaseW = 700; // wandering non-EV house draw (W); meter power = base + EV charging draw
+
+// Whole-house meter reading — base house load + whatever the car is drawing (charger is downstream).
+const meterSnapshot = () => {
+  const evW = lp.charging ? Math.round(lp.currentA * 230) : 0;
+  const powerW = Math.max(0, Math.round(houseBaseW)) + evW;
+  const perPhaseA = +(powerW / 230 / 3).toFixed(1);
+  return { powerW, i1A: perPhaseA, i2A: perPhaseA, i3A: perPhaseA, timestamp: new Date().toISOString() };
+};
 
 // Logs (ring buffer) for the /api/logs viewer — seeded across ~a day + appended live below.
 const logModules = ["charger", "vehicle", "tariff", "balancer", "ocpp", "loadpoint"];
@@ -187,6 +196,12 @@ setInterval(() => {
     msg: pick(logMsgs[level], logSeq),
   });
   if (logs.length > 500) logs = logs.slice(-500);
+}, 10000);
+
+// Push a live household-power reading every ~10s (EVCC-style), like the real meter.snapshot stream.
+setInterval(() => {
+  houseBaseW = Math.min(2500, Math.max(200, houseBaseW + (Math.random() - 0.5) * 500));
+  emit("meter.snapshot", { name: "pulse", snapshot: meterSnapshot() });
 }, 10000);
 
 const send = (res, obj, code = 200) => {
@@ -445,6 +460,8 @@ const server = http.createServer((req, res) => {
         currency: "SEK",
       })),
     );
+  const meterGet = p.match(/^\/api\/meters\/([^/]+)$/);
+  if (meterGet && req.method === "GET") return send(res, { latest: meterSnapshot(), health: "ok" });
   if (p === "/api/balancers/house")
     return send(res, { name: "house", health: "ok", lastAllocations: { garage: lp.currentA }, freeAmps: 13 });
   if (p === "/api/transactions") return send(res, [txRow(1), txRow(2)]);

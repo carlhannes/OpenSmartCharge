@@ -7,6 +7,7 @@ import {
   mapPlan,
   mapVehicle,
   mapHealth,
+  mapMeterWatts,
   mapPrices,
   mapTransactions,
   deriveStatus,
@@ -77,6 +78,7 @@ async function rehydrateSite(
         ? { balancerMode: "static" as const, staticLimitA: siteBreaker }
         : {}),
     });
+    useOsc.getState().setMeterName(site.meterReaders[0]?.name ?? null);
   }
   return site;
 }
@@ -174,6 +176,19 @@ export function useLiveSync() {
             /* balancer optional */
           }
         }
+
+        // Live household power — initial value; the meter.snapshot SSE keeps it fresh.
+        const meterName = site.meterReaders[0]?.name;
+        if (meterName) {
+          try {
+            const m = await api.getMeter(meterName);
+            if (!cancelled) store.setHousePower(mapMeterWatts(m.latest));
+          } catch {
+            if (!cancelled) store.setHousePower(null);
+          }
+        } else if (!cancelled) {
+          store.setHousePower(null);
+        }
       }
 
       try {
@@ -245,6 +260,15 @@ export function useLiveSync() {
         subscribe("config.changed", () => {
           // Any runtime config write (region/breaker/charger/…) → reconcile from GET /api/site.
           void rehydrateSite();
+        }),
+        subscribe("meter.snapshot", (d) => {
+          const e = d as {
+            name: string;
+            snapshot: { powerW?: number; i1A?: number; i2A?: number; i3A?: number };
+          };
+          if (e.name === useOsc.getState().meterName) {
+            useOsc.getState().setHousePower(mapMeterWatts(e.snapshot));
+          }
         }),
       );
 
