@@ -1,3 +1,5 @@
+import { parseBroker, type Broker } from '../../sdk/broker.js'
+
 export interface MqttPhaseConfig {
   name: string
   type: string
@@ -5,6 +7,8 @@ export interface MqttPhaseConfig {
   topicPrefix: string
   /** A snapshot older than this is reported `degraded` by health() — the ONE staleness authority. */
   staleAfterSec: number
+  /** This reader's own broker to LISTEN on — self-contained, independent of OSC's outbound bridge. */
+  broker: Broker
 }
 
 export function parseConfig(cfg: unknown): MqttPhaseConfig {
@@ -16,5 +20,6 @@ export function parseConfig(cfg: unknown): MqttPhaseConfig {
     // Default matches the legacy balancer's `meterTopicPrefix: house` for drop-in migration.
     topicPrefix: typeof c.topicPrefix === 'string' ? c.topicPrefix : 'house',
     staleAfterSec: typeof c.staleAfterSec === 'number' ? c.staleAfterSec : 60,
+    broker: parseBroker(c.broker, `meter-mqtt-phase '${String(c.name)}'`),
   }
 }

@@ -15,10 +15,7 @@ import { applyPhaseMessage, type PhaseCurrents } from './parse.js'
 registerMeterReader({
   type: 'mqtt-phase',
   create(cfg, ctx) {
-    const c = parseConfig(cfg)
-    if (!ctx.mqtt) {
-      throw new Error(`meter-mqtt-phase '${c.name}' requires mqtt:{} in osc.yaml`)
-    }
+    const c = parseConfig(cfg) // throws if `broker` is missing — this reader owns its connection
     const subscribers = new Set<(s: MeterSnapshot) => void>()
     const acc: PhaseCurrents = { i1A: 0, i2A: 0, i3A: 0 }
     let latest: MeterSnapshot | null = null
@@ -30,16 +27,16 @@ registerMeterReader({
       start() {
         const topics = [`${c.topicPrefix}/i1_a`, `${c.topicPrefix}/i2_a`, `${c.topicPrefix}/i3_a`]
         const conn = mqtt.connect({
-          host: ctx.mqtt!.host,
-          port: ctx.mqtt!.port,
-          username: ctx.mqtt!.user,
-          password: ctx.mqtt!.password,
+          host: c.broker.host,
+          port: c.broker.port,
+          username: c.broker.user,
+          password: c.broker.password,
           clientId: `osc-meter-phase-${Math.random().toString(16).slice(2, 8)}`,
           clean: true,
         })
         client = conn
         conn.on('connect', () => {
-          ctx.log.info({ host: ctx.mqtt!.host, topics }, 'meter-mqtt-phase subscribed')
+          ctx.log.info({ host: c.broker.host, topics }, 'meter-mqtt-phase subscribed')
           conn.subscribe(topics, { qos: 0 }, (err) => {
             if (err) ctx.log.warn({ err }, 'meter-mqtt-phase subscribe failed')
           })

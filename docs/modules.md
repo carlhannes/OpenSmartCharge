@@ -310,13 +310,12 @@ interface ModuleCtx {
   events: EventEmitter // internal pub/sub
   log: Logger          // pino — the shared app logger; every line is captured to the Logs viewer
   fetch: typeof globalThis.fetch  // drop-in fetch() with 0–120 s anti-thundering-herd jitter
-  mqtt?: { host: string; port: number; user?: string; password?: string }
 }
 ```
 
 **`ctx.fetch` vs global `fetch`** — use `ctx.fetch` for all scheduled/periodic outbound HTTP calls (tariff fetches, vehicle polls). It adds a random 0–120 s jitter so multiple OSC instances on the same network don't slam upstream APIs at the same millisecond. For a fetch that must happen immediately at startup, use the global `fetch` directly. See `src/modules/tariff-elering/index.ts` for the pattern.
 
-**`ctx.mqtt`** — opt-in. The OSC bridge's own MQTT client (publishing `osc/…` topics) is private to the bridge; modules that need MQTT open their own connection with these params. Fail loudly in `create()` if you need MQTT and `ctx.mqtt` is `undefined` — that's a configuration error, not a degradation scenario. See `src/modules/meter-tibber-pulse/index.ts` for an example.
+**MQTT-speaking modules carry their own `broker:`** — there is no `ctx.mqtt`. A meter reader that listens on a broker declares its own `broker: {host, port, user?, password?}` in its `meterReaders[]` entry and opens its own listen-only connection (parse it with `parseBroker()` from `src/sdk/broker.ts`; see `src/modules/meter-mqtt-phase`). OSC's *own* outbound publishing (state topics + Home Assistant discovery) is a separate concern configured under `mqttBridge:` — consuming a meter never makes OSC publish. Fail loudly in `create()` if a required broker is missing (that's what `parseBroker` does).
 
 **`ctx.db`** — your tables, your `CREATE TABLE IF NOT EXISTS` in `start()`. Don't collide with OSC core table names: `loadpoint_state`, `transactions`, `meter_values`, `tariff_slots`, `vehicle_cache`.
 

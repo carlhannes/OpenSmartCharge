@@ -105,14 +105,6 @@ async function main() {
     events,
     log,
     fetch: jitterFetch,
-    mqtt: config.mqtt
-      ? {
-          host: config.mqtt.host,
-          port: config.mqtt.port,
-          user: config.mqtt.user,
-          password: config.mqtt.password,
-        }
-      : undefined,
   }
   const chargers = new Map<string, Charger>()
 
@@ -989,9 +981,9 @@ async function main() {
   }
 
   // MQTT bridge (optional)
-  if (config.mqtt) {
+  if (config.mqttBridge) {
     startMqttBridge(
-      config.mqtt,
+      config.mqttBridge,
       {
         events,
         loadpoints: loadpointStates,
@@ -1004,7 +996,7 @@ async function main() {
       },
       log,
     )
-    log.info({ host: config.mqtt.host }, 'MQTT bridge starting')
+    log.info({ host: config.mqttBridge.broker.host }, 'MQTT bridge starting')
   }
 
   // Single control loop: one damped tick drives every circuit (balancer-backed or bare), so

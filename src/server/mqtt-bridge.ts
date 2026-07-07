@@ -8,12 +8,11 @@ import type { Tariff } from '../sdk/tariff.js'
 import type { Balancer } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import { publishHaDiscovery } from './ha-discovery.js'
+import type { Broker } from '../sdk/broker.js'
 
-interface MqttConfig {
-  host: string
-  port: number
-  user?: string
-  password?: string
+// OSC's OUTBOUND bridge config (config.mqttBridge) — carries its own broker, separate from meter readers.
+interface MqttBridgeConfig {
+  broker: Broker
   topicPrefix: string
   homeAssistantDiscovery: boolean
 }
@@ -29,12 +28,12 @@ export interface MqttBridgeDeps {
   onTargetChange(name: string, soc?: number, time?: string, kwh?: number): Promise<void>
 }
 
-export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: Logger): void {
+export function startMqttBridge(config: MqttBridgeConfig, deps: MqttBridgeDeps, log: Logger): void {
   const client = mqtt.connect({
-    host: config.host,
-    port: config.port,
-    username: config.user,
-    password: config.password,
+    host: config.broker.host,
+    port: config.broker.port,
+    username: config.broker.user,
+    password: config.broker.password,
     clientId: `osc-bridge-${Math.random().toString(16).slice(2, 8)}`,
     clean: true,
   })
@@ -42,7 +41,7 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
   const prefix = config.topicPrefix
 
   client.on('connect', () => {
-    log.info({ host: config.host, port: config.port }, 'MQTT bridge connected')
+    log.info({ host: config.broker.host, port: config.broker.port }, 'MQTT bridge connected')
 
     // Publish initial state
     for (const state of deps.loadpoints.values()) {

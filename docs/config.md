@@ -54,19 +54,22 @@ smartCharging:
 
 Because of this, **smart mode works with no balancer, no tariff, and no vehicle** — each is an enhancement, not a requirement.
 
-### `mqtt`
+### `mqttBridge`
+
+Optional. OSC's **outbound** MQTT integration: it publishes OSC's own state, accepts commands, and (optionally) emits Home Assistant discovery. This is a **separate concern from meter readers** — those *listen* on their own broker (see `meterReaders[]`); this is OSC *publishing*. Omit `mqttBridge` and OSC publishes nothing to any broker — a listen-only meter needs no `mqttBridge`.
 
 ```yaml
-mqtt:
-  host: localhost   # MQTT broker hostname or IP
-  port: 1883        # default: 1883
-  user: ""          # optional
-  password: ""      # optional
-  topicPrefix: osc  # all OSC topics live under this prefix
+mqttBridge:
+  broker:
+    host: localhost   # MQTT broker hostname or IP
+    port: 1883        # default: 1883
+    user: ""          # optional
+    password: ""      # optional
+  topicPrefix: osc    # all OSC-published topics live under this prefix
   homeAssistantDiscovery: true   # publish HA discovery payloads on startup
 ```
 
-MQTT is required if a balancer draws on an MQTT-based `meterReader` (`mqtt-phase` or `tibber-pulse`). It is optional otherwise, but recommended for Home Assistant integration.
+> **Migration.** The old combined top-level `mqtt:` block is gone (a boot WARNING fires if it's still present, and it's ignored). Inbound (a meter listening) moved onto `meterReaders[].broker`; outbound is `mqttBridge:`. Each carries its own `broker`, so reading a meter and publishing to a broker are fully independent.
 
 ### `tariffs[]`
 
@@ -162,7 +165,7 @@ Credentials are stored in `osc.yaml` which is gitignored. Keep it out of version
 
 ### `meterReaders[]`
 
-Optional. The **single source of truth for live household current** — a balancer sizes charger output below the main fuse from it, and its `health()`/`staleAfterSec` is the one authority on whether that data is fresh (when it goes stale, the circuit degrades down the current ladder). Requires `mqtt:` to be configured.
+Optional. The **single source of truth for live household current** — a balancer (or bare loadpoint) sizes charger output below the main fuse from it, and its `health()`/`staleAfterSec` is the one authority on whether that data is fresh (when it goes stale, the circuit degrades down the current ladder). **Each reader carries its own `broker:`** and is listen-only — entirely separate from OSC's outbound `mqttBridge`, so consuming a meter never makes OSC publish anything.
 
 ```yaml
 meterReaders:
@@ -170,6 +173,11 @@ meterReaders:
     type: mqtt-phase       # raw per-phase amps on <topicPrefix>/i1_a, /i2_a, /i3_a
     topicPrefix: house     # published by pulse_bridge.py or any DSMR/Modbus bridge (default: house)
     staleAfterSec: 60      # seconds before health → degraded if no frame received (default: 60)
+    broker:                # this reader's OWN broker (listen-only) — not OSC's outbound bridge
+      host: 192.168.3.12
+      port: 1883
+      user: evcc
+      password: ""
 ```
 
 **Built-in types:** `mqtt-phase`, `tibber-pulse`
@@ -184,7 +192,7 @@ meterReaders:
 
 - Subscribes to the Tibber Pulse DSMR/OBIS MQTT stream. Parses active power (`1-0:1.7.0`) and per-phase current (`1-0:31.7.0`, `1-0:51.7.0`, `1-0:71.7.0`).
 - Sends `batching_disable true` to the Pulse control topics (`pctrl`, `pulse/subscribe`) on connect and every 300 s to keep data flowing unbatched.
-- Requires `mqtt:` configured in `osc.yaml` — the module opens its own connection to the same broker using the same credentials.
+- Carries its own `broker:` block (host/port/user/password) — it opens its own listen-only connection, independent of OSC's outbound `mqttBridge`.
 - `republishPrefix: house` reproduces the exact MQTT topic layout of the Python `pulse_bridge.py` sidecar (`house/power_w`, `house/i1_a`, …) for Home Assistant or Node-RED dashboards. Remove this field to disable the sidecar behaviour — OSC still consumes the meter in-process via the `meterReader:` link.
 - Health: `ok` while frames arrive within `staleAfterSec`; `degraded` if stale (last known values still returned); `unavailable` until the first frame after boot.
 

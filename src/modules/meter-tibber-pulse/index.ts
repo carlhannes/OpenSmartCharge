@@ -6,13 +6,10 @@ import { parseConfig } from './types.js'
 registerMeterReader({
   type: 'tibber-pulse',
   create(cfg, ctx) {
-    const c = parseConfig(cfg)
-    if (!ctx.mqtt) {
-      throw new Error(`meter-tibber-pulse '${c.name}' requires mqtt:{} in osc.yaml`)
-    }
+    const c = parseConfig(cfg) // throws if `broker` is missing — this reader owns its connection
     const subscribers = new Set<(s: MeterSnapshot) => void>()
     const client = createPulseClient({
-      mqtt: ctx.mqtt,
+      broker: c.broker,
       subTopic: c.subTopic,
       ctrlTopics: c.ctrlTopics,
       disablePayload: c.disablePayload,

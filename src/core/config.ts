@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { parse } from 'yaml'
 import { z } from 'zod'
 import { isValidTimeZone } from '../sdk/local-time.js'
+import { brokerSchema } from '../sdk/broker.js'
 
 const chargeModeSchema = z.enum(['disabled', 'smart', 'fast'])
 
@@ -98,11 +99,12 @@ const loadpointConfigSchema = z.object({
   minSoc: z.number().min(0).max(100).optional(),
 })
 
-const mqttConfigSchema = z.object({
-  host: z.string().default('localhost'),
-  port: z.number().default(1883),
-  user: z.string().optional(),
-  password: z.string().optional(),
+// OSC's OUTBOUND MQTT bridge: publishes OSC's own state, accepts commands, and (optionally) emits Home
+// Assistant discovery — a DISTINCT concern from meterReaders[] (which LISTEN on their own brokers). It
+// carries its own `broker`, so reading a meter and OSC publishing are fully independent: omit
+// `mqttBridge` and OSC publishes nothing to any broker.
+const mqttBridgeSchema = z.object({
+  broker: brokerSchema,
   topicPrefix: z.string().default('osc'),
   homeAssistantDiscovery: z.boolean().default(true),
 })
@@ -126,7 +128,7 @@ const siteConfigSchema = z.object({
 export const configSchema = z.object({
   site: siteConfigSchema.default({}),
   smartCharging: smartChargingConfigSchema,
-  mqtt: mqttConfigSchema.optional(),
+  mqttBridge: mqttBridgeSchema.optional(),
   tariffs: z.array(namedModuleSchema).default([]),
   balancers: z.array(balancerConfigSchema).default([]),
   vehicles: z.array(namedModuleSchema).default([]),
@@ -148,5 +150,12 @@ export const DATA_DIR = process.env.OSC_DATA_DIR ?? './data'
 export function loadConfig(path: string): Config {
   const raw = readFileSync(path, 'utf8')
   const parsed = parse(raw)
+  if (parsed && typeof parsed === 'object' && 'mqtt' in parsed) {
+    // Migration aid: the old combined `mqtt:` block is gone. Inbound (a meter listening) now lives on
+    // meterReaders[].broker; outbound (OSC publishing / Home Assistant) lives on `mqttBridge:`.
+    console.warn(
+      '[config] top-level `mqtt:` is no longer used and is ignored — split it into meterReaders[].broker (inbound, listen-only) and `mqttBridge:` (outbound publish/HA). See docs/config.md.',
+    )
+  }
   return configSchema.parse(parsed)
 }
