@@ -2,7 +2,13 @@ import { registerVehicle } from '../../sdk/registry-api.js'
 import type { VehicleData } from '../../sdk/vehicle.js'
 import { parseConfig } from './types.js'
 import { upsertVehicleCache, loadVehicleCache } from './persistence.js'
-import { getVehicleDetails, getChargingStatus, getAirConditioning } from './api.js'
+import {
+  getVehicleDetails,
+  getChargingStatus,
+  getAirConditioning,
+  startCharging as apiStartCharging,
+  stopCharging as apiStopCharging,
+} from './api.js'
 import { createAuthClient } from './auth.js'
 
 // Climate/preconditioning states that count as "active" (the car is heating/cooling).
@@ -85,6 +91,21 @@ registerVehicle({
 
       getCachedCapacity(): number | undefined {
         return capacityKWh
+      },
+
+      // Car-side start/stop. Uses the plain global `fetch` (prompt, like refresh) — this is a
+      // time-sensitive recovery action, not scheduled public data. Throws on failure so the
+      // SessionReconciler can see it didn't take and fall back to its other levers.
+      async startCharging(): Promise<void> {
+        const accessToken = await auth.token()
+        await apiStartCharging(cfg.vin, accessToken, fetch)
+        ctx.log.info({ vehicle: cfg.name }, 'skoda start-charge sent')
+      },
+
+      async stopCharging(): Promise<void> {
+        const accessToken = await auth.token()
+        await apiStopCharging(cfg.vin, accessToken, fetch)
+        ctx.log.info({ vehicle: cfg.name }, 'skoda stop-charge sent')
       },
 
       // Demand-polled, so staleness while idle is expected — health only reflects whether we

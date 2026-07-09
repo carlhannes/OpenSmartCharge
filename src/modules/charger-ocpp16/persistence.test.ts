@@ -11,6 +11,7 @@ import {
   insertMeterValues,
   latestEnergyKwh,
   findOpenTransaction,
+  closeOpenTransaction,
 } from './persistence.js'
 import type { StartTransactionReq, MeterValuesReq } from './types.js'
 
@@ -73,6 +74,45 @@ test('findOpenTransaction returns the open tx, undefined for other stations, und
     timestamp: '2026-07-04T11:00:00Z',
   })
   expect(findOpenTransaction(db, 'STN1')).toBeUndefined()
+})
+
+test('closeOpenTransaction finalizes an abandoned open tx (stamps energy, stops it rehydrating)', () => {
+  const db = freshDb()
+  const id = allocateTransactionId(db)
+  insertTransaction(db, 'lp1', 'STN1', id, start(1_000_000, '2026-07-04T10:00:00Z'))
+  insertMeterValues(db, id, {
+    connectorId: 1,
+    transactionId: id,
+    meterValue: [
+      {
+        timestamp: '2026-07-04T10:05:00Z',
+        sampledValue: [{ value: '1003000', measurand: 'Energy.Active.Import.Register', unit: 'Wh' }],
+      },
+    ],
+  })
+  expect(findOpenTransaction(db, 'STN1')).toBe(id)
+  closeOpenTransaction(db, id)
+  // No longer open (won't rehydrate a stale activeTransactionId on the next reconnect)…
+  expect(findOpenTransaction(db, 'STN1')).toBeUndefined()
+  // …and the last recorded session delta is preserved as the row's energy.
+  const row = db.prepare('SELECT end_time, energy_kwh FROM transactions WHERE id = ?').get(id) as {
+    end_time: string | null
+    energy_kwh: number
+  }
+  expect(row.end_time).not.toBeNull()
+  expect(row.energy_kwh).toBeCloseTo(3.0, 3) // (1_003_000 − 1_000_000)/1000
+})
+
+test('closeOpenTransaction is a no-op on an already-closed tx and on an unknown id', () => {
+  const db = freshDb()
+  const id = allocateTransactionId(db)
+  insertTransaction(db, 'lp1', 'STN1', id, start(0, '2026-07-04T10:00:00Z'))
+  finishTransaction(db, id, { transactionId: id, meterStop: 7000, timestamp: '2026-07-04T11:00:00Z' })
+  const before = db.prepare('SELECT end_time, energy_kwh FROM transactions WHERE id = ?').get(id)
+  closeOpenTransaction(db, id) // already closed → must not overwrite the real stop data
+  const after = db.prepare('SELECT end_time, energy_kwh FROM transactions WHERE id = ?').get(id)
+  expect(after).toEqual(before)
+  expect(() => closeOpenTransaction(db, 99999)).not.toThrow() // unknown id
 })
 
 test('latestEnergyKwh reports the session delta from meterStart', () => {

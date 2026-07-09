@@ -57,11 +57,15 @@ import {
   circuitLiveMaxPhaseA,
   circuitOwnDrawA,
   planCircuit,
-  resumeNudgeDecision,
   type Circuit,
   type LpDecision,
-  type ResumeNudgeState,
 } from './control-loop.js'
+import {
+  decideSession,
+  executeSessionAction,
+  SESSION_RECONCILE,
+  type SessionReconcilerState,
+} from './session-reconciler.js'
 
 const PLUGINS_DIR = process.env.OSC_PLUGINS_DIR ?? './plugins'
 
@@ -344,11 +348,12 @@ async function main() {
   // Used to give the allocator an accurate credit-back during the car's ramp-up period.
   const lastCommandedA = new Map<string, number>()
 
-  // Resume-nudge state per loadpoint: some cars (VW group) latch SuspendedEV after an OSC 0 A pause
-  // and won't resume on a limit change — only a fresh RemoteStop+RemoteStart restarts them. We detect
-  // "wants charge + active session + drawing ~0 A" and nudge, guarded against ramp/spam/stuck loops.
-  const nudgeStates = new Map<string, ResumeNudgeState>()
-  const RESUME_NUDGE = { minDrawA: 1, graceMs: 90_000, cooldownMs: 180_000, maxNudges: 3 }
+  // SessionReconciler guard-state per loadpoint. The reconciler is level-triggered: each tick it
+  // reconciles "OSC wants charge" against the observed connector status + draw + the car's own
+  // telemetry, taking one guarded corrective action (RemoteStart / resume / car-side wake / clear
+  // profile / reset) when they diverge. Supersedes the old transaction-gated resume-nudge, which
+  // could only resume an already-open transaction (never open one, never wake the car).
+  const sessionStates = new Map<string, SessionReconcilerState>()
   // When charging is driven ONLY by climate (preconditioning, battery already at target), offer just
   // the IEC minimum rather than the full circuit budget — the car draws only its climate load, and
   // this avoids topping the battery past the target at full rate. The car chooses how much it pulls.
@@ -866,36 +871,57 @@ async function main() {
         }
       }
 
-      // Resume-nudge: a car that WANTS current but sits at ~0 A inside an open session (a SuspendedEV
-      // latch — VW group after a 0 A pause) won't restart from a limit change; kick it with
-      // RemoteStop+RemoteStart. Only resumes an open transaction (never starts one → autoStartTransaction
-      // is respected); guarded by ramp-grace / cooldown / max-retries inside resumeNudgeDecision.
-      const nudgeNowMs = now.getTime()
+      // SessionReconciler: level-triggered recovery. For each loadpoint, reconcile "OSC wants charge"
+      // (commanded amps > 0) against the observed connector status + live draw + the car's own
+      // telemetry, and take at most ONE guarded corrective action this tick — RemoteStart to open a
+      // session, RemoteStop+RemoteStart to un-latch a SuspendedEV, a car-side wake for a car-side
+      // pause (chargeMode OFF, which no charger command overrides), a profile clear, or a Hard reset.
+      // Grace/cooldown/cap live inside decideSession. This runs on the 30 s control cadence ONLY
+      // (never faster), so recovery actions can't churn the charger.
+      const sessionNowMs = now.getTime()
       for (const r of resolved) {
         const lpId = r.state.name
         const charger = chargerLimitMap.get(lpId)
-        if (!charger?.remoteStart) continue
-        const dec = resumeNudgeDecision(
-          nudgeStates.get(lpId) ?? { nudges: 0 },
+        if (!charger) continue
+        const lp = lpCfgs.find((l) => l.name === lpId)
+        const vehicle = lp?.vehicle ? vehicles.get(lp.vehicle) : undefined
+        // Cached read (no network) — the car's own plug/charging view as an independent cross-check.
+        const carData = vehicle ? await vehicle.getData().catch(() => undefined) : undefined
+        const commandedA = amps.get(lpId) ?? 0
+        const dec = decideSession(
+          sessionStates.get(lpId) ?? { phaseAttempts: 0, totalActions: 0 },
           {
-            wantsCharge: (amps.get(lpId) ?? 0) > 0,
-            connected: r.state.connected,
-            sessionActive: r.state.charging,
+            wantsCharge: commandedA > 0,
+            status: r.state.status,
             drawingA: r.state.currentA,
-            now: nudgeNowMs,
+            carPluggedIn: carData?.pluggedIn,
+            carCharging: carData?.isCharging,
+            vehicleCanActuate: typeof vehicle?.startCharging === 'function',
+            chargerCanRemoteStart: typeof charger.remoteStart === 'function',
+            chargerCanClearProfile: typeof charger.clearChargingProfile === 'function',
+            chargerCanReset: typeof charger.reset === 'function',
+            now: sessionNowMs,
           },
-          RESUME_NUDGE,
+          SESSION_RECONCILE,
         )
-        nudgeStates.set(lpId, dec.next)
-        if (dec.nudge) {
+        sessionStates.set(lpId, dec.next)
+        if (dec.action.kind !== 'none') {
           log.warn(
-            { loadpoint: lpId, attempt: dec.next.nudges, commandedA: amps.get(lpId) },
-            'car wants charge but is drawing ~0 A — RemoteStop+RemoteStart to resume',
+            {
+              loadpoint: lpId,
+              action: dec.action.kind,
+              attempt: dec.next.totalActions,
+              status: r.state.status,
+              drawingA: r.state.currentA,
+              commandedA,
+            },
+            `session reconcile: ${dec.reason}`,
           )
-          await charger.remoteStop?.().catch(() => {}) // no-op if there is no active transaction
-          await charger
-            .remoteStart()
-            .catch((err) => log.warn({ err, loadpoint: lpId }, 'resume nudge start failed'))
+          await executeSessionAction(
+            dec.action,
+            { charger, vehicle, reassertLimitA: commandedA },
+            log,
+          )
         }
       }
     } finally {

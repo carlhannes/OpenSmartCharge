@@ -29,6 +29,16 @@ export interface Vehicle {
   /** Last cached data (throws if none fetched yet). Does not hit the network. */
   getData(): Promise<VehicleData>
   getCachedCapacity(): number | undefined
+  /**
+   * Car-side start-charge — the actuation OSC could not do before (some cars, e.g. the VW-group
+   * Enyaq, latch charging OFF at the car and no charger-side OCPP command overrides it). Optional:
+   * a module implements it only if the car's cloud API exposes it. The SessionReconciler
+   * feature-detects (like the Charger's optional `remoteStart`) and only calls it against an open
+   * charging session. Throws on failure; the caller keeps trying its other levers.
+   */
+  startCharging?(): Promise<void>
+  /** Car-side stop-charge — the symmetric optional command. */
+  stopCharging?(): Promise<void>
   health(): ModuleHealth
   stop(): Promise<void>
 }

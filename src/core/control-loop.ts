@@ -100,64 +100,6 @@ export function circuitLiveMaxPhaseA(
   return s ? Math.max(s.i1A ?? 0, s.i2A ?? 0, s.i3A ?? 0) : undefined
 }
 
-export interface ResumeNudgeState {
-  /** When the current "wants to charge but not drawing" episode began (ms epoch), or undefined. */
-  stalledSinceMs?: number
-  /** Last nudge time (ms epoch), or undefined. */
-  lastNudgeMs?: number
-  /** Nudges issued this episode — reset once the car draws again or stops wanting charge. */
-  nudges: number
-}
-
-export interface ResumeNudgeCfg {
-  /** Below this many amps the car counts as "not drawing". */
-  minDrawA: number
-  /** Absorb the normal ramp (SuspendedEVSE→Charging takes seconds) before nudging. */
-  graceMs: number
-  /** Wait this long after a nudge before trying again (lets a fresh transaction ramp). */
-  cooldownMs: number
-  /** Give up after this many nudges in one episode (never stop/start a stuck car forever). */
-  maxNudges: number
-}
-
-/**
- * Decide whether to "nudge" a stuck car back into charging. Some cars (VW group — the Enyaq) latch
- * `SuspendedEV` after the EVSE offers 0 A (an OSC target/price pause) and will NOT resume when the
- * limit is raised again — only a fresh transaction (RemoteStop+RemoteStart) restarts them. So when
- * OSC wants current (`wantsCharge`), the car is plugged (`connected`) with an ACTIVE session
- * (`sessionActive` — a transaction is open: status Charging/SuspendedEV/SuspendedEVSE) yet is drawing
- * ~0 A, we resume it.
- *
- * Requiring an active session is deliberate: it means we only ever RESUME an open transaction, never
- * START one — so `autoStartTransaction: false` is respected (only connect-time auto-start or a manual
- * start opens a session). Guards: `graceMs` absorbs the normal ramp, `cooldownMs` spaces retries so a fresh
- * transaction can ramp, and `maxNudges` stops us stop/starting a genuinely-stuck car forever.
- *
- * Pure: returns the decision + the next state (no mutation).
- */
-export function resumeNudgeDecision(
-  state: ResumeNudgeState,
-  input: {
-    wantsCharge: boolean
-    connected: boolean
-    sessionActive: boolean
-    drawingA: number
-    now: number
-  },
-  cfg: ResumeNudgeCfg,
-): { nudge: boolean; next: ResumeNudgeState } {
-  const stalling =
-    input.wantsCharge && input.connected && input.sessionActive && input.drawingA < cfg.minDrawA
-  if (!stalling) return { nudge: false, next: { nudges: 0 } } // drawing or not-wanting → reset episode
-  const stalledSinceMs = state.stalledSinceMs ?? input.now
-  const base: ResumeNudgeState = { ...state, stalledSinceMs }
-  if (input.now - stalledSinceMs < cfg.graceMs) return { nudge: false, next: base } // ramp grace
-  if (state.nudges >= cfg.maxNudges) return { nudge: false, next: base } // gave up this episode
-  if (state.lastNudgeMs !== undefined && input.now - state.lastNudgeMs < cfg.cooldownMs)
-    return { nudge: false, next: base } // still cooling down since the last nudge
-  return { nudge: true, next: { stalledSinceMs, lastNudgeMs: input.now, nudges: state.nudges + 1 } }
-}
-
 export interface LpDecision {
   loadpointName: string
   mode: ChargeMode

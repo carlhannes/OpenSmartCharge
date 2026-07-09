@@ -13,6 +13,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import pino from 'pino'
 import { OcppServer } from './server.js'
 import { openDb } from '../../core/db.js'
+import { findOpenTransaction } from './persistence.js'
 import { createMockCharger, type MockCharger } from './mock-charger.js'
 import type { ChargerStatus } from '../../sdk/charger.js'
 
@@ -258,6 +259,35 @@ test('T7: live current/energy resume after a mid-session reconnect, and remoteSt
     await h.ocpp.remoteStop('RESUME01')
     await waitFor(() => c2.countReceived('RemoteStopTransaction') > 0)
     await c2.close()
+  } finally {
+    await h.cleanup()
+  }
+})
+
+// T8 — The overnight stranding trap: after a session, if the connector returns to `Available`
+// without a StopTransaction (a missed stop, or a row rehydrated on reconnect after the car left),
+// the stale activeTransactionId used to suppress the NEXT auto-start (shouldAutoStartTransaction
+// gates on !hasActiveTransaction), so a freshly-plugged car would never start. Available must now
+// clear the id AND close the abandoned DB row, so the next Preparing auto-starts cleanly.
+test('T8: connector Available clears a stale transaction so the next plug-in auto-starts', async () => {
+  const h = await bootServer()
+  try {
+    const { charger } = await connectCharger(h, 'STALE01', {}, true /* autoStartTransaction */)
+    await charger.boot()
+    await charger.statusNotification('Preparing')
+    await charger.startTransaction('mock', 1_000_000) // opens a tx (DB row end_time NULL)
+    await waitFor(() => findOpenTransaction(h.db, 'STALE01') !== undefined)
+
+    // Car leaves WITHOUT a StopTransaction → connector goes Available.
+    await charger.statusNotification('Available')
+    await waitFor(() => findOpenTransaction(h.db, 'STALE01') === undefined) // stale row closed
+
+    // A fresh plug-in must auto-start again (id was cleared → hasActiveTransaction is false).
+    const before = charger.countReceived('RemoteStartTransaction')
+    await charger.statusNotification('Preparing')
+    await waitFor(() => charger.countReceived('RemoteStartTransaction') > before)
+    expect(charger.countReceived('RemoteStartTransaction')).toBeGreaterThan(before)
+    await charger.close()
   } finally {
     await h.cleanup()
   }

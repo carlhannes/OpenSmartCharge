@@ -13,6 +13,10 @@ export interface LoadpointState {
   minSoc?: number
   connected: boolean
   charging: boolean
+  /** Raw OCPP connector status (Available/Preparing/Charging/SuspendedEV/…). Undefined until the
+   * first status frame. The SessionReconciler needs this finer signal — `connected`/`charging`
+   * booleans can't tell "idle" from "plugged-not-started" from "latched-suspended". */
+  status?: ChargerStatus['status']
   currentA: number
   /** Instantaneous power draw (W) from MeterValues; 0 when not charging. */
   powerW: number
@@ -34,7 +38,7 @@ export interface LoadpointState {
 /** The live, charger-driven subset of loadpoint state. */
 export type LoadpointLiveFields = Pick<
   LoadpointState,
-  'connected' | 'charging' | 'currentA' | 'powerW' | 'sessionEnergyKWh'
+  'connected' | 'charging' | 'status' | 'currentA' | 'powerW' | 'sessionEnergyKWh'
 >
 
 /**
@@ -53,6 +57,7 @@ export function foldChargerStatus(
   return {
     connected: status.connected,
     charging: status.charging,
+    status: status.status,
     currentA: status.charging ? (status.currentA ?? prev.currentA) : 0,
     powerW: status.charging ? (status.powerW ?? prev.powerW) : 0,
     sessionEnergyKWh: status.sessionEnergyKWh ?? prev.sessionEnergyKWh,

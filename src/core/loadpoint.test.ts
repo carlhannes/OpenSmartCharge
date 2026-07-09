@@ -50,11 +50,13 @@ test('foldChargerStatus keeps live current+power across bare status frames, clea
     sessionEnergyKWh: 0,
   }
 
-  // MeterValues while charging → live current + power + energy recorded.
+  // MeterValues while charging → live current + power + energy recorded, and the raw OCPP status is
+  // carried through (the SessionReconciler needs it — connected/charging booleans are too coarse).
   live = foldChargerStatus(live, status({ currentA: 9.7, powerW: 6600, sessionEnergyKWh: 0.1 }))
   expect(live.currentA).toBe(9.7)
   expect(live.powerW).toBe(6600)
   expect(live.sessionEnergyKWh).toBe(0.1)
+  expect(live.status).toBe('Charging')
 
   // Bare StatusNotification (still charging, no currentA/powerW/energy) → last readings retained,
   // not blanked between meter frames.

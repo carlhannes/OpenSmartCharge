@@ -33,6 +33,7 @@ import {
   insertMeterValues,
   latestEnergyKwh,
   findOpenTransaction,
+  closeOpenTransaction,
 } from './persistence.js'
 import {
   setCurrentLimit,
@@ -427,6 +428,23 @@ export class OcppServer {
       if (pinfo) pinfo.lastStatus = p.status
 
       const { charging, connected } = computeConnectionState(p.status)
+
+      // Available = connector idle, no vehicle present — so any transaction id we still hold is
+      // definitively stale (a missed StopTransaction, or a row rehydrated from SQLite on reconnect
+      // after the car had already left). Clear it AND close the abandoned DB row, so the next
+      // plug-in (Preparing) isn't blocked by shouldAutoStartTransaction's hasActiveTransaction guard
+      // and findOpenTransaction won't keep re-surfacing the stale id on future reconnects. This is
+      // the safe, unambiguous case (cable out); a stale id while Preparing/SuspendedEV is handled by
+      // the SessionReconciler, which re-starts level-triggered rather than guessing here.
+      if (p.status === 'Available' && state.activeTransactionId !== undefined) {
+        const staleId = state.activeTransactionId
+        state.activeTransactionId = undefined
+        closeOpenTransaction(this.db, staleId)
+        this.log.info(
+          { stationId, staleTransactionId: staleId },
+          'connector Available — cleared stale transaction id',
+        )
+      }
 
       this.pushStatus(stationId, {
         connectorId: p.connectorId,

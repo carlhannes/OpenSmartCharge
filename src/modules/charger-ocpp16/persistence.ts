@@ -60,6 +60,24 @@ export function finishTransaction(
   ).run(params.timestamp, energyKwh, transactionId)
 }
 
+// Close an abandoned open transaction — one whose end_time was never set because a StopTransaction
+// was missed (charger reboot / dropped socket) or because the car left while OSC was down. Stamps
+// end_time = now and the last recorded session energy so history stays consistent AND
+// findOpenTransaction stops re-surfacing it (which would otherwise rehydrate a stale
+// activeTransactionId on every reconnect and suppress the next auto-start). No-op if the row is
+// unknown or already closed.
+export function closeOpenTransaction(db: DatabaseSync, transactionId: number): void {
+  const tx = db.prepare(`SELECT end_time FROM transactions WHERE id = ?`).get(transactionId) as
+    | { end_time: string | null }
+    | undefined
+  if (!tx || tx.end_time != null) return
+  const energyKwh = latestEnergyKwh(db, transactionId)
+  db.prepare(`UPDATE transactions SET end_time = datetime('now'), energy_kwh = ? WHERE id = ?`).run(
+    energyKwh,
+    transactionId,
+  )
+}
+
 export function insertMeterValues(
   db: DatabaseSync,
   transactionId: number | undefined,
