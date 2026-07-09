@@ -110,20 +110,43 @@ test('session-open ladder ordering keys off the car signal', () => {
   )
   expect(r.action.kind).toBe('resume')
 
-  // Car says it IS charging (or unknown) but 0 A at the EVSE → a SuspendedEV latch is likelier, so
-  // open a fresh transaction first, keeping the car-side wake as a fallback rung.
+  // Car's charging signal UNKNOWN (no/failed telemetry) but 0 A at the EVSE → a SuspendedEV latch is
+  // likelier, so open a fresh transaction first, keeping the car-side wake as a fallback rung. (A car
+  // reporting it IS charging never reaches the ladder — it resets the episode; covered separately.)
   let r2 = decideSession(
     { ...fresh, stalledSinceMs: 0 },
-    input({ ...base, carCharging: true }),
+    input({ ...base, carCharging: undefined }),
     cfg,
   )
   expect(r2.action.kind).toBe('resume')
   r2 = decideSession(
     { ...r2.next, lastActionMs: undefined },
-    input({ ...base, carCharging: true, now: 100_000 }),
+    input({ ...base, carCharging: undefined, now: 100_000 }),
     cfg,
   )
   expect(r2.action.kind).toBe('wake-car')
+})
+
+test('trusts the car: reports charging (near-full taper) or at its own ceiling → no recovery', () => {
+  const after = { ...fresh, stalledSinceMs: 0 }
+  // Car reports CHARGING but draw is below minDrawA (a near-full taper) → trust it, reset the episode
+  // rather than interrupting a legitimate slow finish.
+  const tapering = decideSession(
+    after,
+    input({ status: 'SuspendedEV', carCharging: true, drawingA: 0.4, now: 100_000 }),
+    cfg,
+  )
+  expect(tapering.action.kind).toBe('none')
+  expect(tapering.next).toEqual(fresh)
+  // Car at its OWN care ceiling (fast mode still commands current) → it won't accept more; do not
+  // try to "recover" a full car (this is the deploy-time car-at-80% case).
+  const full = decideSession(
+    after,
+    input({ status: 'SuspendedEV', carCharging: false, carAtTarget: true, now: 100_000 }),
+    cfg,
+  )
+  expect(full.action.kind).toBe('none')
+  expect(full.next).toEqual(fresh)
 })
 
 test('escalates through the full session-open ladder, clamps at reset, then gives up at the cap', () => {

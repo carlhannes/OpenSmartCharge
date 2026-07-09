@@ -888,6 +888,11 @@ async function main() {
         // Cached read (no network) — the car's own plug/charging view as an independent cross-check.
         const carData = vehicle ? await vehicle.getData().catch(() => undefined) : undefined
         const commandedA = amps.get(lpId) ?? 0
+        // The car's own care ceiling: at/above it the car won't accept more current (fast mode
+        // commands current regardless of target, so without this the reconciler would try to
+        // "recover" a full car). Uses the car's OWN targetSoc — the real physical limit.
+        const carAtTarget =
+          carData?.soc != null && carData.targetSoc != null && carData.soc >= carData.targetSoc
         const dec = decideSession(
           sessionStates.get(lpId) ?? { phaseAttempts: 0, totalActions: 0 },
           {
@@ -896,6 +901,7 @@ async function main() {
             drawingA: r.state.currentA,
             carPluggedIn: carData?.pluggedIn,
             carCharging: carData?.isCharging,
+            carAtTarget,
             vehicleCanActuate: typeof vehicle?.startCharging === 'function',
             chargerCanRemoteStart: typeof charger.remoteStart === 'function',
             chargerCanClearProfile: typeof charger.clearChargingProfile === 'function',

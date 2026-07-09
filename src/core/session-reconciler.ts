@@ -89,8 +89,15 @@ export interface SessionInput {
   drawingA: number
   /** The car's own plug view (cross-check independent of OCPP), if a vehicle is attached. */
   carPluggedIn?: boolean
-  /** The car's own charging view — false means the car is NOT charging (e.g. chargeMode OFF). */
+  /** The car's own charging view — false means the car is NOT charging (e.g. chargeMode OFF).
+   *  When TRUE we trust it and do NOT recover: the car may be tapering below minDrawA near full,
+   *  or its telemetry may briefly lag — either way it is making progress, so leave it alone. */
   carCharging?: boolean
+  /** The car has reached its OWN charge ceiling (SoC ≥ the car's care limit) — it will not accept
+   *  more current no matter what OSC commands, so a 0 A draw here is expected, not a stall. In
+   *  smart mode `wantsCharge` already goes false at target; this covers FAST mode, which commands
+   *  current unconditionally. Prevents fighting (or resetting) a car that is simply full. */
+  carAtTarget?: boolean
   /** Feature-detect: the vehicle exposes a car-side start (Vehicle.startCharging). */
   vehicleCanActuate: boolean
   /** Feature-detect: the charger exposes RemoteStart/Stop. */
@@ -124,9 +131,11 @@ function phaseOf(status: ChargerStatus['status'] | undefined): SessionPhase {
  *  - no-session: get a transaction open (RemoteStart), else cold-reset the charger.
  *  - session-open (held but ~0 A): ordered by the car's OWN signal — if the car reports it is NOT
  *    charging (chargeMode OFF / interrupted), a car-side wake is the exact fix, so try it first;
- *    otherwise a SuspendedEV latch is the likelier cause, so open a fresh transaction first and keep
- *    the car-side wake as a fallback rung. Then clear a suppressing profile, then reset. This
- *    generalizes the proven manual recovery (open session → car-side start).
+ *    otherwise (the car's charging signal is UNKNOWN — no/failed telemetry; a car reporting it IS
+ *    charging never reaches here, it resets the episode) a SuspendedEV latch is the likelier cause,
+ *    so open a fresh transaction first and keep the car-side wake as a fallback rung. Then clear a
+ *    suppressing profile, then reset. This generalizes the proven manual recovery (open session →
+ *    car-side start).
  *  - faulted: reset.
  */
 function chooseAction(input: SessionInput, phase: SessionPhase, attempt: number): SessionAction {
@@ -169,9 +178,21 @@ export function decideSession(
   // "nothing to charge" state — distinct from Available-but-car-says-plugged, which we DO act on.
   const genuinelyIdle = input.status === 'Available' && input.carPluggedIn !== true
 
-  // Episode-reset states: we're fine or there's nothing to do → clear the episode so the next stall
-  // starts fresh with full grace + a fresh ladder.
-  if (!input.wantsCharge || drawing || genuinelyIdle) {
+  // Episode-reset states: we're fine or there's genuinely nothing to recover → clear the episode so
+  // the next real stall starts fresh with full grace + a fresh ladder. We recover ONLY when the car
+  // is not making progress AND could accept charge; we defer to the car's own signals:
+  //  - not wanting charge (paused at target in smart mode, or disabled),
+  //  - actually drawing,
+  //  - the car reports it IS charging (trust it — a near-full taper can sit below minDrawA),
+  //  - the car has hit its own care ceiling (won't take more — the FAST-mode full-car case),
+  //  - the connector is genuinely idle (Available + not plugged).
+  if (
+    !input.wantsCharge ||
+    drawing ||
+    input.carCharging === true ||
+    input.carAtTarget === true ||
+    genuinelyIdle
+  ) {
     return { action: { kind: 'none' }, next: { ...idleState } }
   }
 
