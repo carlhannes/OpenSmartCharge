@@ -61,6 +61,31 @@ export function bareCircuitAmps(
   return budgetA
 }
 
+/** Default grace before a `fast` boost expires back to `smart` once the car is unplugged. */
+export const FAST_BOOST_UNPLUG_GRACE_MS = 5 * 60_000
+
+/**
+ * Whether a `fast` "boost" should revert to `smart`. Fast is a deliberate one-shot override ("charge
+ * flat-out now"), like a boost button — it should last until the car is genuinely UNPLUGGED, not be
+ * cancelled by transients. `availableUnpluggedSinceMs` is when the OCPP connector first went
+ * `Available` (a real unplug), or undefined when the car is plugged. Fast reverts only after that
+ * exceeds `graceMs`, so a brief reposition-unplug, a wifi/WS blip (which reports `Unavailable`, not
+ * `Available`, so never sets this), and an OSC restart (no Available observed) all KEEP Fast — only a
+ * true end-of-session reverts it. `smart`/`disabled` are unaffected. Pure.
+ */
+export function shouldExpireFastToSmart(
+  mode: ChargeMode,
+  availableUnpluggedSinceMs: number | undefined,
+  now: number,
+  graceMs: number,
+): boolean {
+  return (
+    mode === 'fast' &&
+    availableUnpluggedSinceMs !== undefined &&
+    now - availableUnpluggedSinceMs > graceMs
+  )
+}
+
 /**
  * Total current the chargers on a circuit draw (or were commanded — whichever is higher), summed
  * across the circuit. Credited back into the live-meter headroom rung so a car ramping up to a

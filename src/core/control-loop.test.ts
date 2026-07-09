@@ -6,6 +6,7 @@ import {
   circuitLiveMaxPhaseA,
   circuitOwnDrawA,
   planCircuit,
+  shouldExpireFastToSmart,
   type LpDecision,
 } from './control-loop.js'
 import type { Config, LoadpointConfig } from './config.js'
@@ -90,6 +91,20 @@ test('circuitForLoadpoint resolves the owning circuit', () => {
   expect(circuitForLoadpoint(circuits, 'a')?.id).toBe('bal:house')
   expect(circuitForLoadpoint(circuits, 'c')?.id).toBe('lp:c')
   expect(circuitForLoadpoint(circuits, 'nope')).toBeUndefined()
+})
+
+test('shouldExpireFastToSmart: Fast is a boost that reverts only after the car is unplugged past the grace', () => {
+  const grace = 5 * 60_000
+  const t0 = 1_000_000
+  // Unplugged (Available) longer than the grace → revert fast → smart.
+  expect(shouldExpireFastToSmart('fast', t0, t0 + grace + 1, grace)).toBe(true)
+  // Unplugged only briefly (reposition / blip) → keep Fast.
+  expect(shouldExpireFastToSmart('fast', t0, t0 + grace - 1, grace)).toBe(false)
+  // Still plugged (or restart / WS blip → Unavailable, never sets the timer) → keep Fast.
+  expect(shouldExpireFastToSmart('fast', undefined, t0 + 10 * grace, grace)).toBe(false)
+  // Only Fast expires — smart/disabled are never auto-changed even if long "unplugged".
+  expect(shouldExpireFastToSmart('smart', t0, t0 + 10 * grace, grace)).toBe(false)
+  expect(shouldExpireFastToSmart('disabled', t0, t0 + 10 * grace, grace)).toBe(false)
 })
 
 test('bareCircuitAmps: disabled and smart-not-now → 0; smart-now/fast → the budget', () => {

@@ -57,6 +57,8 @@ import {
   circuitLiveMaxPhaseA,
   circuitOwnDrawA,
   planCircuit,
+  shouldExpireFastToSmart,
+  FAST_BOOST_UNPLUG_GRACE_MS,
   type Circuit,
   type LpDecision,
 } from './control-loop.js'
@@ -276,6 +278,12 @@ async function main() {
   }
   rebuildCircuits()
 
+  // When the OCPP connector first went `Available` (car unplugged), per loadpoint. Fast is a one-shot
+  // "boost until unplugged": circuitTick reverts fast→smart once this exceeds the grace. Keyed off
+  // `Available` (a real unplug) — NOT the raw WS link — so a wifi/WS blip (which reports `Unavailable`)
+  // or an OSC restart (no Available seen) keeps Fast, and only a genuine end-of-session reverts it.
+  const availableSince = new Map<string, number>()
+
   // Wire a charger's status → loadpoint state → event bus. Extracted into a helper AND the returned
   // unsubscribe is KEPT (by loadpoint name), so reconcile can re-wire or drop a charger without
   // leaking or double-firing listeners. Calling it again for the same loadpoint drops the prior sub.
@@ -288,8 +296,16 @@ async function main() {
     chargerUnsubs.get(lpCfg.name)?.()
     const unsub = charger.onStatus((status) => {
       Object.assign(state, foldChargerStatus(state, status))
-      // Charger module health tracks connection state — refresh on connect/disconnect.
-      updateHealth(health, lpCfg.charger, charger.health())
+      // Track the unplugged-since time for the Fast-boost expiry (set on the first Available frame,
+      // cleared as soon as the connector leaves Available — i.e. the car is plugged again).
+      if (status.status === 'Available') {
+        if (!availableSince.has(lpCfg.name)) availableSince.set(lpCfg.name, Date.now())
+      } else {
+        availableSince.delete(lpCfg.name)
+      }
+      // Charger module health tracks connection state — refresh (+ emit health.changed) on
+      // connect/disconnect so the UI reflects a drop/reconnect live, not up to a sweep interval later.
+      setHealth(lpCfg.charger, charger.health())
       // Persist energy for estimation when vehicle is offline
       events.emit('loadpoint.state', {
         name: state.name,
@@ -853,12 +869,31 @@ async function main() {
       const now = new Date()
       const lpCfgs = circuit.kind === 'balancer' ? circuit.loadpoints : [circuit.loadpoint]
 
-      // Lifecycle-owned vehicle polling: refresh on connect + during charging (fire-and-forget;
-      // the fresh reading + its anchor are used from the next tick).
+      // Lifecycle-owned vehicle polling + Fast-boost expiry.
       const nowMs = now.getTime()
       for (const lp of lpCfgs) {
         const st = loadpointStates.get(lp.name)
-        if (st) maybePollVehicle(lp, st, nowMs)
+        if (!st) continue
+        // Fast is a boost until the car is unplugged: once the connector has been Available past the
+        // grace, revert to smart (persist + emit). Brief unplugs / WS blips / restarts keep Fast.
+        if (
+          shouldExpireFastToSmart(
+            st.mode,
+            availableSince.get(lp.name),
+            nowMs,
+            FAST_BOOST_UNPLUG_GRACE_MS,
+          )
+        ) {
+          st.mode = 'smart'
+          setLoadpointMode(db, lp.name, 'smart')
+          availableSince.delete(lp.name)
+          events.emit('loadpoint.mode', { name: lp.name, mode: 'smart' })
+          log.info(
+            { loadpoint: lp.name },
+            'fast boost expired (car unplugged past grace) — reverting to smart',
+          )
+        }
+        maybePollVehicle(lp, st, nowMs)
       }
 
       // One budget for the whole circuit (the only meter read this tick); each loadpoint resolves
