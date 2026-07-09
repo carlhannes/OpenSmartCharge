@@ -15,6 +15,16 @@ function Home() {
   const chargers = useOsc((s) => s.chargers);
   const moduleHealth = useOsc((s) => s.moduleHealth);
   const degraded = useMemo(() => moduleHealth.filter((m) => m.status !== "ok"), [moduleHealth]);
+  // A degraded module that IS a charger link means charging is actually interrupted — don't claim
+  // "charging continues". A degraded peripheral (prices / balancer / vehicle / MQTT) is different:
+  // charging really does continue on the last-known plan. Correlate against the charger list (the
+  // health key equals the charger/loadpoint id) rather than a hardcoded module name.
+  const chargerDegraded = useMemo(
+    () => degraded.filter((m) => chargers.some((c) => c.id === m.id)),
+    [degraded, chargers],
+  );
+  const chargerDown = chargerDegraded.length > 0;
+  const lead = chargerDown ? chargerDegraded[0] : degraded[0];
   const [openId, setOpenId] = useState<string | null>(null);
   const openCharger = chargers.find((c) => c.id === openId) ?? null;
 
@@ -24,12 +34,23 @@ function Home() {
 
       <HomePowerCard />
 
-      {degraded.length > 0 && (
-        <div className="mx-5 mb-4 flex items-start gap-3 rounded-2xl bg-status-warn/10 p-4 text-sm text-status-warn">
+      {lead && (
+        <div
+          className={`mx-5 mb-4 flex items-start gap-3 rounded-2xl p-4 text-sm ${
+            chargerDown ? "bg-status-bad/10 text-status-bad" : "bg-status-warn/10 text-status-warn"
+          }`}
+        >
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
-            <div className="font-medium">Something's degraded — charging continues.</div>
-            <div className="mt-0.5 text-status-warn/80">{degraded[0].message}</div>
+            <div className="font-medium">
+              {chargerDown
+                ? "Charger offline — not charging."
+                : "Something's degraded — charging continues."}
+            </div>
+            <div className={`mt-0.5 ${chargerDown ? "text-status-bad/80" : "text-status-warn/80"}`}>
+              {lead.message ||
+                `${lead.name} — ${lead.status === "bad" ? "unavailable" : "degraded"}`}
+            </div>
           </div>
         </div>
       )}

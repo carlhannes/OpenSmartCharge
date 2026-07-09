@@ -136,6 +136,9 @@ interface OscState {
   ) => void;
   patchCharger: (id: string, patch: Partial<Charger>) => void;
   patchVehicle: (id: string, patch: Partial<Vehicle>) => void;
+  /** Patch a single module's health from a `health.changed` SSE event (id + backend status),
+   *  remapping to the store's status vocabulary. Inserts the entry if it's new. */
+  patchHealth: (id: string, health: "ok" | "degraded" | "unavailable") => void;
 
   _tick: () => void;
 }
@@ -390,6 +393,16 @@ export const useOsc = create<OscState>()((set, get) => ({
     set((s) => ({ chargers: s.chargers.map((c) => (c.id === id ? { ...c, ...patch } : c)) })),
   patchVehicle: (id, patch) =>
     set((s) => ({ vehicles: s.vehicles.map((v) => (v.id === id ? { ...v, ...patch } : v)) })),
+  patchHealth: (id, health) =>
+    set((s) => {
+      const status = health === "ok" ? "ok" : health === "degraded" ? "warn" : "bad";
+      const exists = s.moduleHealth.some((m) => m.id === id);
+      return {
+        moduleHealth: exists
+          ? s.moduleHealth.map((m) => (m.id === id ? { ...m, status } : m))
+          : [...s.moduleHealth, { id, name: id, status, message: "" }],
+      };
+    }),
 
   _tick: () => {
     if (get().source !== "demo") return; // mock tick runs only in confirmed demo mode

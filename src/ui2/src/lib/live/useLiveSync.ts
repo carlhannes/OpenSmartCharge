@@ -270,9 +270,17 @@ export function useLiveSync() {
             useOsc.getState().setHousePower(mapMeterWatts(e.snapshot));
           }
         }),
+        // Health is live: the backend emits `health.changed` on any module transition (+ a periodic
+        // sweep), forwarded over SSE — so a charger dropping / a source going stale reflects within
+        // ~1 s instead of up to a poll interval. Patches the single module the event names.
+        subscribe("health.changed", (d) => {
+          const e = d as { id: string; health: api.ModuleHealth };
+          useOsc.getState().patchHealth(e.id, e.health);
+        }),
       );
 
-      // Health has no SSE event → poll.
+      // Backstop poll: SSE `health.changed` (above) keeps health live; this reconciles the full set
+      // periodically too, covering the initial snapshot + any event missed across a reconnect.
       healthTimer = setInterval(() => {
         api
           .getHealth()
