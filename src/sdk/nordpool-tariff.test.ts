@@ -96,7 +96,12 @@ test('nextDelay: next-day when tomorrow cached, wait-for-window before 13:15, re
   const retry = nextDelay(s, false, new Date('2026-07-04T12:00:00Z'))
   expect(retry.reason).toBe('retry')
   expect(retry.delayMs).toBe(30 * 60_000)
-  // Late enough that a backed-off retry would cross midnight → defer to next-day.
+  // Backoff is CAPPED at 1 h and keeps retrying — it must NOT collapse to next-day (the ~24 h
+  // strand bug). Even many failures late in the day stay on the hourly retry.
+  const backedOff = nextDelay({ consecutiveFailures: 6 }, false, new Date('2026-07-04T12:00:00Z'))
+  expect(backedOff.reason).toBe('retry')
+  expect(backedOff.delayMs).toBe(60 * 60_000) // 2^5 h raw, clamped to the 1 h cap
   const late = nextDelay({ consecutiveFailures: 6 }, false, new Date('2026-07-04T21:50:00Z'))
-  expect(late.reason).toBe('next-day')
+  expect(late.reason).toBe('retry') // was 'next-day' before the fix — no longer strands overnight
+  expect(late.delayMs).toBe(60 * 60_000)
 })

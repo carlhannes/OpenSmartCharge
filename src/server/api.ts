@@ -653,6 +653,25 @@ export function createApiRouter(deps: ApiDeps): Router {
       .catch(() => res.status(502).json({ error: 'failed to retrieve prices' }))
   })
 
+  // POST /api/tariffs/:name/refresh — force an immediate re-fetch now, bypassing the schedule. The
+  // manual recovery for "tomorrow's prices are empty and the scheduled backoff hasn't retried yet".
+  // Best-effort: the provider swallows fetch errors into its health + a retry, so a 200 with the
+  // resulting health tells the caller whether it recovered (ok) or is still degraded/unavailable.
+  router.post('/tariffs/:name/refresh', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    const tariff = deps.tariffs.get(name)
+    if (!tariff) {
+      res.status(404).json({ error: 'tariff not found' })
+      return
+    }
+    if (!tariff.refresh) {
+      res.status(501).json({ error: 'tariff does not support manual refresh' })
+      return
+    }
+    await tariff.refresh()
+    res.json({ name, health: tariff.health() })
+  })
+
   // GET /api/meters/:name
   router.get('/meters/:name', (req: Request, res: Response) => {
     const reader = deps.meterReaders.get(String(req.params.name))

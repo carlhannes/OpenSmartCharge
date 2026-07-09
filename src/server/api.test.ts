@@ -59,6 +59,35 @@ test('command endpoints resolve loadpoint -> charger when names differ', async (
   })
 })
 
+// POST /api/tariffs/:name/refresh forces an out-of-band fetch and returns the resulting health;
+// 404 for an unknown tariff, 501 when the provider doesn't implement refresh.
+test('POST /api/tariffs/:name/refresh triggers refresh and reports health', async () => {
+  let refreshed = false
+  const tariff = {
+    refresh: async () => {
+      refreshed = true
+    },
+    health: () => 'ok',
+  }
+  const noRefresh = { health: () => 'degraded' }
+  const deps = {
+    tariffs: new Map([
+      ['home', tariff],
+      ['legacy', noRefresh],
+    ]),
+  } as unknown as ApiDeps
+
+  await withApi(deps, async (baseUrl) => {
+    const ok = await postJson(`${baseUrl}/api/tariffs/home/refresh`, {})
+    expect(ok.status).toBe(200)
+    expect(await ok.json()).toEqual({ name: 'home', health: 'ok' })
+    expect(refreshed).toBe(true)
+
+    expect((await postJson(`${baseUrl}/api/tariffs/nope/refresh`, {})).status).toBe(404)
+    expect((await postJson(`${baseUrl}/api/tariffs/legacy/refresh`, {})).status).toBe(501)
+  })
+})
+
 // Regression: /api/transactions/:id per-sample energy must be the session delta from meterStart,
 // not the charger's absolute lifetime register (which would offset a cumulative-energy chart).
 test('GET /api/transactions/:id returns per-sample energy as delta from meterStart', async () => {

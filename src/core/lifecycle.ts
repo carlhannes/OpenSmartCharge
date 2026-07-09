@@ -66,6 +66,8 @@ import {
   SESSION_RECONCILE,
   type SessionReconcilerState,
 } from './session-reconciler.js'
+import { backoffDelayMs } from './source-reconciler.js'
+import type { ModuleHealth } from '../sdk/types.js'
 
 const PLUGINS_DIR = process.env.OSC_PLUGINS_DIR ?? './plugins'
 
@@ -91,6 +93,20 @@ async function main() {
 
   const events = createEventBus()
   const health = createHealthMap()
+
+  // Health → SSE. setHealth updates the map AND emits `health.changed` when a module's health value
+  // actually changes, so the UI status view is live (not poll-only, which left it stale). Tracked
+  // against a separate last-emitted snapshot so an emit fires regardless of which path last wrote the
+  // map. A periodic sweepHealth() (below) re-evaluates every module so staleness-driven transitions
+  // (a tariff going stale at the publish window, a vehicle after failed polls) surface on their own.
+  const lastEmittedHealth = new Map<string, ModuleHealth>()
+  const setHealth = (id: string, h: ModuleHealth): void => {
+    updateHealth(health, id, h)
+    if (lastEmittedHealth.get(id) !== h) {
+      lastEmittedHealth.set(id, h)
+      events.emit('health.changed', { id, health: h })
+    }
+  }
 
   await loadPlugins(PLUGINS_DIR, log)
 
@@ -363,11 +379,19 @@ async function main() {
   // when the decision actually changes, not every ~30 s tick with an identical frame.
   const lastResolveByLoadpoint = new Map<string, string>()
 
+  // On a FAILED warranted poll, retry with capped exponential backoff (seconds→minutes) instead of
+  // waiting the full 15 min idle cadence — so a transient car-API outage recovers fast when it
+  // clears, without hammering the rate-limited API. base ≈ one control tick.
+  const VEHICLE_POLL_BACKOFF = { baseMs: 30_000, factor: 2, maxMs: 300_000 }
+
   // Lifecycle-owned vehicle polling (the module owns no timer). Per loadpoint: when we last polled
-  // + whether we've polled since this connection began; and the SoC "anchor" — a real reading +
-  // the session energy at that moment — so the estimate carries it forward by kWh delivered SINCE,
-  // instead of double-counting the whole session on top of a mid-session reading.
-  const vehiclePollState = new Map<string, { lastPollAt: number; polledThisConnection: boolean }>()
+  // + whether we've polled since this connection began + a consecutive-failure count for backoff;
+  // and the SoC "anchor" — a real reading + the session energy at that moment — so the estimate
+  // carries it forward by kWh delivered SINCE, instead of double-counting the whole session.
+  const vehiclePollState = new Map<
+    string,
+    { lastPollAt: number; polledThisConnection: boolean; consecutiveFailures: number }
+  >()
   const vehicleAnchor = new Map<string, { soc: number; sessionEnergyKWh: number }>()
   // The session's FIRST real reading, kept alongside the latest anchor so we can observe THIS
   // session's charging efficiency (see effectiveEfficiencyFor). Reset on disconnect, so each
@@ -470,9 +494,14 @@ async function main() {
     if (!lpCfg.vehicle) return
     const vehicle = vehicles.get(lpCfg.vehicle)
     if (!vehicle) return
-    const vp = vehiclePollState.get(lpCfg.name) ?? { lastPollAt: 0, polledThisConnection: false }
+    const vp = vehiclePollState.get(lpCfg.name) ?? {
+      lastPollAt: 0,
+      polledThisConnection: false,
+      consecutiveFailures: 0,
+    }
     if (!state.connected) {
       vp.polledThisConnection = false // reset so the next connection re-anchors on its first tick
+      vp.consecutiveFailures = 0 // fresh connection → drop any stale backoff
       vehiclePollState.set(lpCfg.name, vp)
       sessionFirstReading.delete(lpCfg.name) // each new charging session measures its own efficiency
       return
@@ -483,14 +512,20 @@ async function main() {
     const h = localHour(new Date(nowMs), getTimezone(db))
     const { startHour: ds, endHour: de } = sc.vehicleIdlePollDayWindow
     const isDay = ds <= de ? h >= ds && h < de : h >= ds || h < de
+    // While a poll is failing, override the normal cadence with a short backoff so recovery is
+    // prompt instead of one-per-15-min; otherwise use the drawing/idle cadence as usual.
+    const backoffMs = backoffDelayMs(vp.consecutiveFailures, VEHICLE_POLL_BACKOFF)
+    const chargingIntervalMs = backoffMs > 0 ? backoffMs : sc.vehiclePollIntervalSec * 1000
     const idleIntervalMs =
-      (isDay ? sc.vehicleIdlePollIntervalSec : sc.vehiclePollIntervalSec) * 1000
+      backoffMs > 0
+        ? backoffMs
+        : (isDay ? sc.vehicleIdlePollIntervalSec : sc.vehiclePollIntervalSec) * 1000
     const should = shouldPollVehicle({
       now: nowMs,
       connected: state.connected,
       drawing: state.currentA > 0,
       lastPollAt: vp.lastPollAt,
-      chargingIntervalMs: sc.vehiclePollIntervalSec * 1000,
+      chargingIntervalMs,
       idleIntervalMs,
       polledThisConnection: vp.polledThisConnection,
     })
@@ -505,13 +540,23 @@ async function main() {
     void vehicle
       .refresh()
       .then((data) => {
+        vp.consecutiveFailures = 0 // success → clear backoff, back to the normal cadence
         const reading = { soc: data.soc, sessionEnergyKWh: state.sessionEnergyKWh }
         vehicleAnchor.set(lpCfg.name, reading)
         // Record the session's first real reading once; with a later one it yields observed efficiency.
         if (!sessionFirstReading.has(lpCfg.name)) sessionFirstReading.set(lpCfg.name, reading)
-        updateHealth(health, vehicleName, vehicle.health())
+        setHealth(vehicleName, vehicle.health())
       })
-      .catch((err) => log.warn({ err, vehicle: vehicleName }, 'vehicle refresh failed'))
+      .catch((err) => {
+        // Count the failure so the next poll retries on the short backoff, and reflect the now-
+        // failure-aware module health immediately (don't wait for the periodic sweep).
+        vp.consecutiveFailures++
+        setHealth(vehicleName, vehicle.health())
+        log.warn(
+          { err, vehicle: vehicleName, consecutiveFailures: vp.consecutiveFailures },
+          'vehicle refresh failed',
+        )
+      })
   }
 
   // Build a LoadpointSnapshot from live state.
@@ -995,7 +1040,7 @@ async function main() {
   events.on('loadpoint.mode', (payload) => {
     const p = payload as { name: string; mode: ChargeMode }
     const charger = chargers.get(config.loadpoints.find((l) => l.name === p.name)?.charger ?? '')
-    if (charger) updateHealth(health, p.name, charger.health())
+    if (charger) setHealth(p.name, charger.health())
   })
 
   // Attach OCPP WS upgrade handler to the HTTP server
@@ -1049,12 +1094,27 @@ async function main() {
     'control loop started',
   )
 
+  // Periodic health sweep: re-evaluate every module's health() and emit `health.changed` on any
+  // transition (through setHealth). Catches staleness-driven changes that no event would otherwise
+  // fire — a tariff going stale at the publish window, a vehicle after failed polls — so the status
+  // view stays live + honest instead of poll-only + stale. Runs now (seeds the SSE stream) then 15 s.
+  const sweepHealth = (): void => {
+    for (const [id, m] of chargers) setHealth(id, m.health())
+    for (const [id, m] of tariffs) setHealth(id, m.health())
+    for (const [id, m] of meterReaders) setHealth(id, m.health())
+    for (const [id, m] of vehicles) setHealth(id, m.health())
+    for (const [id, m] of balancers) setHealth(id, m.health())
+  }
+  sweepHealth()
+  const healthSweepInterval = setInterval(sweepHealth, 15_000)
+
   log.info('OpenSmartCharge ready')
 
   const shutdown = () => {
     log.info('shutting down gracefully')
     clearInterval(controlInterval)
     clearInterval(logPruneInterval)
+    clearInterval(healthSweepInterval)
     httpServer.close()
     if (ocppServer) void ocppServer.close()
     for (const b of balancers.values()) void b.stop()

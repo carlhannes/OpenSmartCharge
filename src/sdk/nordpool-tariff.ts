@@ -10,7 +10,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { ModuleCtx, ModuleHealth } from './types.js'
 import type { Tariff, TariffSlot } from './tariff.js'
-import { localParts, msUntilLocalTime, msUntilLocalMidnight } from './local-time.js'
+import { localParts, msUntilLocalTime } from './local-time.js'
 
 // Nord Pool day-ahead prices publish ~13:00 CET; wait until 13:15 to fetch. This is the price
 // MARKET's timezone (Nord Pool = CET/CEST), NOT the site/user timezone — the publish window +
@@ -18,6 +18,10 @@ import { localParts, msUntilLocalTime, msUntilLocalMidnight } from './local-time
 const MARKET_TZ = 'Europe/Stockholm'
 const PUBLISH_HOUR = 13
 const PUBLISH_MINUTE = 15
+// Cap the after-publish retry backoff. A missing "tomorrow" past the publish window is a fetch
+// FAILURE (network/provider), not "not published yet" — so we keep retrying at most hourly until it
+// succeeds, instead of letting the backoff grow past midnight and stranding empty prices ~24 h.
+const MAX_RETRY_MS = 60 * 60_000
 
 /**
  * Thrown by a provider's `fetchSlots` when the configured zone is absent from the
@@ -134,17 +138,13 @@ export function nextDelay(
       reason: 'wait-for-window',
     }
   }
-  // Past publish window, don't have tomorrow yet — retry chain: +30m, then 1h, 2h, 4h, …
+  // Past publish window, don't have tomorrow yet — a fetch failure, not "not published". Retry with
+  // capped exponential backoff (30 m, then 1 h, then hourly) so connectivity returning recovers
+  // within ~1 h. (Previously the backoff could grow past midnight and collapse to "next-day" —
+  // 13:15 tomorrow — stranding empty prices for ~24 h with no way to recover sooner.)
   const n = state.consecutiveFailures
-  const delayMs = n === 0 ? 30 * 60_000 : Math.pow(2, n - 1) * 3600_000
-  const tillMidnight = msUntilLocalMidnight(now, MARKET_TZ)
-  if (delayMs >= tillMidnight) {
-    return {
-      delayMs: msUntilLocalTime(now, PUBLISH_HOUR, PUBLISH_MINUTE, MARKET_TZ),
-      reason: 'next-day',
-    }
-  }
-  return { delayMs, reason: 'retry' }
+  const raw = n === 0 ? 30 * 60_000 : Math.pow(2, n - 1) * 3600_000
+  return { delayMs: Math.min(raw, MAX_RETRY_MS), reason: 'retry' }
 }
 
 // ── the shared provider factory ──────────────────────────────────────────────
@@ -230,6 +230,14 @@ export function createNordpoolDayAheadTariff(ctx: ModuleCtx, opts: NordpoolTarif
     },
     async stop() {
       if (timer !== undefined) clearTimeout(timer)
+    },
+    // Manual out-of-band refetch (POST /api/tariffs/:name/refresh). Cancels the pending timer and
+    // fetches now (global fetch — immediate, no jitter), which reschedules the normal cadence.
+    // Never rejects: runOnce swallows fetch errors into health + a retry, so the caller can read
+    // health() afterwards to see whether it recovered.
+    async refresh() {
+      if (timer !== undefined) clearTimeout(timer)
+      await runOnce(false)
     },
     health() {
       return health
