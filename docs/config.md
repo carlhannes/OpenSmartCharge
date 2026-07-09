@@ -8,16 +8,18 @@ Copy `osc.dist.yaml` to `osc.yaml` and edit. The file is gitignored.
 
 ```yaml
 site:
-  name: "My Home"   # displayed in UI
-  port: 8080        # HTTP server port (default: 8080)
-  mainBreakerA: 16  # optional — main fuse per phase (amps). Circuit ceiling for loadpoints
-                    # WITHOUT a balancer; the smart-charging static current fallback sizes
-                    # against it. A balancer, when configured, carries its own mainBreakerA.
-  timezone: Europe/Stockholm  # optional (default Europe/Stockholm) — the SITE/user timezone for
-                    # all wall-clock planning: the night window, plan "ready by" times, and
-                    # departure targets. Seeds the DB; the UI setup flow auto-detects + overrides
-                    # it (or PUT /api/settings). Tariff providers use their own market timezone,
-                    # not this — Nord Pool day-ahead is always CET regardless of where you are.
+  name: 'My Home' # displayed in UI
+  port: 8080 # HTTP server port (default: 8080)
+  mainBreakerA:
+    16 # optional — main fuse per phase (amps). Circuit ceiling for loadpoints
+    # WITHOUT a balancer; the smart-charging static current fallback sizes
+    # against it. A balancer, when configured, carries its own mainBreakerA.
+  timezone:
+    Europe/Stockholm # optional (default Europe/Stockholm) — the SITE/user timezone for
+    # all wall-clock planning: the night window, plan "ready by" times, and
+    # departure targets. Seeds the DB; the UI setup flow auto-detects + overrides
+    # it (or PUT /api/settings). Tariff providers use their own market timezone,
+    # not this — Nord Pool day-ahead is always CET regardless of where you are.
 ```
 
 ### `smartCharging`
@@ -26,21 +28,28 @@ Optional. Tunes the control loop and the graceful-degradation fallbacks. Every f
 
 ```yaml
 smartCharging:
-  controlIntervalSec: 30   # control-loop tick interval (5–60 s). Kept slow because a charger/car
-                           # takes 15–30 s to act on a new limit; ticking faster just oscillates.
-  deadbandA: 1             # only re-command the charger when the target moves ≥ this many amps
-  nightWindow:             # assumed-cheap window (local Stockholm hours), used by the price and
-    startHour: 23          # current fallbacks when no live/historical data is available
+  controlIntervalSec:
+    30 # control-loop tick interval (5–60 s). Kept slow because a charger/car
+    # takes 15–30 s to act on a new limit; ticking faster just oscillates.
+  deadbandA: 1 # only re-command the charger when the target moves ≥ this many amps
+  nightWindow: # assumed-cheap window (local Stockholm hours), used by the price and
+    startHour: 23 # current fallbacks when no live/historical data is available
     endHour: 5
-  nightMarginA: 3          # static night current = mainBreakerA − nightMarginA
-  daytimeFraction: 0.5     # static day current   = mainBreakerA × daytimeFraction
-  historicalDays: 3        # look-back for the historical price-average and worst-case-load rungs
-  vehiclePollIntervalSec: 900   # spacing between vehicle SoC refreshes WHILE drawing current
-                                # (300–3600 s, default 15 min); also the night-time idle rate
-  vehicleIdlePollIntervalSec: 600  # idle-poll spacing (plugged, not drawing) during the day window
-                                   # below (60–1800 s, default 10 min); off-window uses the rate above.
-                                   # Catches remote climate/plug changes; raise if you hit rate limits
-  vehicleIdlePollDayWindow:     # local hours [start, end) for the faster idle poll
+  nightMarginA: 3 # static night current = mainBreakerA − nightMarginA
+  daytimeFraction: 0.5 # static day current   = mainBreakerA × daytimeFraction
+  reserveA:
+    1 # steady-state headroom below the fuse for the load-aware rungs: the
+    # charger targets mainBreakerA − reserveA, so a load-step has room before
+    # the fuse and steady state never sits at zero margin. 0 = ride the fuse.
+  historicalDays: 3 # look-back for the historical price-average and worst-case-load rungs
+  vehiclePollIntervalSec:
+    900 # spacing between vehicle SoC refreshes WHILE drawing current
+    # (300–3600 s, default 15 min); also the night-time idle rate
+  vehicleIdlePollIntervalSec:
+    600 # idle-poll spacing (plugged, not drawing) during the day window
+    # below (60–1800 s, default 10 min); off-window uses the rate above.
+    # Catches remote climate/plug changes; raise if you hit rate limits
+  vehicleIdlePollDayWindow: # local hours [start, end) for the faster idle poll
     startHour: 6
     endHour: 22
   chargingEfficiency: 0.92 # AC charge efficiency (0.5–1) — fallback for the between-poll SoC estimate; each session refines it from its own real readings
@@ -50,23 +59,23 @@ smartCharging:
 
 - **Energy** (how much to add): live/estimated vehicle SoC → a fixed `targetKWh` → a duty-cycle heuristic.
 - **Price** (when it's cheap): live day-ahead tariff → last-`historicalDays` average per hour-of-day → the static night window above.
-- **Current** (how many amps): live meter headroom → worst-case household load per hour over the last `historicalDays` → a time-of-day static (night `mainBreakerA − nightMarginA`, day `mainBreakerA × daytimeFraction`), clamped to the charger's `maxA` and floored to 0 below the 6 A IEC minimum.
+- **Current** (how many amps): live meter headroom → worst-case household load per hour over the last `historicalDays` → a time-of-day static (night `mainBreakerA − nightMarginA`, day `mainBreakerA × daytimeFraction`), clamped to the charger's `maxA` and floored to 0 below the 6 A IEC minimum. The two load-aware rungs target `mainBreakerA − reserveA`, so steady state sits a modest margin below the fuse; a brief overshoot is corrected on the next control tick rather than by steering faster (which would just oscillate the charger).
 
 Because of this, **smart mode works with no balancer, no tariff, and no vehicle** — each is an enhancement, not a requirement.
 
 ### `mqttBridge`
 
-Optional. OSC's **outbound** MQTT integration: it publishes OSC's own state, accepts commands, and (optionally) emits Home Assistant discovery. This is a **separate concern from meter readers** — those *listen* on their own broker (see `meterReaders[]`); this is OSC *publishing*. Omit `mqttBridge` and OSC publishes nothing to any broker — a listen-only meter needs no `mqttBridge`.
+Optional. OSC's **outbound** MQTT integration: it publishes OSC's own state, accepts commands, and (optionally) emits Home Assistant discovery. This is a **separate concern from meter readers** — those _listen_ on their own broker (see `meterReaders[]`); this is OSC _publishing_. Omit `mqttBridge` and OSC publishes nothing to any broker — a listen-only meter needs no `mqttBridge`.
 
 ```yaml
 mqttBridge:
   broker:
-    host: localhost   # MQTT broker hostname or IP
-    port: 1883        # default: 1883
-    user: ""          # optional
-    password: ""      # optional
-  topicPrefix: osc    # all OSC-published topics live under this prefix
-  homeAssistantDiscovery: true   # publish HA discovery payloads on startup
+    host: localhost # MQTT broker hostname or IP
+    port: 1883 # default: 1883
+    user: '' # optional
+    password: '' # optional
+  topicPrefix: osc # all OSC-published topics live under this prefix
+  homeAssistantDiscovery: true # publish HA discovery payloads on startup
 ```
 
 > **Migration.** The old combined top-level `mqtt:` block is gone (a boot WARNING fires if it's still present, and it's ignored). Inbound (a meter listening) moved onto `meterReaders[].broker`; outbound is `mqttBridge:`. Each carries its own `broker`, so reading a meter and publishing to a broker are fully independent.
@@ -78,8 +87,8 @@ A list of tariff sources. Each gets a `name` used by loadpoints.
 ```yaml
 tariffs:
   - name: home
-    type: elprisetjustnu   # Swedish zones (SE1–SE4)
-    zone: SE4              # SE1 | SE2 | SE3 | SE4
+    type: elprisetjustnu # Swedish zones (SE1–SE4)
+    zone: SE4 # SE1 | SE2 | SE3 | SE4
 ```
 
 **Built-in types:** `elprisetjustnu` (Sweden), `elering` (Baltics + Finland), `fixed` (flat rate)
@@ -104,7 +113,7 @@ Both providers publish the same Nord Pool day-ahead auction — pick the one tha
 tariffs:
   - name: flat
     type: fixed
-    pricePerKWh: 1.5        # every hour costs the same (default 0)
+    pricePerKWh: 1.5 # every hour costs the same (default 0)
     # currency: SEK         # optional label (default SEK)
 ```
 
@@ -124,19 +133,20 @@ A list of electrical circuits with their load balancing configuration.
 ```yaml
 balancers:
   - name: house-main
-    type: mqtt-circuit       # splits the circuit across its loadpoints (name is legacy — see below)
-    mainBreakerA: 25         # main fuse per phase, in amps — the hard ceiling for this circuit
-    phases: 3                # 1 or 3
+    type: mqtt-circuit # splits the circuit across its loadpoints (name is legacy — see below)
+    mainBreakerA: 25 # main fuse per phase, in amps — the hard ceiling for this circuit
+    phases: 3 # 1 or 3
     meterReader: house-phase # live current from a meterReader (the meter SSoT); see meterReaders[]
     # Static time-of-day fallback margins, per-breaker. Used only when the meter is stale AND
     # there is no load history yet. Unset → global smartCharging.{nightMarginA,daytimeFraction}.
     # nightMarginA: 3        # night budget = mainBreakerA − this A
     # daytimeFraction: 0.5   # day budget   = mainBreakerA × this
+    # reserveA: 1            # per-circuit fuse headroom; unset → global smartCharging.reserveA
 ```
 
 **Built-in types:** `mqtt-circuit`
 
-The balancer is a **pure splitter**: each tick it divides the circuit's already-resolved current budget across the loadpoints sharing it (fast-mode first, then an equal split of the remainder, with ±1 A hysteresis and the 6 A IEC floor). It holds **no meter and no timers** — the meter is a separate `meterReader` (the SSoT for live current *and* its staleness), and the current-degradation ladder runs once per circuit in the control loop. When the meter's `health()` goes `degraded`/`unavailable` the whole circuit steps down the ladder (live-meter → historical-worstcase → static-tod); `nightMarginA`/`daytimeFraction` (falling back to the global `smartCharging.*`) size that bottom static rung. The `mqtt-circuit` type name is kept for config back-compat.
+The balancer is a **pure splitter**: each tick it divides the circuit's already-resolved current budget across the loadpoints sharing it (fast-mode first, then an equal split of the remainder, with ±1 A hysteresis and the 6 A IEC floor). It holds **no meter and no timers** — the meter is a separate `meterReader` (the SSoT for live current _and_ its staleness), and the current-degradation ladder runs once per circuit in the control loop. When the meter's `health()` goes `degraded`/`unavailable` the whole circuit steps down the ladder (live-meter → historical-worstcase → static-tod); `nightMarginA`/`daytimeFraction` (falling back to the global `smartCharging.*`) size that bottom static rung. The `mqtt-circuit` type name is kept for config back-compat.
 
 > **Migration.** The old self-contained meter fields — `meterTopicPrefix`, `safeStaticCurrentA`, `meterStaleAfterSec`, `intervalSec` — are deprecated (a boot WARNING fires if any is set) and otherwise ignored. Move the meter onto a `meterReaders[]` entry: replace `meterTopicPrefix: house` with a `type: mqtt-phase` reader (`topicPrefix: house`) and point the balancer's `meterReader:` at it. Replace the flat `safeStaticCurrentA` with `nightMarginA`/`daytimeFraction`; the control cadence is now the global `smartCharging.controlIntervalSec`.
 
@@ -148,9 +158,9 @@ Optional. Enables SoC-aware departure planning. When a vehicle is wired to a loa
 vehicles:
   - name: enyaq
     type: skoda
-    username: "me@example.com"   # MySkoda account email
-    password: "your-password"    # MySkoda account password
-    vin: TMBABCDEF12345678       # 17-char VIN (uppercase)
+    username: 'me@example.com' # MySkoda account email
+    password: 'your-password' # MySkoda account password
+    vin: TMBABCDEF12345678 # 17-char VIN (uppercase)
 ```
 
 **Built-in types:** `skoda`
@@ -170,14 +180,14 @@ Optional. The **single source of truth for live household current** — a balanc
 ```yaml
 meterReaders:
   - name: house-phase
-    type: mqtt-phase       # raw per-phase amps on <topicPrefix>/i1_a, /i2_a, /i3_a
-    topicPrefix: house     # published by pulse_bridge.py or any DSMR/Modbus bridge (default: house)
-    staleAfterSec: 60      # seconds before health → degraded if no frame received (default: 60)
-    broker:                # this reader's OWN broker (listen-only) — not OSC's outbound bridge
+    type: mqtt-phase # raw per-phase amps on <topicPrefix>/i1_a, /i2_a, /i3_a
+    topicPrefix: house # published by pulse_bridge.py or any DSMR/Modbus bridge (default: house)
+    staleAfterSec: 60 # seconds before health → degraded if no frame received (default: 60)
+    broker: # this reader's OWN broker (listen-only) — not OSC's outbound bridge
       host: 192.168.3.12
       port: 1883
       user: evcc
-      password: ""
+      password: ''
 ```
 
 **Built-in types:** `mqtt-phase`, `tibber-pulse`
@@ -206,10 +216,10 @@ OCPP charger registrations. The charger must be configured to connect to `ws://<
 chargers:
   - name: garage
     type: ocpp16
-    stationId: MYCHARGER01   # must match the chargepoint identifier configured in the charger
-    maxA: 16                 # optional, default 16 — maximum current this charger may deliver
-    phases: 3                # optional, default 3 — physical phases; sent as numberPhases in the charging profile
-    autoStartTransaction: true  # optional, default true — auto-send RemoteStartTransaction on plug-in
+    stationId: MYCHARGER01 # must match the chargepoint identifier configured in the charger
+    maxA: 16 # optional, default 16 — maximum current this charger may deliver
+    phases: 3 # optional, default 3 — physical phases; sent as numberPhases in the charging profile
+    autoStartTransaction: true # optional, default true — auto-send RemoteStartTransaction on plug-in
 ```
 
 **Built-in types:** `ocpp16`
@@ -225,40 +235,43 @@ The control units — one per charger, connecting it to a circuit, tariff, and o
 ```yaml
 loadpoints:
   - name: garage-loadpoint
-    charger: garage           # must match a name in chargers[]
-    vehicle: enyaq            # optional — must match a name in vehicles[]
-    tariff: home              # optional — must match a name in tariffs[]
-    balancer: house-main      # optional — must match a name in balancers[]
-    defaultMode: smart        # disabled | smart | fast
-    targetSoc: 80             # default charge target (%) — used when a vehicle SoC is available
-    targetTime: "07:00"       # daily departure time (HH:MM, site-local — see site.timezone)
-                              # if omitted, smart mode charges as cheaply as possible
-                              # without a time constraint
-    targetKWh: 40             # optional — fixed energy to add per session (kWh). The energy
-                              # fallback when there's no vehicle SoC (guest car / no app).
-                              # UI offers 10–100 in steps of 10.
-    minSoc: 25                # optional — minimum SoC (%) safety floor. In smart mode, if the
-                              # car's SoC drops below this, OSC force-charges immediately
-                              # (bypassing the price wait). No-op with no vehicle SoC.
+    charger: garage # must match a name in chargers[]
+    vehicle: enyaq # optional — must match a name in vehicles[]
+    tariff: home # optional — must match a name in tariffs[]
+    balancer: house-main # optional — must match a name in balancers[]
+    defaultMode: smart # disabled | smart | fast
+    targetSoc: 80 # default charge target (%) — used when a vehicle SoC is available
+    targetTime:
+      '07:00' # daily departure time (HH:MM, site-local — see site.timezone)
+      # if omitted, smart mode charges as cheaply as possible
+      # without a time constraint
+    targetKWh:
+      40 # optional — fixed energy to add per session (kWh). The energy
+      # fallback when there's no vehicle SoC (guest car / no app).
+      # UI offers 10–100 in steps of 10.
+    minSoc:
+      25 # optional — minimum SoC (%) safety floor. In smart mode, if the
+      # car's SoC drops below this, OSC force-charges immediately
+      # (bypassing the price wait). No-op with no vehicle SoC.
 ```
 
 `targetSoc`/`targetTime`/`targetKWh` are a single **ad-hoc** target — the fallback when no recurring [plan](#charging-plans) governs. They are also seeds (see [Config vs. runtime state](#config-vs-runtime-state-persist-wins--configapply)).
 
 **Charge modes:**
 
-| Mode | Behaviour |
-|---|---|
-| `disabled` | No charging. Current is set to 0. |
-| `smart` | Charges in the cheapest hours to reach the energy target by `targetTime`. Works **with or without a balancer**, and falls back gracefully when tariff/vehicle/meter data is missing (see [`smartCharging`](#smartcharging)). |
-| `fast` | Charges at the maximum current the circuit budget allows, ignoring tariff and SoC target. |
+| Mode       | Behaviour                                                                                                                                                                                                                    |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `disabled` | No charging. Current is set to 0.                                                                                                                                                                                            |
+| `smart`    | Charges in the cheapest hours to reach the energy target by `targetTime`. Works **with or without a balancer**, and falls back gracefully when tariff/vehicle/meter data is missing (see [`smartCharging`](#smartcharging)). |
+| `fast`     | Charges at the maximum current the circuit budget allows, ignoring tariff and SoC target.                                                                                                                                    |
 
-In `smart` mode two signals **force-charge**, overriding both the price wait and a reached target: a **`minSoc` floor** breach, and **remote climate/preconditioning running while the car is plugged in**. When climate is the *only* reason to charge (battery already at target), OSC offers just the **6 A IEC minimum** — a car that draws preconditioning from the charger (e.g. Kia EV6) then runs it off the grid; how much it actually pulls is up to the car (some, like the Škoda Enyaq, run climate off the battery when at their charge limit and draw ≈nothing). OSC learns climate is on from the vehicle poll (faster during the day window; `POST /api/vehicles/:name/refresh` forces it immediately). `fast` and `disabled` ignore both (fast always charges; disabled never does).
+In `smart` mode two signals **force-charge**, overriding both the price wait and a reached target: a **`minSoc` floor** breach, and **remote climate/preconditioning running while the car is plugged in**. When climate is the _only_ reason to charge (battery already at target), OSC offers just the **6 A IEC minimum** — a car that draws preconditioning from the charger (e.g. Kia EV6) then runs it off the grid; how much it actually pulls is up to the car (some, like the Škoda Enyaq, run climate off the battery when at their charge limit and draw ≈nothing). OSC learns climate is on from the vehicle poll (faster during the day window; `POST /api/vehicles/:name/refresh` forces it immediately). `fast` and `disabled` ignore both (fast always charges; disabled never does).
 
 The mode can be changed at any time via the UI, REST, or MQTT — it takes effect immediately (an on-demand control-loop tick) and otherwise on the next tick (default 30 s).
 
 ### Config vs. runtime state (persist-wins + `config:apply`)
 
-`defaultMode` and the `targetSoc`/`targetTime`/`targetKWh` fields are **seeds**, not live bindings. The database is the source of truth at runtime: a loadpoint's mode and targets are persisted, and changes you make via the UI/REST/MQTT **survive restarts and win over the config file**. So config values only take effect the *first* time a loadpoint is seen (a fresh DB); editing them in `osc.yaml` afterwards does nothing on its own.
+`defaultMode` and the `targetSoc`/`targetTime`/`targetKWh` fields are **seeds**, not live bindings. The database is the source of truth at runtime: a loadpoint's mode and targets are persisted, and changes you make via the UI/REST/MQTT **survive restarts and win over the config file**. So config values only take effect the _first_ time a loadpoint is seen (a fresh DB); editing them in `osc.yaml` afterwards does nothing on its own.
 
 To declaratively re-apply the config file onto the database — overwriting the persisted mode + targets (a target omitted in config is cleared) — run:
 
@@ -272,7 +285,7 @@ It prints a before→after diff per loadpoint and exits; it does not start the s
 
 #### Structural config (runtime-editable, applied live)
 
-Beyond mode/targets, **structural** config is runtime-editable too: the tariff region, the main breaker (`site.mainBreakerA` and balancer params), and even claiming a newly-connected charger or adding a vehicle. These persist as JSON overrides in the `config_overrides` table (layered over `osc.yaml` to form the *effective* config, re-validated by the same schema) and — unlike loadpoint state — **apply immediately**: the lifecycle soft-reloads just the affected module, no restart. Endpoints: `PUT /api/site`, `PUT /api/tariffs/:name`, `PUT /api/balancers/:name`, the charger `POST`/`PUT`/`DELETE /api/chargers` (+ `GET /api/chargers/pending`), and `POST`/`DELETE /api/vehicles` (+ `PUT /api/loadpoints/:name` to bind a vehicle/tariff/balancer). Every change emits a `config.changed` SSE.
+Beyond mode/targets, **structural** config is runtime-editable too: the tariff region, the main breaker (`site.mainBreakerA` and balancer params), and even claiming a newly-connected charger or adding a vehicle. These persist as JSON overrides in the `config_overrides` table (layered over `osc.yaml` to form the _effective_ config, re-validated by the same schema) and — unlike loadpoint state — **apply immediately**: the lifecycle soft-reloads just the affected module, no restart. Endpoints: `PUT /api/site`, `PUT /api/tariffs/:name`, `PUT /api/balancers/:name`, the charger `POST`/`PUT`/`DELETE /api/chargers` (+ `GET /api/chargers/pending`), and `POST`/`DELETE /api/vehicles` (+ `PUT /api/loadpoints/:name` to bind a vehicle/tariff/balancer). Every change emits a `config.changed` SSE.
 
 `npm run config:apply` reconciles these overrides too: it **clears** overrides for entities defined in `osc.yaml` (so the file re-asserts region/breaker/etc.) and **preserves** runtime-added entities (a claimed charger, an added vehicle) so applying config never silently deletes one you're using. Add `-- --prune` to clear everything (the DB then matches the file exactly):
 
@@ -285,11 +298,11 @@ Credentials added via the API (a vehicle login) are stored in `config_overrides`
 
 ### Charging plans
 
-Recurring, per-charger plans are the primary way to express intent — *"ready by 07:00 at 80% on weekdays."* Unlike the single ad-hoc target above, plans are **managed at runtime via the UI/API**, not `osc.yaml`, and live in the database (they're edited often, so they're not config).
+Recurring, per-charger plans are the primary way to express intent — _"ready by 07:00 at 80% on weekdays."_ Unlike the single ad-hoc target above, plans are **managed at runtime via the UI/API**, not `osc.yaml`, and live in the database (they're edited often, so they're not config).
 
 Each plan has a weekday set (mon–sun), a **ready-by** time (site-local `HH:MM`), a **target** + unit (`pct` %, `km` range, or `kwh`), and an enabled toggle. A charger can have zero or several.
 
-**Which plan governs now:** among *enabled* plans whose days include **today** with a **ready-by still later today**, the earliest ready-by wins. If none qualifies (wrong day, all passed, or no plans), OSC falls back to the loadpoint's ad-hoc `targetSoc`/`targetKWh`. A `km` target is converted to % via the car's live range/SoC ratio (needs a connected car; degrades gracefully without one).
+**Which plan governs now:** among _enabled_ plans whose days include **today** with a **ready-by still later today**, the earliest ready-by wins. If none qualifies (wrong day, all passed, or no plans), OSC falls back to the loadpoint's ad-hoc `targetSoc`/`targetKWh`. A `km` target is converted to % via the car's live range/SoC ratio (needs a connected car; degrades gracefully without one).
 
 Manage plans via REST under `/api/loadpoints/:name/plans` — `GET` (list), `POST` (create), `PUT /:id` (partial update), `DELETE /:id`. A plan body: `{ "days": ["mon","fri"], "readyBy": "07:00", "target": 80, "unit": "pct", "enabled": true }`.
 
@@ -352,9 +365,9 @@ loadpoints:
 
 ## Environment variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `OSC_CONFIG` | `./osc.yaml` | Path to config file |
-| `OSC_DATA_DIR` | `./data` | Directory for SQLite database |
-| `OSC_PLUGINS_DIR` | `./plugins` | Directory scanned for third-party modules |
-| `LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` |
+| Variable          | Default      | Description                                   |
+| ----------------- | ------------ | --------------------------------------------- |
+| `OSC_CONFIG`      | `./osc.yaml` | Path to config file                           |
+| `OSC_DATA_DIR`    | `./data`     | Directory for SQLite database                 |
+| `OSC_PLUGINS_DIR` | `./plugins`  | Directory scanned for third-party modules     |
+| `LOG_LEVEL`       | `info`       | `trace` / `debug` / `info` / `warn` / `error` |

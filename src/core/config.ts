@@ -28,6 +28,13 @@ const smartChargingConfigSchema = z
     // night = mainBreakerA − nightMarginA, day = mainBreakerA × daytimeFraction.
     nightMarginA: z.number().min(0).default(3),
     daytimeFraction: z.number().min(0).max(1).default(0.5),
+    // Steady-state safety headroom below the main fuse for the load-aware current rungs: the
+    // charger targets (mainBreakerA − reserveA), so a household load-step has this much room before
+    // the fuse and steady state never sits at zero margin. Kept modest — the control loop corrects a
+    // brief overshoot on the next tick, so this shrinks overshoot MAGNITUDE without steering faster.
+    // Set 0 to ride the fuse exactly. This is NOT the retired 6 A cap — it's a small margin, not a
+    // hard limit; fast-mode still uses the full fuse minus this reserve.
+    reserveA: z.number().min(0).default(1),
     // Look-back window for the historical price-average and worst-case-load rungs.
     historicalDays: z.number().int().min(1).max(30).default(3),
     // Vehicle telemetry poll cadence while actively drawing current (re-anchors the SoC estimate
@@ -71,6 +78,9 @@ const balancerConfigSchema = z
     // global smartCharging.* values. These replace the deprecated flat safeStaticCurrentA.
     nightMarginA: z.number().min(0).optional(),
     daytimeFraction: z.number().min(0).max(1).optional(),
+    // Per-circuit steady-state safety headroom below this circuit's fuse (see smartCharging.reserveA).
+    // Unset → fall back to the global smartCharging.reserveA.
+    reserveA: z.number().min(0).optional(),
     // Deprecated + unused (the balancer is now a pure splitter; the meter + its staleness live on a
     // MeterReader). Optional/no-default so a boot WARN fires only when a user actually set one.
     safeStaticCurrentA: z.number().optional(),

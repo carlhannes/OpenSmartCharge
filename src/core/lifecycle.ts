@@ -758,6 +758,9 @@ async function main() {
     { allocations: Record<string, number>; freeAmps: number }
   >()
   const tickSlots = new Map<string, { running: boolean; rerun: boolean }>()
+  // Throttle for the "phase over the fuse" diagnostic (observe-don't-twitch): at most one warn per
+  // circuit per 5 min, so a persistent overshoot doesn't spam while we deliberately DON'T react faster.
+  const lastBreakerWarnMs = new Map<string, number>()
 
   // One current budget per CIRCUIT (bare = its single loadpoint; balancer = all of its loadpoints),
   // resolved through the single ladder (live-meter headroom → historical worst-case → static
@@ -768,17 +771,42 @@ async function main() {
     const tz = getTimezone(db)
     const worst = (breaker: number | undefined) =>
       breaker != null ? (worstCaseLoadA(db, now, sc.historicalDays, tz) ?? undefined) : undefined
+    // Observe, don't twitch: a phase above the fuse is a diagnostic signal (a real load event, or our
+    // calc drifting) — surfaced for analysis, throttled, and NOT reacted to faster than the 30 s loop,
+    // which corrects it on the next tick. Reacting per meter frame would over-steer the charger.
+    const flagExceedance = (
+      id: string,
+      breaker: number | undefined,
+      liveMax: number | undefined,
+    ) => {
+      if (breaker == null || liveMax == null || liveMax <= breaker) return
+      const nowMs = now.getTime()
+      if (nowMs - (lastBreakerWarnMs.get(id) ?? 0) < 300_000) return
+      lastBreakerWarnMs.set(id, nowMs)
+      log.warn(
+        {
+          circuit: id,
+          maxPhaseA: Number(liveMax.toFixed(1)),
+          mainBreakerA: breaker,
+          overByA: Number((liveMax - breaker).toFixed(1)),
+        },
+        'phase current above the main fuse — a brief overshoot the next tick corrects (observed, not steered faster)',
+      )
+    }
     if (circuit.kind === 'balancer') {
       const b = config.balancers.find((x) => x.name === circuit.balancerName)
       const mainBreakerA = b?.mainBreakerA
+      const liveMaxPhaseA = circuitLiveMaxPhaseA(b?.meterReader, meterReaders)
+      flagExceedance(circuit.id, mainBreakerA, liveMaxPhaseA)
       const r = resolveCurrentBudget({
         now,
         // The splittable budget is the circuit fuse; per-charger maxA is enforced in allocate().
         maxCurrentA: mainBreakerA ?? 0,
         mainBreakerA,
-        liveMaxPhaseA: circuitLiveMaxPhaseA(b?.meterReader, meterReaders),
+        liveMaxPhaseA,
         ownDrawA: circuitOwnDrawA(circuit.loadpoints, loadpointStates, lastCommandedA),
         worstCaseLoadA: worst(mainBreakerA),
+        reserveA: b?.reserveA ?? sc.reserveA,
         nightWindow: sc.nightWindow,
         nightMarginA: b?.nightMarginA ?? sc.nightMarginA,
         daytimeFraction: b?.daytimeFraction ?? sc.daytimeFraction,
@@ -788,13 +816,16 @@ async function main() {
     }
     const state = loadpointStates.get(circuit.loadpoint.name)
     const mainBreakerA = config.site.mainBreakerA
+    const liveMaxPhaseA = circuitLiveMaxPhaseA(undefined, meterReaders)
+    flagExceedance(circuit.id, mainBreakerA, liveMaxPhaseA)
     const r = resolveCurrentBudget({
       now,
       maxCurrentA: state?.maxCurrentA ?? 0,
       mainBreakerA,
-      liveMaxPhaseA: circuitLiveMaxPhaseA(undefined, meterReaders),
+      liveMaxPhaseA,
       ownDrawA: Math.max(state?.currentA ?? 0, lastCommandedA.get(circuit.loadpoint.name) ?? 0),
       worstCaseLoadA: worst(mainBreakerA),
+      reserveA: sc.reserveA,
       nightWindow: sc.nightWindow,
       nightMarginA: sc.nightMarginA,
       daytimeFraction: sc.daytimeFraction,

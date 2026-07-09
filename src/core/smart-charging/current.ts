@@ -15,6 +15,9 @@ export interface CurrentInputs {
   ownDrawA?: number
   /** Worst-case household load for this hour over the last N days; undefined → skip historical. */
   worstCaseLoadA?: number
+  /** Steady-state headroom below the fuse for the load-aware rungs: target = mainBreakerA − reserveA.
+   *  Shrinks overshoot magnitude + keeps steady state off the fuse without steering faster. */
+  reserveA?: number
   nightWindow: NightWindow
   nightMarginA?: number
   daytimeFraction?: number
@@ -27,9 +30,14 @@ export interface CurrentInputs {
 /**
  * Resolve the amps a CIRCUIT may draw (bare = its one loadpoint; balancer = the shared circuit the
  * balancer then splits), degrading:
- *  1. live-meter           — mainBreakerA − liveMaxPhaseA + circuit ownDraw (credit-back)
- *  2. historical-worstcase — mainBreakerA − worst-load-this-hour − 1 A safety
+ *  1. live-meter           — (mainBreakerA − reserveA) − liveMaxPhaseA + circuit ownDraw (credit-back)
+ *  2. historical-worstcase — (mainBreakerA − reserveA) − worst-load-this-hour − 1 A safety
  *  3. static-tod           — night: mainBreakerA − nightMarginA, day: mainBreakerA × daytimeFraction
+ *
+ * The load-aware rungs (1, 2) target `mainBreakerA − reserveA` so steady state sits a modest margin
+ * below the fuse (a household load-step has room before it trips, and we never sit at zero margin).
+ * static-tod (3) already carries its own generous nightMargin/daytimeFraction, so reserveA is not
+ * stacked on it. reserveA defaults to 0 here (callers pass the configured value).
  *
  * With no mainBreakerA (a single dedicated circuit, no house meter) the charger ceiling IS the
  * circuit limit — the correct answer for that topology, not a degradation.
@@ -39,19 +47,20 @@ export interface CurrentInputs {
  */
 export function resolveCurrentBudget(i: CurrentInputs): Resolved<number, CurrentRung> {
   const minA = i.minCurrentA ?? IEC_MIN_A
+  const reserveA = i.reserveA ?? 0
   const settle = (amps: number): number => {
     const capped = Math.max(0, Math.min(amps, i.maxCurrentA))
     return capped < minA ? 0 : capped
   }
 
   if (i.mainBreakerA != null && i.liveMaxPhaseA != null) {
-    const free = i.mainBreakerA - i.liveMaxPhaseA + (i.ownDrawA ?? 0)
+    const free = i.mainBreakerA - reserveA - i.liveMaxPhaseA + (i.ownDrawA ?? 0)
     return { value: settle(free), source: 'live-meter', degraded: false }
   }
 
   if (i.mainBreakerA != null && i.worstCaseLoadA != null) {
     return {
-      value: settle(i.mainBreakerA - i.worstCaseLoadA - 1),
+      value: settle(i.mainBreakerA - reserveA - i.worstCaseLoadA - 1),
       source: 'historical-worstcase',
       degraded: true,
     }

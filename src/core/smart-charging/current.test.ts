@@ -106,3 +106,46 @@ test('no mainBreakerA → charger maxA is the ceiling (dedicated circuit, not de
     degraded: false,
   })
 })
+
+test('reserveA shrinks the live-meter budget: target is (mainBreaker − reserveA)', () => {
+  // (16 − 2) − 6 + 6 = 14 — 2 A below what it would be without the reserve, so steady state sits a
+  // margin below the 16 A fuse (a load step has room before it trips).
+  const r = resolveCurrentBudget({
+    now: dayNow,
+    maxCurrentA: 16,
+    mainBreakerA: 16,
+    liveMaxPhaseA: 6,
+    ownDrawA: 6,
+    reserveA: 2,
+    nightWindow: NIGHT,
+    tz: TZ,
+  })
+  expect(r).toMatchObject({ value: 14, source: 'live-meter' })
+})
+
+test('reserveA also applies to the historical rung: (mainBreaker − reserveA) − worst − 1', () => {
+  const r = resolveCurrentBudget({
+    now: dayNow,
+    maxCurrentA: 16,
+    mainBreakerA: 25,
+    worstCaseLoadA: 12,
+    reserveA: 2,
+    nightWindow: NIGHT,
+    tz: TZ,
+  })
+  expect(r.value).toBe(10) // 25 − 2 − 12 − 1
+})
+
+test('reserveA is NOT stacked onto static-tod (it already carries nightMargin/daytimeFraction)', () => {
+  // Night: 16 − nightMargin(3) = 13, regardless of reserveA — no double margin on the deepest fallback.
+  expect(
+    resolveCurrentBudget({
+      now: nightNow,
+      maxCurrentA: 32,
+      mainBreakerA: 16,
+      reserveA: 5,
+      nightWindow: NIGHT,
+      tz: TZ,
+    }).value,
+  ).toBe(13)
+})
