@@ -46,6 +46,9 @@ function runMigrations(db: DatabaseSync): void {
       battery_capacity_kwh REAL,
       range_km             REAL,
       is_charging          INTEGER,
+      target_soc           REAL,
+      plugged_in           INTEGER,
+      climate_active       INTEGER,
       fetched_at           TEXT NOT NULL
     );
 
@@ -142,6 +145,11 @@ function runMigrations(db: DatabaseSync): void {
   addColumnIfMissing(db, 'transactions', 'meter_start', 'REAL')
   addColumnIfMissing(db, 'loadpoint_state', 'target_kwh', 'REAL')
   addColumnIfMissing(db, 'loadpoint_state', 'min_soc', 'REAL')
+  // Persist the car's own target/plug/climate so the SessionReconciler's carAtTarget + plug guards
+  // aren't blind for a poll after a restart (they were undefined until the first live refresh).
+  addColumnIfMissing(db, 'vehicle_cache', 'target_soc', 'REAL')
+  addColumnIfMissing(db, 'vehicle_cache', 'plugged_in', 'INTEGER')
+  addColumnIfMissing(db, 'vehicle_cache', 'climate_active', 'INTEGER')
 }
 
 function addColumnIfMissing(db: DatabaseSync, table: string, column: string, type: string): void {

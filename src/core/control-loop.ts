@@ -65,6 +65,19 @@ export function bareCircuitAmps(
 export const FAST_BOOST_UNPLUG_GRACE_MS = 5 * 60_000
 
 /**
+ * Soft-start on resume: the FIRST command after a pause (previous commanded ~0) is capped to half
+ * the target — floored at the IEC minimum so it stays a valid charge current — so the car ramps up
+ * gently instead of jumping straight to a high limit and briefly overshooting the fuse (the car
+ * pulls its prior rate for an instant on resume). One tick later the full target applies. A no-op
+ * when already drawing (prev ≥ minA) or the target is already ≤ minA. This shrinks overshoot
+ * MAGNITUDE without adding steering FREQUENCY (same 30 s cadence). Pure.
+ */
+export function softStartLimit(targetA: number, prevCommandedA: number, minA = 6): number {
+  if (prevCommandedA >= minA || targetA <= minA) return targetA
+  return Math.max(minA, Math.floor(targetA / 2))
+}
+
+/**
  * Whether a `fast` "boost" should revert to `smart`. Fast is a deliberate one-shot override ("charge
  * flat-out now"), like a boost button — it should last until the car is genuinely UNPLUGGED, not be
  * cancelled by transients. `availableUnpluggedSinceMs` is when the OCPP connector first went

@@ -58,6 +58,7 @@ import {
   circuitOwnDrawA,
   planCircuit,
   shouldExpireFastToSmart,
+  softStartLimit,
   FAST_BOOST_UNPLUG_GRACE_MS,
   type Circuit,
   type LpDecision,
@@ -977,8 +978,11 @@ async function main() {
       for (const [lpId, w] of writes) {
         const charger = chargerLimitMap.get(lpId)
         if (charger) {
-          await charger.setCurrentLimit(w).catch(() => {})
-          lastCommandedA.set(lpId, w) // record only actual writes → allocator credit-back stays honest
+          // Soft-start a resume: if we were paused (~0 A), command half the target this tick so the
+          // car ramps gently instead of briefly overshooting the fuse; the next tick reaches full.
+          const limit = softStartLimit(w, lastCommandedA.get(lpId) ?? 0)
+          await charger.setCurrentLimit(limit).catch(() => {})
+          lastCommandedA.set(lpId, limit) // record the ACTUAL command → credit-back + next-tick ramp stay honest
         }
       }
 

@@ -76,6 +76,9 @@ registerVehicle({
           batteryCapacityKWh: capacityKWh,
           range: data.range,
           isCharging: data.isCharging,
+          targetSoc: data.targetSoc,
+          pluggedIn: data.pluggedIn,
+          climateActive: data.climateActive,
         })
         ctx.log.debug(
           {

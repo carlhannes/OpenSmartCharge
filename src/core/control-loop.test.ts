@@ -7,6 +7,7 @@ import {
   circuitOwnDrawA,
   planCircuit,
   shouldExpireFastToSmart,
+  softStartLimit,
   type LpDecision,
 } from './control-loop.js'
 import type { Config, LoadpointConfig } from './config.js'
@@ -105,6 +106,19 @@ test('shouldExpireFastToSmart: Fast is a boost that reverts only after the car i
   // Only Fast expires — smart/disabled are never auto-changed even if long "unplugged".
   expect(shouldExpireFastToSmart('smart', t0, t0 + 10 * grace, grace)).toBe(false)
   expect(shouldExpireFastToSmart('disabled', t0, t0 + 10 * grace, grace)).toBe(false)
+})
+
+test('softStartLimit: resume from ~0 commands half the target (≥6A); then full; no-op while drawing', () => {
+  // Resuming (prev ~0): half the target, floored at the IEC 6 A minimum.
+  expect(softStartLimit(14, 0)).toBe(7) // 14/2
+  expect(softStartLimit(20, 0)).toBe(10)
+  expect(softStartLimit(10, 0)).toBe(6) // 10/2=5 → floored to 6
+  expect(softStartLimit(6, 0)).toBe(6) // target already at the minimum → no soft-start
+  // Second tick: prev is now above the minimum → full target (the ramp completes).
+  expect(softStartLimit(14, 7)).toBe(14)
+  // Already drawing (prev ≥ min) → never soft-started.
+  expect(softStartLimit(14, 13)).toBe(14)
+  expect(softStartLimit(16, 16)).toBe(16)
 })
 
 test('bareCircuitAmps: disabled and smart-not-now → 0; smart-now/fast → the budget', () => {
