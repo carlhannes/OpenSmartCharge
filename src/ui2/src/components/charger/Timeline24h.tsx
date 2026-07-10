@@ -9,6 +9,9 @@ interface Props {
 
 export function Timeline24h({ readyByHour, height = 140 }: Props) {
   const prices = useOsc((s) => s.prices);
+  // Currency symbol from the tariff the backend reports (e.g. SEK → "kr"); NOT hardcoded € — the
+  // app derives it into config via useLiveSync (currencySymbol(slots[0].currency)).
+  const currency = useOsc((s) => s.config.currencySymbol);
   const nowH = new Date().getHours() + new Date().getMinutes() / 60;
 
   const { max, min, windows, points } = useMemo(() => {
@@ -98,8 +101,12 @@ export function Timeline24h({ readyByHour, height = 140 }: Props) {
         <span>24</span>
       </div>
       <div className="mt-3 flex items-center justify-between text-xs">
-        <span className="text-muted-foreground">Cheapest hour ≈ €{min.toFixed(2)}/kWh</span>
-        <span className="text-muted-foreground">Peak ≈ €{max.toFixed(2)}/kWh</span>
+        <span className="text-muted-foreground">
+          Cheapest hour ≈ {min.toFixed(2)} {currency}/kWh
+        </span>
+        <span className="text-muted-foreground">
+          Peak ≈ {max.toFixed(2)} {currency}/kWh
+        </span>
       </div>
     </div>
   );

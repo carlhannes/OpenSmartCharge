@@ -214,7 +214,12 @@ export function useLiveSync() {
           const cur = useOsc.getState().chargers.find((c) => c.id === e.name);
           const mode = cur?.mode ?? "smart";
           useOsc.getState().patchCharger(e.name, {
-            status: deriveStatus({ connected: e.connected, charging: e.charging, mode }),
+            status: deriveStatus({
+              connected: e.connected,
+              charging: e.charging,
+              drawing: (e.currentA ?? 0) > 0.5,
+              mode,
+            }),
             currentPowerW: Math.round(e.currentA * 230),
             sessionKwh: e.sessionEnergyKWh,
           });

@@ -26,10 +26,16 @@ export const mapMode = (m: ChargeMode): "off" | "smart" | "fast" => (m === "disa
 export function deriveStatus(lp: {
   connected: boolean;
   charging: boolean;
+  /** Actually pulling power now (currentA above ~0). A charging-family OCPP session can be open but
+   *  drawing 0 A (suspended: paused for a cheap window, or done at target) — that is NOT "charging". */
+  drawing: boolean;
   mode: "off" | "smart" | "fast";
 }): ChargerRuntimeStatus {
   if (!lp.connected) return "unplugged";
-  if (lp.charging) return lp.mode === "fast" ? "fast_charging" : "charging";
+  // Only "charging" when the car is genuinely drawing. An open-but-0 A session (SuspendedEV) means
+  // paused/at-target — fall through to the mode-based paused status so the pill doesn't claim it's
+  // charging when it isn't (e.g. sitting at the 75 % target).
+  if (lp.charging && lp.drawing) return lp.mode === "fast" ? "fast_charging" : "charging";
   if (lp.mode === "off") return "off";
   if (lp.mode === "smart") return "waiting_cheap";
   return "plugged_paused";
@@ -46,7 +52,12 @@ export function mapLoadpoint(lp: LoadpointStateDto, site?: SiteDto): Charger {
     name: label ?? lp.name,
     maxAmps: lp.maxCurrentA,
     mode,
-    status: deriveStatus({ connected: lp.connected, charging: lp.charging, mode }),
+    status: deriveStatus({
+      connected: lp.connected,
+      charging: lp.charging,
+      drawing: (lp.currentA ?? 0) > 0.5,
+      mode,
+    }),
     activeVehicleId: boundVehicle,
     currentPowerW: Math.round(lp.currentA * VOLTAGE),
     sessionKwh: lp.sessionEnergyKWh,
