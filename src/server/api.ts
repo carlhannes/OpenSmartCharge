@@ -20,6 +20,13 @@ import {
 import { queryLogs, pruneLogs, exportLogsText, type LogLevel } from '../core/log-store.js'
 import type { Reconciler } from '../core/reconcile.js'
 import { setOverride, deleteOverride, validateConfigWith } from '../core/config-overrides.js'
+import {
+  buildConfigExport,
+  serializeConfig,
+  importConfig,
+  coerceConfigDocument,
+  REDACTED,
+} from '../core/config-io.js'
 import { getOcppServer } from '../modules/charger-ocpp16/index.js'
 import { isValidTimeZone } from '../sdk/local-time.js'
 import {
@@ -35,10 +42,6 @@ import {
   type DayKey,
 } from '../core/plans.js'
 import { targetToSoc, availableUnits, type EnergyReading } from '../core/smart-charging/energy.js'
-
-/** Placeholder shown in place of a secret in redacted responses/exports. On import, a field equal to
- *  this is treated as "unchanged" so a redacted round-trip never clobbers the real credential. */
-export const REDACTED = '••••••'
 
 export interface ApiDeps {
   db: DatabaseSync
@@ -1111,6 +1114,59 @@ export function createApiRouter(deps: ApiDeps): Router {
           }
         : undefined,
     })
+  })
+
+  // GET /api/config/export — the whole config (defaults ⊕ DB) as an osc.yaml document, omitting
+  // schema defaults. Credentials are redacted unless ?secrets=1 (a full-fidelity backup). Served as a
+  // file download.
+  router.get('/config/export', (req: Request, res: Response) => {
+    const secrets = req.query.secrets === '1' || req.query.secrets === 'true'
+    const doc = buildConfigExport({
+      effective: deps.config,
+      loadpointState: deps.loadpoints,
+      timezone: getTimezone(deps.db),
+      logRetentionDays: getLogRetentionDays(deps.db),
+      secrets,
+    })
+    res.setHeader('Content-Type', 'text/yaml; charset=utf-8')
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="osc-config${secrets ? '-full' : ''}.yaml"`,
+    )
+    res.send(serializeConfig(doc))
+  })
+
+  // POST /api/config/import — apply an osc.yaml document (YAML string or JSON object) to the config
+  // store. body: { config, mode: 'merge'|'replace', dryRun?: true }. Validates the resulting config
+  // BEFORE writing (a bad import is rejected whole → 400). Applies on the next restart (like
+  // config:apply). Redacted credentials keep their existing value.
+  router.post('/config/import', (req: Request, res: Response) => {
+    const body = req.body as { config?: unknown; mode?: unknown; dryRun?: unknown }
+    const mode =
+      body.mode === 'replace' ? 'replace' : body.mode === 'merge' ? 'merge' : (undefined as never)
+    if (mode !== 'replace' && mode !== 'merge') {
+      res.status(400).json({ error: "mode must be 'merge' or 'replace'" })
+      return
+    }
+    let doc: Record<string, unknown>
+    try {
+      doc = coerceConfigDocument(body.config)
+    } catch (e) {
+      res.status(400).json({ error: (e as Error).message })
+      return
+    }
+    try {
+      const result = importConfig(deps.db, doc, {
+        mode,
+        currentEffective: deps.config,
+        dryRun: body.dryRun === true,
+      })
+      if (!result.dryRun) deps.events.emit('config.changed', { kind: 'import', name: mode })
+      res.json(result)
+    } catch (e) {
+      // configSchema rejected the merged result — nothing was written.
+      res.status(400).json({ error: 'invalid config', detail: (e as Error).message })
+    }
   })
 
   // GET /api/transactions

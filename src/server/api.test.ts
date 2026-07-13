@@ -74,6 +74,55 @@ test('PUT /api/smartcharging: validate-first, live reconcile, restart-required f
   }
 })
 
+// Config export/import over HTTP: export redacts creds (unless ?secrets=1); import validates + is
+// restart-required; a bad mode/body is 400. The merge/replace/redaction semantics are unit-tested in
+// config-io.test.ts — this covers the wire contract.
+test('GET /config/export + POST /config/import round-trip over HTTP', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-cfgio-'))
+  const db = openDb(dir)
+  const config = configSchema.parse({
+    site: { mainBreakerA: 16 },
+    vehicles: [{ name: 'enyaq', type: 'skoda', password: 'real-secret' }],
+    loadpoints: [{ name: 'garage', charger: 'zaptec', vehicle: 'enyaq' }],
+  })
+  const deps = {
+    db,
+    config,
+    loadpoints: new Map([['garage', { mode: 'smart', targetSoc: 75 }]]),
+    events: { emit() {} },
+  } as unknown as ApiDeps
+  try {
+    await withApi(deps, async (baseUrl) => {
+      // export redacts by default
+      const red = await fetch(`${baseUrl}/api/config/export`)
+      expect(red.status).toBe(200)
+      const redYaml = await red.text()
+      expect(redYaml).toContain('mainBreakerA: 16')
+      expect(redYaml).not.toContain('real-secret')
+      // ?secrets=1 includes the plaintext credential
+      const full = await (await fetch(`${baseUrl}/api/config/export?secrets=1`)).text()
+      expect(full).toContain('real-secret')
+
+      // re-import the redacted export (merge) → applied, restart-required
+      const imp = await postJson(`${baseUrl}/api/config/import`, { config: redYaml, mode: 'merge' })
+      expect(imp.status).toBe(200)
+      expect(await imp.json()).toMatchObject({ mode: 'merge', restartRequired: true })
+      // the redacted password must resolve back to the real one (de-redacted), not be clobbered
+      expect(
+        (getOverride(db, 'vehicle', 'enyaq') as { password?: string } | undefined)?.password,
+      ).toBe('real-secret')
+
+      // bad mode → 400
+      expect(
+        (await postJson(`${baseUrl}/api/config/import`, { config: {}, mode: 'x' })).status,
+      ).toBe(400)
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // Regression: the command endpoints must resolve the loadpoint's charger, not assume the
 // loadpoint name equals the charger name (which 404'd whenever they differed).
 test('command endpoints resolve loadpoint -> charger when names differ', async () => {
