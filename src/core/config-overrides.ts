@@ -8,6 +8,8 @@ import { configSchema, type Config } from './config.js'
 
 export type OverrideKind =
   | 'site'
+  | 'smartCharging'
+  | 'mqttBridge'
   | 'tariff'
   | 'balancer'
   | 'vehicle'
@@ -15,8 +17,15 @@ export type OverrideKind =
   | 'meterReader'
   | 'loadpoint'
 
-// Each entity kind → the config array it lives in. 'site' is the singleton, merged separately.
-const KIND_ARRAY: Record<Exclude<OverrideKind, 'site'>, keyof Config> = {
+// Singleton (object) kinds are merged onto the config object of the SAME name; entity kinds are
+// named elements of a config array. A singleton override's `name` is the kind itself (e.g. 'site').
+type SingletonKind = 'site' | 'smartCharging' | 'mqttBridge'
+const SINGLETON_KINDS: readonly SingletonKind[] = ['site', 'smartCharging', 'mqttBridge']
+const isSingletonKind = (k: OverrideKind): k is SingletonKind =>
+  (SINGLETON_KINDS as readonly string[]).includes(k)
+
+// Each ENTITY kind → the config array it lives in.
+const KIND_ARRAY: Record<Exclude<OverrideKind, SingletonKind>, keyof Config> = {
   tariff: 'tariffs',
   balancer: 'balancers',
   vehicle: 'vehicles',
@@ -89,7 +98,7 @@ export function applyConfigOverrides(
   opts: { prune?: boolean } = {},
 ): { cleared: OverrideRow[]; preserved: OverrideRow[] } {
   const inBase = (kind: OverrideKind, name: string): boolean => {
-    if (kind === 'site') return true
+    if (isSingletonKind(kind)) return true
     const arr = (base[KIND_ARRAY[kind]] as Array<{ name: string }>) ?? []
     return arr.some((e) => e.name === name)
   }
@@ -106,26 +115,49 @@ export function applyConfigOverrides(
   return { cleared, preserved }
 }
 
+// Apply one override onto a draft config object — the merge rule shared by getEffectiveConfig and
+// validateConfigWith. A singleton (site/smartCharging/mqttBridge) merges onto its same-named object;
+// an entity patch merges onto the matching array element, or a full entity is appended when there's
+// no match (a runtime-added charger/vehicle). Mutates `draft`. (mqttBridge is optional/undefined by
+// default: merging onto {} then re-validating requires the patch/base to supply the required
+// broker.host — the writer/import guarantees a complete singleton.)
+function mergeOverrideInto(
+  draft: Record<string, unknown>,
+  kind: OverrideKind,
+  name: string,
+  patch: Record<string, unknown>,
+): void {
+  if (isSingletonKind(kind)) {
+    draft[kind] = { ...((draft[kind] as Record<string, unknown>) ?? {}), ...patch }
+    return
+  }
+  const key = KIND_ARRAY[kind]
+  const arr = ((draft[key] as Array<{ name?: string }>) ?? []).slice()
+  const existing = arr.find((e) => e.name === name)
+  if (existing) Object.assign(existing, patch)
+  else arr.push({ name, ...patch })
+  draft[key] = arr
+}
+
 /**
- * The EFFECTIVE config the lifecycle runs on: the parsed osc.yaml (`base`) with every override
- * layered on — a partial patch merged onto the matching entity, or a full entity appended when
- * there's no match (a runtime-added charger/vehicle). `site` merges onto the site object. The
+ * The EFFECTIVE config the lifecycle runs on: the `base` config with every override layered on. The
  * merged result is re-validated through the SAME configSchema, so an override can never produce an
  * invalid config: a bad one throws here (loudly) rather than half-applying.
  */
 export function getEffectiveConfig(base: Config, db: DatabaseSync): Config {
   const draft = structuredClone(base) as Record<string, unknown>
-  for (const { kind, name, patch } of listOverrides(db)) {
-    if (kind === 'site') {
-      draft.site = { ...(draft.site as Record<string, unknown>), ...patch }
-      continue
-    }
-    const key = KIND_ARRAY[kind]
-    const arr = ((draft[key] as Array<{ name?: string }>) ?? []).slice()
-    const existing = arr.find((e) => e.name === name)
-    if (existing) Object.assign(existing, patch)
-    else arr.push({ name, ...patch })
-    draft[key] = arr
-  }
+  for (const { kind, name, patch } of listOverrides(db)) mergeOverrideInto(draft, kind, name, patch)
+  return configSchema.parse(draft)
+}
+
+/**
+ * Validate the config that WOULD result from applying `edits` on top of `from` (typically the
+ * current effective config), WITHOUT persisting. Throws a ZodError on an invalid result — call this
+ * BEFORE setOverride so a bad write is rejected (400) rather than persisted and only throwing on the
+ * next getEffectiveConfig (which would also brick boot). Returns the validated candidate config.
+ */
+export function validateConfigWith(from: Config, edits: OverrideRow[]): Config {
+  const draft = structuredClone(from) as Record<string, unknown>
+  for (const { kind, name, patch } of edits) mergeOverrideInto(draft, kind, name, patch)
   return configSchema.parse(draft)
 }

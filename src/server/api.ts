@@ -19,7 +19,7 @@ import {
 } from '../core/settings.js'
 import { queryLogs, pruneLogs, exportLogsText, type LogLevel } from '../core/log-store.js'
 import type { Reconciler } from '../core/reconcile.js'
-import { setOverride, deleteOverride } from '../core/config-overrides.js'
+import { setOverride, deleteOverride, validateConfigWith } from '../core/config-overrides.js'
 import { getOcppServer } from '../modules/charger-ocpp16/index.js'
 import { isValidTimeZone } from '../sdk/local-time.js'
 import {
@@ -35,6 +35,10 @@ import {
   type DayKey,
 } from '../core/plans.js'
 import { targetToSoc, availableUnits, type EnergyReading } from '../core/smart-charging/energy.js'
+
+/** Placeholder shown in place of a secret in redacted responses/exports. On import, a field equal to
+ *  this is treated as "unchanged" so a redacted round-trip never clobbers the real credential. */
+export const REDACTED = '••••••'
 
 export interface ApiDeps {
   db: DatabaseSync
@@ -164,14 +168,205 @@ export function createApiRouter(deps: ApiDeps): Router {
   // PUT /api/site — the site-level main breaker (amps per phase, the circuit ceiling for
   // balancer-less loadpoints). Read live each control tick, so it applies without a restart.
   router.put('/site', (req: Request, res: Response) => {
-    const n = (req.body as { mainBreakerA?: unknown }).mainBreakerA
-    if (typeof n !== 'number' || !(n > 0)) {
-      res.status(400).json({ error: 'mainBreakerA must be a positive number' })
+    const b = req.body as { name?: unknown; port?: unknown; mainBreakerA?: unknown }
+    const patch: Record<string, unknown> = {}
+    if (b.name !== undefined) {
+      if (typeof b.name !== 'string' || !b.name.trim()) {
+        res.status(400).json({ error: 'name must be a non-empty string' })
+        return
+      }
+      patch.name = b.name.trim()
+    }
+    if (b.port !== undefined) {
+      if (typeof b.port !== 'number' || !Number.isInteger(b.port) || b.port < 1 || b.port > 65535) {
+        res.status(400).json({ error: 'port must be an integer 1–65535' })
+        return
+      }
+      patch.port = b.port
+    }
+    if (b.mainBreakerA !== undefined) {
+      if (typeof b.mainBreakerA !== 'number' || !(b.mainBreakerA > 0)) {
+        res.status(400).json({ error: 'mainBreakerA must be a positive number' })
+        return
+      }
+      patch.mainBreakerA = b.mainBreakerA
+    }
+    if (Object.keys(patch).length === 0) {
+      res.status(400).json({ error: 'nothing to update (name, port, and/or mainBreakerA)' })
       return
     }
-    setOverride(deps.db, 'site', 'site', { mainBreakerA: n })
+    // Validate the merged config BEFORE persisting so a bad value is rejected, not stored + thrown on
+    // the next boot.
+    try {
+      validateConfigWith(deps.config, [{ kind: 'site', name: 'site', patch }])
+    } catch {
+      res.status(400).json({ error: 'invalid site config' })
+      return
+    }
+    setOverride(deps.db, 'site', 'site', patch)
     deps.reconcile.reloadSite()
-    res.json({ mainBreakerA: deps.config.site.mainBreakerA })
+    // port is captured at boot (HTTP listen); it persists but only takes effect on restart.
+    const restartFields = 'port' in patch ? ['port'] : []
+    res.json({
+      site: { ...deps.config.site, timezone: getTimezone(deps.db) },
+      ...(restartFields.length ? { restartRequired: true, restartFields } : {}),
+    })
+  })
+
+  // PUT /api/smartcharging — tune the control-loop / degradation knobs (all optional; a partial patch
+  // merges). Applies live from the next tick, EXCEPT controlIntervalSec (captured by the boot
+  // setInterval → restart-required, flagged in the response).
+  router.put('/smartcharging', (req: Request, res: Response) => {
+    const patch = req.body as Record<string, unknown>
+    if (!patch || typeof patch !== 'object' || Object.keys(patch).length === 0) {
+      res.status(400).json({ error: 'body must be a non-empty smartCharging patch' })
+      return
+    }
+    try {
+      validateConfigWith(deps.config, [{ kind: 'smartCharging', name: 'smartCharging', patch }])
+    } catch {
+      res.status(400).json({ error: 'invalid smartCharging config' })
+      return
+    }
+    setOverride(deps.db, 'smartCharging', 'smartCharging', patch)
+    deps.reconcile.reloadSmartCharging()
+    const restartFields = 'controlIntervalSec' in patch ? ['controlIntervalSec'] : []
+    res.json({
+      smartCharging: deps.config.smartCharging,
+      ...(restartFields.length ? { restartRequired: true, restartFields } : {}),
+    })
+  })
+
+  // PUT /api/mqtt-bridge — OSC's outbound MQTT/Home-Assistant bridge. Persists as an override but is
+  // NOT live-reloadable yet (the bridge is started once at boot with no teardown handle) → always
+  // restart-required. Send the full block (broker{host[,port,user,password]}, topicPrefix?,
+  // homeAssistantDiscovery?).
+  router.put('/mqtt-bridge', (req: Request, res: Response) => {
+    const patch = req.body as Record<string, unknown>
+    if (!patch || typeof patch !== 'object' || Object.keys(patch).length === 0) {
+      res.status(400).json({ error: 'body must be a non-empty mqttBridge config' })
+      return
+    }
+    try {
+      validateConfigWith(deps.config, [{ kind: 'mqttBridge', name: 'mqttBridge', patch }])
+    } catch {
+      res.status(400).json({ error: 'invalid mqttBridge config (broker.host is required)' })
+      return
+    }
+    setOverride(deps.db, 'mqttBridge', 'mqttBridge', patch)
+    res.json({ restartRequired: true, restartFields: ['mqttBridge'] })
+  })
+
+  // POST /api/meters — add a live-household-current meter reader (listen-only). PUT edits, DELETE
+  // removes. Reconciled live (build-new → swap → stop-old), like tariffs.
+  router.post('/meters', async (req: Request, res: Response) => {
+    const b = req.body as { name?: unknown; type?: unknown } & Record<string, unknown>
+    const name = typeof b.name === 'string' ? b.name.trim() : ''
+    const type = typeof b.type === 'string' ? b.type.trim() : ''
+    if (!name || !type) {
+      res.status(400).json({ error: 'name and type are required' })
+      return
+    }
+    if (deps.config.meterReaders.some((m) => m.name === name)) {
+      res.status(409).json({ error: `meter "${name}" already exists` })
+      return
+    }
+    const patch: Record<string, unknown> = { ...b }
+    delete patch.name
+    try {
+      validateConfigWith(deps.config, [{ kind: 'meterReader', name, patch }])
+    } catch {
+      res.status(400).json({ error: 'invalid meter reader config' })
+      return
+    }
+    setOverride(deps.db, 'meterReader', name, patch)
+    await deps.reconcile.reloadMeterReader(name)
+    res.status(201).json({ name, type })
+  })
+
+  router.put('/meters/:name', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    if (!deps.config.meterReaders.some((m) => m.name === name)) {
+      res.status(404).json({ error: 'meter not found' })
+      return
+    }
+    const patch = req.body as Record<string, unknown>
+    if (!patch || typeof patch !== 'object' || Object.keys(patch).length === 0) {
+      res.status(400).json({ error: 'body must be a non-empty meter patch' })
+      return
+    }
+    try {
+      validateConfigWith(deps.config, [{ kind: 'meterReader', name, patch }])
+    } catch {
+      res.status(400).json({ error: 'invalid meter reader config' })
+      return
+    }
+    setOverride(deps.db, 'meterReader', name, patch)
+    await deps.reconcile.reloadMeterReader(name)
+    res.json({ name })
+  })
+
+  router.delete('/meters/:name', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    if (!deps.config.meterReaders.some((m) => m.name === name)) {
+      res.status(404).json({ error: 'meter not found' })
+      return
+    }
+    deleteOverride(deps.db, 'meterReader', name)
+    await deps.reconcile.removeMeterReader(name)
+    res.json({ removed: name })
+  })
+
+  // POST /api/tariffs — add a new tariff (PUT /api/tariffs/:name edits an existing one's zone).
+  router.post('/tariffs', async (req: Request, res: Response) => {
+    const b = req.body as { name?: unknown; type?: unknown } & Record<string, unknown>
+    const name = typeof b.name === 'string' ? b.name.trim() : ''
+    const type = typeof b.type === 'string' ? b.type.trim() : ''
+    if (!name || !type) {
+      res.status(400).json({ error: 'name and type are required' })
+      return
+    }
+    if (deps.config.tariffs.some((t) => t.name === name)) {
+      res.status(409).json({ error: `tariff "${name}" already exists` })
+      return
+    }
+    const patch: Record<string, unknown> = { ...b }
+    delete patch.name
+    try {
+      validateConfigWith(deps.config, [{ kind: 'tariff', name, patch }])
+    } catch {
+      res.status(400).json({ error: 'invalid tariff config' })
+      return
+    }
+    setOverride(deps.db, 'tariff', name, patch)
+    await deps.reconcile.reloadTariff(name)
+    res.status(201).json({ name, type })
+  })
+
+  // POST /api/balancers — add a new balancer (PUT /api/balancers/:name edits an existing one).
+  router.post('/balancers', async (req: Request, res: Response) => {
+    const b = req.body as { name?: unknown; type?: unknown } & Record<string, unknown>
+    const name = typeof b.name === 'string' ? b.name.trim() : ''
+    const type = typeof b.type === 'string' ? b.type.trim() : ''
+    if (!name || !type) {
+      res.status(400).json({ error: 'name and type are required' })
+      return
+    }
+    if (deps.config.balancers.some((x) => x.name === name)) {
+      res.status(409).json({ error: `balancer "${name}" already exists` })
+      return
+    }
+    const patch: Record<string, unknown> = { ...b }
+    delete patch.name
+    try {
+      validateConfigWith(deps.config, [{ kind: 'balancer', name, patch }])
+    } catch {
+      res.status(400).json({ error: 'invalid balancer config' })
+      return
+    }
+    setOverride(deps.db, 'balancer', name, patch)
+    await deps.reconcile.reloadBalancer(name)
+    res.status(201).json({ name, type })
   })
 
   // PUT /api/tariffs/:name — the price zone/region (e.g. SE3 → SE4). Reloads the tariff module,
@@ -904,6 +1099,17 @@ export function createApiRouter(deps: ApiDeps): Router {
         name: m.name,
         type: m.type,
       })),
+      smartCharging: c.smartCharging,
+      mqttBridge: c.mqttBridge
+        ? {
+            ...c.mqttBridge,
+            // never echo the broker password — redact so the client can display/round-trip it.
+            broker: {
+              ...c.mqttBridge.broker,
+              password: c.mqttBridge.broker.password ? REDACTED : undefined,
+            },
+          }
+        : undefined,
     })
   })
 

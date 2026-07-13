@@ -37,6 +37,43 @@ async function withApi(deps: ApiDeps, fn: (baseUrl: string) => Promise<void>): P
   }
 }
 
+// Coverage endpoints (Phase A): validate BEFORE persisting, reconcile live, and flag boot-captured
+// fields as restart-required. smartcharging is the representative case; meters/tariffs/balancers
+// follow the same setOverride → validateConfigWith → reconcile pattern.
+test('PUT /api/smartcharging: validate-first, live reconcile, restart-required for controlIntervalSec', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-sc-'))
+  const db = openDb(dir)
+  const calls: string[] = []
+  const deps = {
+    db,
+    config: configSchema.parse({ site: { mainBreakerA: 16 } }),
+    reconcile: { reloadSmartCharging: () => calls.push('reloadSmartCharging') },
+  } as unknown as ApiDeps
+  try {
+    await withApi(deps, async (baseUrl) => {
+      // valid live change → 200, reconciled, no restart needed
+      const ok = await putJson(`${baseUrl}/api/smartcharging`, { reserveA: 2 })
+      expect(ok.status).toBe(200)
+      expect((await ok.json()).restartRequired).toBeUndefined()
+      expect(calls).toContain('reloadSmartCharging')
+      expect(getOverride(db, 'smartCharging', 'smartCharging')).toEqual({ reserveA: 2 })
+      // controlIntervalSec is boot-captured → flagged restart-required
+      const rc = await putJson(`${baseUrl}/api/smartcharging`, { controlIntervalSec: 20 })
+      expect(await rc.json()).toMatchObject({
+        restartRequired: true,
+        restartFields: ['controlIntervalSec'],
+      })
+      // invalid value → 400 and NOT persisted (validate-first)
+      const bad = await putJson(`${baseUrl}/api/smartcharging`, { reserveA: -1 })
+      expect(bad.status).toBe(400)
+      expect(getOverride(db, 'smartCharging', 'smartCharging')).not.toMatchObject({ reserveA: -1 })
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // Regression: the command endpoints must resolve the loadpoint's charger, not assume the
 // loadpoint name equals the charger name (which 404'd whenever they differed).
 test('command endpoints resolve loadpoint -> charger when names differ', async () => {

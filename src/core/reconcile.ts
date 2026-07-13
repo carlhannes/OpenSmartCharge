@@ -9,7 +9,13 @@ import type { Balancer } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import type { MeterReader } from '../sdk/meter-reader.js'
 import { loadLoadpointStates, configToLoadpointInits, type LoadpointState } from './loadpoint.js'
-import { createTariff, createBalancer, createCharger, createVehicle } from './registry.js'
+import {
+  createTariff,
+  createBalancer,
+  createCharger,
+  createVehicle,
+  createMeterReader,
+} from './registry.js'
 import { getEffectiveConfig } from './config-overrides.js'
 
 // The reconcile seam: after an API write persists a config override, the lifecycle rebuilds the
@@ -44,6 +50,9 @@ export interface Reconciler {
   reloadTariff(name: string): Promise<void>
   reloadBalancer(name: string): Promise<void>
   reloadSite(): void
+  reloadSmartCharging(): void
+  reloadMeterReader(name: string): Promise<void>
+  removeMeterReader(name: string): Promise<void>
   addCharger(name: string): Promise<void>
   reloadCharger(name: string): Promise<void>
   removeCharger(name: string): Promise<void>
@@ -100,10 +109,46 @@ export function createReconciler(d: ReconcileDeps): Reconciler {
     },
 
     // No module owns site.* — the control loop reads config.site.mainBreakerA live each tick — so a
-    // config mutation is all that's needed.
+    // config mutation is all that's needed. (site.port is captured by the boot HTTP listen +
+    // controlInterval; the API flags a port change as restart-required.)
     reloadSite() {
       Object.assign(d.config.site, getEffectiveConfig(d.base, d.db).site)
       d.events.emit('config.changed', { kind: 'site', name: 'site' })
+    },
+
+    // No module owns smartCharging.* — every rung reads config.smartCharging fresh each tick — so an
+    // in-place merge applies live. The one exception is controlIntervalSec (captured by the boot
+    // setInterval); the API flags a change to it as restart-required.
+    reloadSmartCharging() {
+      Object.assign(d.config.smartCharging, getEffectiveConfig(d.base, d.db).smartCharging)
+      d.events.emit('config.changed', { kind: 'smartCharging', name: 'smartCharging' })
+    },
+
+    // Add-or-reload a meter reader (mirrors reloadTariff: build+start the new reader first, then swap
+    // the Map + config, then stop the old). The current ladder reads meterReaders.get() live each
+    // tick, so a swapped-in reader is picked up on the next tick. `reloadMeterReader` on a NEW name
+    // instantiates it (desired() sees the freshly-written override), so it doubles as add.
+    async reloadMeterReader(name) {
+      const cfg = desired<{ name: string; type: string }>('meterReaders', name)
+      if (!cfg) return
+      const old = d.meterReaders.get(name)
+      const r = createMeterReader(cfg.type, cfg, d.ctx)
+      await r.start()
+      syncEntity('meterReaders', cfg)
+      d.meterReaders.set(name, r)
+      updateHealth(d.health, name, r.health())
+      if (old) await old.stop()
+      d.events.emit('config.changed', { kind: 'meterReader', name })
+    },
+
+    async removeMeterReader(name) {
+      const old = d.meterReaders.get(name)
+      d.meterReaders.delete(name)
+      removeHealth(d.health, name)
+      const i = d.config.meterReaders.findIndex((m) => m.name === name)
+      if (i >= 0) d.config.meterReaders.splice(i, 1)
+      if (old) await old.stop()
+      d.events.emit('config.changed', { kind: 'meterReader', name })
     },
 
     // Instantiate a newly-claimed charger. createCharger runs the module's create(), which registers

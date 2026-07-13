@@ -86,6 +86,27 @@ test('setOverride merges into an existing override (partial updates compose)', (
   })
 })
 
+test('singleton overrides: smartCharging + mqttBridge merge onto their object (base untouched)', () => {
+  const db = freshDb()
+  setOverride(db, 'smartCharging', 'smartCharging', { reserveA: 3 })
+  setOverride(db, 'mqttBridge', 'mqttBridge', { broker: { host: 'broker.lan' } })
+  const eff = getEffectiveConfig(base, db)
+  expect(eff.smartCharging.reserveA).toBe(3)
+  expect(eff.smartCharging.controlIntervalSec).toBe(30) // other fields stay at their defaults
+  expect(eff.mqttBridge?.broker.host).toBe('broker.lan')
+  expect(eff.mqttBridge?.topicPrefix).toBe('osc') // schema default filled in for the new singleton
+  expect(base.smartCharging.reserveA).toBe(1) // base object not mutated
+  expect(base.mqttBridge).toBeUndefined()
+})
+
+test('applyConfigOverrides clears singleton overrides (they re-assert from the file)', () => {
+  const db = freshDb()
+  setOverride(db, 'smartCharging', 'smartCharging', { reserveA: 3 })
+  const { cleared } = applyConfigOverrides(base, db)
+  expect(cleared.map((o) => o.kind)).toContain('smartCharging')
+  expect(getOverride(db, 'smartCharging', 'smartCharging')).toBeUndefined()
+})
+
 test('applyConfigOverrides clears file-defined overrides, preserves runtime-added (prune clears all)', () => {
   const db = freshDb()
   setOverride(db, 'tariff', 'home', { zone: 'SE4' }) // 'home' is in base → file-defined
