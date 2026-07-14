@@ -1,6 +1,11 @@
-# OpenSmartCharge — example configuration
-# Copy to osc.yaml and edit for your setup.
-# osc.yaml is in .gitignore — it won't be committed.
+# OpenSmartCharge — example configuration / import template.
+# Copy to osc.yaml and edit for your setup. osc.yaml is in .gitignore — it won't be committed.
+#
+# osc.yaml is an IMPORT FORMAT, not a live config file: OSC imports it into the database on first
+# boot (on a fresh or cleared DB), after which the DATABASE is the source of truth. Editing this file
+# afterwards does nothing on its own — edit via the API/UI, or re-import with `npm run config:apply`
+# (clear + re-import) or POST /api/config/import. Export the live config with GET /api/config/export.
+# See docs/config.md → "The config model".
 
 site:
   name: "My Home"

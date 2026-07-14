@@ -1,6 +1,6 @@
 # Configuration reference
 
-Copy `osc.dist.yaml` to `osc.yaml` and edit. The file is gitignored.
+Copy `osc.dist.yaml` to `osc.yaml` and edit. The file is gitignored. It is an **import format**: OSC imports it into the database on first boot, after which the database is the source of truth and you edit via the API or re-import — see [The config model](#the-config-model-oscyaml-is-an-import-format).
 
 ## Top-level sections
 
@@ -255,7 +255,7 @@ loadpoints:
       # (bypassing the price wait). No-op with no vehicle SoC.
 ```
 
-`targetSoc`/`targetTime`/`targetKWh` are a single **ad-hoc** target — the fallback when no recurring [plan](#charging-plans) governs. They are also seeds (see [Config vs. runtime state](#config-vs-runtime-state-persist-wins--configapply)).
+`targetSoc`/`targetTime`/`targetKWh` are a single **ad-hoc** target — the fallback when no recurring [plan](#charging-plans) governs. They are seeds imported into the database, which is then the runtime source of truth (see [The config model](#the-config-model-oscyaml-is-an-import-format)).
 
 **Charge modes:**
 
@@ -269,32 +269,51 @@ In `smart` mode two signals **force-charge**, overriding both the price wait and
 
 The mode can be changed at any time via the UI, REST, or MQTT — it takes effect immediately (an on-demand control-loop tick) and otherwise on the next tick (default 30 s).
 
-### Config vs. runtime state (persist-wins + `config:apply`)
+### The config model (osc.yaml is an import format)
 
-`defaultMode` and the `targetSoc`/`targetTime`/`targetKWh` fields are **seeds**, not live bindings. The database is the source of truth at runtime: a loadpoint's mode and targets are persisted, and changes you make via the UI/REST/MQTT **survive restarts and win over the config file**. So config values only take effect the _first_ time a loadpoint is seen (a fresh DB); editing them in `osc.yaml` afterwards does nothing on its own.
+The effective configuration OSC runs on is **`defaults ⊕ the database`**. The database config store — `config_overrides` (structural: entities + tuning), the `settings` KV (timezone, log retention), and `loadpoint_state` (mode + targets) — holds your complete non-default config; anything unset falls back to the schema default.
 
-To declaratively re-apply the config file onto the database — overwriting the persisted mode + targets (a target omitted in config is cleared) — run:
+**`osc.yaml` is an import format, not a live base.** On a fresh (or cleared) database it is imported **once** to seed the config, then it is **inert** — editing the file alone does nothing afterwards. To change config after first boot you either **edit via the API** (applies live where possible) or **re-import** the file (`POST /api/config/import` or `npm run config:apply`).
 
-```bash
-npm run config:apply    # reads osc.yaml (OSC_CONFIG) → writes data/osc.db (OSC_DATA_DIR)
-```
+So the API is the **complete editing surface** — every `osc.yaml` section has a write path:
 
-It prints a before→after diff per loadpoint and exits; it does not start the server. Use it after editing `osc.yaml`, or to reset runtime tweaks back to the declared config. (`maxA` and `autoStartTransaction` are re-read from config on every boot and are not persisted.)
+| Section                            | Endpoint                                                   | Applies     |
+| ---------------------------------- | ---------------------------------------------------------- | ----------- |
+| `site` (name / mainBreakerA)       | `PUT /api/site`                                            | live        |
+| `site.port`                        | `PUT /api/site`                                            | **restart** |
+| `smartCharging.*`                  | `PUT /api/smartcharging`                                   | live        |
+| `smartCharging.controlIntervalSec` | `PUT /api/smartcharging`                                   | **restart** |
+| `mqttBridge`                       | `PUT /api/mqtt-bridge`                                     | **restart** |
+| `tariffs[]`                        | `POST /api/tariffs`, `PUT /api/tariffs/:name`              | live        |
+| `balancers[]`                      | `POST /api/balancers`, `PUT /api/balancers/:name`          | live        |
+| `meterReaders[]`                   | `POST` / `PUT` / `DELETE /api/meters`                      | live        |
+| `chargers[]`                       | `POST` / `PUT` / `DELETE /api/chargers`, `GET .../pending` | live        |
+| `vehicles[]`                       | `POST` / `DELETE /api/vehicles`                            | live        |
+| `loadpoints[]` bindings            | `PUT /api/loadpoints/:name`                                | live        |
+| loadpoint mode / targets           | `POST /api/loadpoints/:name/mode`, `.../target`            | live        |
 
-**It writes the database, so restart (or start) the server for it to take effect** — a running server holds its loadpoint state in memory and won't pick up the change until it reboots.
+Every write is **validated against the same schema _before_ it is persisted** (a bad value is rejected with a 400, never stored to brick the next boot) and emits a `config.changed` SSE. A live change soft-reloads just the affected module — safe because durable state is in SQLite, desired state is re-derived each tick, and hardware re-reports observed state on reconnect. The **restart-required** fields are the handful captured once at boot: `smartCharging.controlIntervalSec` (the control-loop timer), `site.port` (the HTTP listener), and the whole `mqttBridge` (its live reload isn't wired yet). Those endpoints return `{ restartRequired: true, restartFields: [...] }`.
 
-#### Structural config (runtime-editable, applied live)
+#### Import / export
 
-Beyond mode/targets, **structural** config is runtime-editable too: the tariff region, the main breaker (`site.mainBreakerA` and balancer params), and even claiming a newly-connected charger or adding a vehicle. These persist as JSON overrides in the `config_overrides` table (layered over `osc.yaml` to form the _effective_ config, re-validated by the same schema) and — unlike loadpoint state — **apply immediately**: the lifecycle soft-reloads just the affected module, no restart. Endpoints: `PUT /api/site`, `PUT /api/tariffs/:name`, `PUT /api/balancers/:name`, the charger `POST`/`PUT`/`DELETE /api/chargers` (+ `GET /api/chargers/pending`), and `POST`/`DELETE /api/vehicles` (+ `PUT /api/loadpoints/:name` to bind a vehicle/tariff/balancer). Every change emits a `config.changed` SSE.
+- **`GET /api/config/export`** — the whole config as an `osc.yaml` document, **omitting schema defaults** so it stays small. Credentials are **redacted** by default; `?secrets=1` includes them (a full-fidelity backup). Served as a file download.
+- **`POST /api/config/import`** — body `{ config, mode, dryRun? }`, where `config` is a YAML string or JSON object:
+  - **`mode: "merge"`** overlays only the sections present (a partial import is fine); **`mode: "replace"`** is a blank slate — anything absent reverts to its default.
+  - **`dryRun: true`** validates and reports without writing.
+  - A **redacted** credential (the `••••••` placeholder) keeps the existing secret, so a redacted export round-trips without wiping passwords.
+  - The document is validated **whole, before any write**, and applies on the **next restart** (a bulk swap, like `config:apply`); the granular `PUT`s above are the live path.
+- **`npm run config:apply`** is the CLI form — read `osc.yaml` → import (replace): it **clears** the DB config and re-imports the file. Use it to re-assert the file or reset runtime tweaks. Reads `OSC_CONFIG`, writes `data/osc.db`; **restart the server to apply**.
 
-`npm run config:apply` reconciles these overrides too: it **clears** overrides for entities defined in `osc.yaml` (so the file re-asserts region/breaker/etc.) and **preserves** runtime-added entities (a claimed charger, an added vehicle) so applying config never silently deletes one you're using. Add `-- --prune` to clear everything (the DB then matches the file exactly):
+#### What is config vs. data
 
-```bash
-npm run config:apply            # file wins for file-defined entities; keep runtime-added ones
-npm run config:apply -- --prune # DB == osc.yaml (drop runtime-added entities too)
-```
+Import/export covers **only configuration**, never history or cache:
 
-Credentials added via the API (a vehicle login) are stored in `config_overrides` in `data/osc.db` — plaintext at rest, same posture as `osc.yaml`; `chmod 700 data/` and treat backups as secret. They are never returned by the API (`GET /api/site` shows only `name`/`type`/`vin`) or logged.
+- **Config** (exported / imported): `site`, `smartCharging`, `mqttBridge`, `tariffs`, `balancers`, `vehicles` (+creds), `chargers`, `meterReaders` (+broker creds), `loadpoints` (bindings + `defaultMode` + targets), `logs.retentionDays`.
+- **Data** (never exported, untouched by import): charge transactions + meter samples, the tariff price cache, cached vehicle SoC, household-load history, the Škoda refresh token (re-auth from creds), OCPP counters, and logs.
+
+Credentials in `config_overrides` / `osc.yaml` are **plaintext at rest** (unchanged posture); `chmod 700 data/`, treat backups as secret. `GET /api/config/export` (without `?secrets=1`) and `GET /api/site` redact them, and they are never logged.
+
+> **Recurring charging plans** are runtime state, not config — managed via the UI/API and stored in the database (see [Charging plans](#charging-plans)). They are **not** part of import/export.
 
 ### Charging plans
 

@@ -36,33 +36,55 @@
 ## Core modules
 
 ### `src/core/config.ts`
-Loads `osc.yaml`, validates against the zod schema, and returns a typed `Config` object. Does not cache — the config is immutable at runtime.
+
+The zod schema + the `Config` type. `configSchema.parse({})` is the all-defaults baseline (the effective-config base). `readConfigDocument()` reads `osc.yaml` as a raw import document (no defaults applied); `loadConfig()` reads + validates it. `osc.yaml` is **not** the live config — see [Configuration model](#configuration-model).
+
+### `src/core/config-overrides.ts`
+
+The DB config store layered over the defaults base to form the **effective config** (`getEffectiveConfig`), re-validated through the same `configSchema`. Singletons (`site`/`smartCharging`/`mqttBridge`) object-merge; entity kinds are named array elements. `validateConfigWith()` validates a would-be write **before** it is persisted (so a bad value 400s, never bricks boot).
+
+### `src/core/config-io.ts`
+
+Import/export of the config document (a superset of `osc.yaml`): `buildConfigExport` (non-defaults, credentials redacted), `importConfig` (validate-first; `merge`/`replace`; redaction-safe), and `materializeConfigOnce` (first-boot seed of `osc.yaml` into the DB).
+
+### `src/core/reconcile.ts`
+
+The reconcile seam: after an API write persists an override, rebuilds the affected module from the new effective config and mutates the shared `config` object **in place**, so live changes need no restart (durable state is in SQLite; desired state is re-derived each tick).
 
 ### `src/core/registry.ts`
+
 A typed module registry. Modules call `registerCharger('ocpp16', factory)` at import time. The core looks up the right factory when instantiating configured modules.
 
 ### `src/core/plugin-loader.ts`
+
 Scans `./plugins/*.js` at startup and imports each file. Plugins self-register by calling the SDK registration functions on import. Errors in one plugin are logged but don't crash the system.
 
 ### `src/core/events.ts`
+
 A typed `EventEmitter` wrapper. Used for internal pub/sub (e.g., "loadpoint mode changed", "session started"). MQTT publishing is a subscriber to this bus, not the source.
 
 ### `src/core/db.ts`
+
 Opens (or creates) `./data/osc.db` via `node:sqlite` (Node.js v22.5+ built-in). Runs migrations on startup. Exports typed query helpers — no raw SQL outside `db.ts`.
 
 ### `src/core/loadpoint.ts`
+
 State machine per configured loadpoint. Holds `mode`, `targetSoc`, `targetTime`, `sessionEnergyKWh`. Mode is read from SQLite on boot and written back on every change.
 
 ### `src/core/planner.ts`
+
 Given a set of price slots (hourly or 15-minute) and a required kWh amount, returns a binary on/off schedule for each slot that minimizes cost while finishing by `targetTime`. Falls back to a greedy "start as late as possible" if no price data is available.
 
 ### `src/core/estimator.ts`
+
 Computes estimated SoC from `lastKnownSoc + (sessionKWhDelivered × chargingEfficiency / batteryCapacity)`. Accepts `batteryCapacity = undefined` and returns `undefined` in that case (caller handles). The efficiency is **observed within the session** (`observedEfficiency`, from two real readings with enough delta, clamped to a sane band) when available, else the configured constant — so a mid-session vehicle-API dropout keeps estimating SoC accurately and the charge still stops at the right point. Session-scoped only; nothing is learned across sessions.
 
 ### `src/core/health.ts`
+
 Polls all registered modules' `health()` methods. Publishes to `osc/health/<module>` on MQTT and serves `GET /api/health`.
 
 ### `src/core/lifecycle.ts`
+
 Entry point. Orchestrates: load config → open DB → load plugins → instantiate modules → start server → start balancer loops → register SIGINT/SIGTERM handlers for graceful shutdown.
 
 ## Module boundaries
@@ -74,14 +96,15 @@ interface ModuleCtx {
   db: DatabaseSync
   events: EventEmitter
   log: Logger
-  fetch: typeof globalThis.fetch  // jittered 0–120 s — PUBLIC scheduled data only (tariffs)
-  mqtt?: { host: string; port: number; user?: string; password?: string }
+  fetch: typeof globalThis.fetch // jittered 0–120 s — PUBLIC scheduled data only (tariffs)
 }
 ```
 
+There is no `ctx.mqtt`: a module that talks MQTT (a meter reader, the outbound bridge) carries its **own** `broker` in its config and opens its own connection — reading a meter and OSC publishing are fully independent.
+
 First-party modules in `src/modules/*` use the same `ModuleCtx` as third-party plugins — same access, same constraints. The only difference is the registration wrapper (see [docs/modules.md](modules.md)).
 
-**Modules are minimal mappers; the lifecycle owns orchestration.** A module translates one external service ⇄ SDK types on demand, actuates when told, and reports its own health — it owns **no** background timers, polling cadence, or cross-module coordination. Deciding *when* to poll a vehicle, driving the control tick, composing the resolver ladders, and (0.3.0) car↔charger association all live in the lifecycle. This is the codebase's most important boundary; the full statement and worked examples are in [AGENTS.md](../AGENTS.md) → "Modules vs. the lifecycle".
+**Modules are minimal mappers; the lifecycle owns orchestration.** A module translates one external service ⇄ SDK types on demand, actuates when told, and reports its own health — it owns **no** background timers, polling cadence, or cross-module coordination. Deciding _when_ to poll a vehicle, driving the control tick, composing the resolver ladders, and (0.3.0) car↔charger association all live in the lifecycle. This is the codebase's most important boundary; the full statement and worked examples are in [AGENTS.md](../AGENTS.md) → "Modules vs. the lifecycle".
 
 ## OCPP connection model
 
@@ -90,15 +113,21 @@ Chargers connect over WebSocket to `ws://<host>:<port>/ocpp`. The `ocpp16` modul
 ## Persistence
 
 SQLite at `./data/osc.db`. Tables:
+
 - `loadpoint_state` — mode, targetSoc, targetTime, targetKWh, **minSoc** (ad-hoc target + safety floor) per loadpoint name
 - `charge_plans` — recurring per-loadpoint plans (days_mask, ready_by, target value+unit, enabled); the resolution layer (`src/core/plans.ts`) in front of the planner
-- `settings` — system-wide key/value (e.g. site `timezone`); `src/core/settings.ts`
+- `config_overrides` — the structural config store: JSON patch per (kind, name) — singletons (`site`/`smartCharging`/`mqttBridge`) + entities (tariffs/balancers/vehicles/chargers/meterReaders/loadpoints). Layered over the defaults base → effective config; `src/core/config-overrides.ts`
+- `settings` — system-wide key/value (site `timezone`, `logs.retention_days`, `config.materialized`); `src/core/settings.ts`
 - `transactions` — OCPP transaction records
 - `meter_values` — raw meter value samples per session
 - `tariff_slots` — cached price slots per (zone, slotStart)
-- `vehicle_cache` — per-vehicle: SoC, capacity, range, fetchedAt
+- `vehicle_cache` — per-vehicle: `soc`, `battery_capacity_kwh`, `range_km`, `is_charging`, `target_soc`, `plugged_in`, `climate_active`, `fetched_at`
 
 Migrations run automatically on startup (additive only — no destructive migrations).
+
+## Configuration model
+
+The effective config OSC runs on is **`configSchema.parse({})` (defaults) ⊕ the DB config store** (`config_overrides` + `settings` + `loadpoint_state`), re-validated through the same schema. **`osc.yaml` is an import format, not a live base:** on an un-materialized DB (`settings['config.materialized']` unset — a fresh or cleared DB) the lifecycle imports it once (`materializeConfigOnce`), then it is inert. The DB is thereafter the source of truth — edit via the API (which the [config reference](config.md#the-config-model-oscyaml-is-an-import-format) documents as the complete editing surface) or re-import (`POST /api/config/import`, `npm run config:apply`). API writes validate before persisting, reconcile the affected module **in place** (live, except the boot-captured `controlIntervalSec`/`site.port`/`mqttBridge`), and emit `config.changed`. History/cache tables (transactions, meter samples, tariff/vehicle/load caches, the Škoda token, logs) are **data**, never part of config import/export.
 
 **Two timezones (`src/sdk/local-time.ts`, tz always a parameter):** the **site** timezone
 (`settings.timezone`, configurable + auto-detected in setup) drives all user-facing planning — the
