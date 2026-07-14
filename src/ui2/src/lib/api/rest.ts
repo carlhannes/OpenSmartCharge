@@ -19,6 +19,8 @@ export interface LoadpointStateDto {
   powerW: number; // instantaneous draw (W) from MeterValues; 0 when not charging
   sessionEnergyKWh: number;
   maxCurrentA: number;
+  /** Resolved vehicle present this session: the bound car's name, or null (guest); undefined pre-first-tick. */
+  activeVehicle?: string | null;
   availableTargetUnits?: PlanDto["unit"][]; // units the data can back now (kwh always; pct/km need car data)
   resolve?: LoadpointResolveDto; // latest control-loop decision (the "why"); undefined until first tick
 }
@@ -197,11 +199,15 @@ export const getLoadpoint = (name: string) =>
   apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}`);
 export const setMode = (name: string, mode: ChargeMode) =>
   apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/mode`, json({ mode }));
-// /target COALESCE-merges — send only the fields you want to change.
+// /target COALESCE-merges — send only the fields you want to change. `kwh: null` explicitly CLEARS
+// the kWh cap (guest "just charge").
 export const setTarget = (
   name: string,
-  t: { soc?: number; time?: string; kwh?: number; minSoc?: number },
+  t: { soc?: number; time?: string; kwh?: number | null; minSoc?: number },
 ) => apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/target`, json(t));
+// Per-session active-vehicle override: null = Guest, or the bound vehicle's name = force the bound car.
+export const setLoadpointVehicle = (name: string, vehicle: string | null) =>
+  apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/vehicle`, json({ vehicle }));
 export const remoteStart = (name: string) =>
   apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/start`, { method: "POST" });
 export const remoteStop = (name: string) =>

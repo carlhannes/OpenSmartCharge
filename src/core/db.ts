@@ -145,6 +145,8 @@ function runMigrations(db: DatabaseSync): void {
   addColumnIfMissing(db, 'transactions', 'meter_start', 'REAL')
   addColumnIfMissing(db, 'loadpoint_state', 'target_kwh', 'REAL')
   addColumnIfMissing(db, 'loadpoint_state', 'min_soc', 'REAL')
+  // Per-session guest override ('guest'|'vehicle'; NULL = auto-detect). Runtime-only; reset on unplug.
+  addColumnIfMissing(db, 'loadpoint_state', 'guest_override', 'TEXT')
   // Persist the car's own target/plug/climate so the SessionReconciler's carAtTarget + plug guards
   // aren't blind for a poll after a restart (they were undefined until the first live refresh).
   addColumnIfMissing(db, 'vehicle_cache', 'target_soc', 'REAL')

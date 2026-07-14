@@ -209,6 +209,7 @@ export function useLiveSync() {
             connected: boolean;
             charging: boolean;
             currentA: number;
+            powerW: number;
             sessionEnergyKWh: number;
           };
           const cur = useOsc.getState().chargers.find((c) => c.id === e.name);
@@ -220,7 +221,7 @@ export function useLiveSync() {
               drawing: (e.currentA ?? 0) > 0.5,
               mode,
             }),
-            currentPowerW: Math.round(e.currentA * 230),
+            currentPowerW: e.powerW ?? Math.round(e.currentA * 230), // backend 3-phase power, not single-phase
             sessionKwh: e.sessionEnergyKWh,
           });
         }),
@@ -237,6 +238,10 @@ export function useLiveSync() {
             guestTargetKwh: e.targetKWh ?? null,
             minSoc: e.minSoc ?? null,
           });
+        }),
+        subscribe("loadpoint.activeVehicle", (d) => {
+          const e = d as { name: string; activeVehicle: string | null };
+          useOsc.getState().patchCharger(e.name, { activeVehicleId: e.activeVehicle });
         }),
         subscribe("vehicle.poll", (d) => {
           const e = d as { name: string; soc: number };

@@ -58,8 +58,12 @@ export function mapLoadpoint(lp: LoadpointStateDto, site?: SiteDto): Charger {
       drawing: (lp.currentA ?? 0) > 0.5,
       mode,
     }),
-    activeVehicleId: boundVehicle,
-    currentPowerW: Math.round(lp.currentA * VOLTAGE),
+    // Resolved active vehicle from the backend (Guest = null); fall back to the static binding until
+    // the first tick populates it. boundVehicleId keeps the static binding for the UI's tab set.
+    activeVehicleId: lp.activeVehicle !== undefined ? lp.activeVehicle : boundVehicle,
+    boundVehicleId: boundVehicle,
+    // Power comes from the backend (3-phase MeterValues), NOT recomputed single-phase here.
+    currentPowerW: lp.powerW ?? Math.round(lp.currentA * VOLTAGE),
     sessionKwh: lp.sessionEnergyKWh,
     sessionStart: null,
     guestTargetKwh: lp.targetKWh ?? null,

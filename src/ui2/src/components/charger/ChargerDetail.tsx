@@ -9,6 +9,8 @@ import {
   updatePlan as updatePlanCmd,
   removePlan as removePlanCmd,
   setMinSoc,
+  setActiveVehicle,
+  setGuestTarget,
 } from "@/lib/live/commands";
 import { Timeline24h } from "./Timeline24h";
 import { StatusPill } from "@/components/StatusPill";
@@ -36,8 +38,6 @@ export function ChargerDetail({ charger, onClose }: Props) {
     () => allPlans.filter((p) => p.chargerId === charger?.id),
     [allPlans, charger?.id],
   );
-  const setActiveVehicle = useOsc((s) => s.setActiveVehicle);
-  const setGuestTarget = useOsc((s) => s.setGuestTarget);
   const oneShotAmps = useOsc((s) => s.oneShotAmps);
   const timezone = useOsc((s) => s.timezone);
   const [advOpen, setAdvOpen] = useState(false);
@@ -64,6 +64,12 @@ export function ChargerDetail({ charger, onClose }: Props) {
   };
 
   const vehicle = vehicles.find((v) => v.id === charger.activeVehicleId) ?? null;
+  // Offer only what the backend can honor: Guest + the loadpoint's BOUND car. (Live sets
+  // boundVehicleId; in demo it's absent → fall back to all vehicles.)
+  const tabVehicles =
+    charger.boundVehicleId != null
+      ? vehicles.filter((v) => v.id === charger.boundVehicleId)
+      : vehicles;
   const nextReady = resolveActivePlan(plans, timezone)?.readyBy;
   const readyByHour = nextReady ? parseInt(nextReady.split(":")[0], 10) : undefined;
 
@@ -119,7 +125,7 @@ export function ChargerDetail({ charger, onClose }: Props) {
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button
-                onClick={() => setActiveVehicle(charger.id, null)}
+                onClick={() => void setActiveVehicle(charger.id, null)}
                 className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
                   !vehicle
                     ? "bg-primary text-primary-foreground"
@@ -128,10 +134,10 @@ export function ChargerDetail({ charger, onClose }: Props) {
               >
                 Guest
               </button>
-              {vehicles.map((v) => (
+              {tabVehicles.map((v) => (
                 <button
                   key={v.id}
-                  onClick={() => setActiveVehicle(charger.id, v.id)}
+                  onClick={() => void setActiveVehicle(charger.id, v.id)}
                   className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
                     vehicle?.id === v.id
                       ? "bg-primary text-primary-foreground"
@@ -178,7 +184,7 @@ export function ChargerDetail({ charger, onClose }: Props) {
                   min={0}
                   value={charger.guestTargetKwh ?? ""}
                   onChange={(e) =>
-                    setGuestTarget(charger.id, e.target.value ? parseFloat(e.target.value) : null)
+                    void setGuestTarget(charger.id, e.target.value ? parseFloat(e.target.value) : null)
                   }
                   placeholder="Just charge"
                   className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring/40"

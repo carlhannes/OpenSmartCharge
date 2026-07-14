@@ -694,3 +694,41 @@ test('POST /target validates minSoc and passes it through', async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('POST /loadpoints/:name/vehicle: guest (null) / bound name accepted, other → 400, unknown → 404', async () => {
+  const calls: Array<[string, string | null]> = []
+  const deps = {
+    config: { loadpoints: [{ name: 'garage', charger: 'g', vehicle: 'enyaq' }] },
+    loadpoints: new Map([['garage', { name: 'garage' }]]),
+    onVehicleOverride: async (name: string, v: string | null) => void calls.push([name, v]),
+  } as unknown as ApiDeps
+  await withApi(deps, async (baseUrl) => {
+    const post = (b: unknown) => postJson(`${baseUrl}/api/loadpoints/garage/vehicle`, b)
+    expect((await post({ vehicle: null })).status).toBe(200) // Guest
+    expect((await post({ vehicle: 'enyaq' })).status).toBe(200) // force the bound car
+    expect((await post({ vehicle: 'someone-else' })).status).toBe(400) // not the bound car
+    expect(
+      (await postJson(`${baseUrl}/api/loadpoints/nope/vehicle`, { vehicle: null })).status,
+    ).toBe(404)
+    expect(calls).toEqual([
+      ['garage', null],
+      ['garage', 'enyaq'],
+    ])
+  })
+})
+
+test('POST /loadpoints/:name/target: kwh null clears (threaded as null), a number is range-checked', async () => {
+  const kwhArgs: Array<number | null | undefined> = []
+  const deps = {
+    loadpoints: new Map([['garage', { name: 'garage' }]]),
+    onTargetChange: async (_n: string, _s?: number, _t?: string, kwh?: number | null) =>
+      void kwhArgs.push(kwh),
+  } as unknown as ApiDeps
+  await withApi(deps, async (baseUrl) => {
+    const post = (b: unknown) => postJson(`${baseUrl}/api/loadpoints/garage/target`, b)
+    expect((await post({ kwh: null })).status).toBe(200) // explicit clear
+    expect((await post({ kwh: 40 })).status).toBe(200)
+    expect((await post({ kwh: 0 })).status).toBe(400) // < 1 → rejected, not treated as clear
+    expect(kwhArgs).toEqual([null, 40]) // the 0 never reached the handler
+  })
+})

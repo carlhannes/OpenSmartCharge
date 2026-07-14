@@ -62,9 +62,11 @@ export interface ApiDeps {
     name: string,
     soc?: number,
     time?: string,
-    kwh?: number,
+    kwh?: number | null,
     minSoc?: number,
   ): Promise<void>
+  /** Set the per-session active-vehicle override: null = force guest, the bound vehicle name = force it. */
+  onVehicleOverride(name: string, vehicle: string | null): Promise<void>
   /** Called after any plan create/update/delete so the lifecycle can emit SSE + re-tick. */
   onPlansChanged(loadpointName: string): void
 }
@@ -812,7 +814,8 @@ export function createApiRouter(deps: ApiDeps): Router {
     const body = req.body as { soc?: unknown; time?: unknown; kwh?: unknown; minSoc?: unknown }
     const soc = typeof body.soc === 'number' ? body.soc : undefined
     const time = typeof body.time === 'string' ? body.time : undefined
-    const kwh = typeof body.kwh === 'number' ? body.kwh : undefined
+    // `kwh: null` is an explicit CLEAR (guest "just charge" — no cap); absent = leave unchanged.
+    const kwh = body.kwh === null ? null : typeof body.kwh === 'number' ? body.kwh : undefined
     const minSoc = typeof body.minSoc === 'number' ? body.minSoc : undefined
 
     if (soc !== undefined && (soc < 0 || soc > 100)) {
@@ -823,7 +826,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       res.status(400).json({ error: 'time must be HH:MM' })
       return
     }
-    if (kwh !== undefined && (kwh < 1 || kwh > 100)) {
+    if (typeof kwh === 'number' && (kwh < 1 || kwh > 100)) {
       res.status(400).json({ error: 'kwh must be 1–100' })
       return
     }
@@ -833,6 +836,34 @@ export function createApiRouter(deps: ApiDeps): Router {
     }
 
     await deps.onTargetChange(name, soc, time, kwh, minSoc)
+    res.json(deps.loadpoints.get(name))
+  })
+
+  // POST /api/loadpoints/:name/vehicle — set the per-session active-vehicle override. Body
+  // { vehicle: string | null }: null = force Guest, or the loadpoint's BOUND vehicle name = force it
+  // (the recourse when the car API wrongly reports unplugged). Any other value → 400 (OSC can only
+  // charge the bound car or a guest — no SoC source for another). Resets to auto-detect on unplug.
+  router.post('/loadpoints/:name/vehicle', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    if (!deps.loadpoints.has(name)) {
+      res.status(404).json({ error: 'loadpoint not found' })
+      return
+    }
+    const v = (req.body as { vehicle?: unknown }).vehicle
+    if (v !== null && typeof v !== 'string') {
+      res
+        .status(400)
+        .json({ error: 'vehicle must be a string (the bound vehicle) or null (guest)' })
+      return
+    }
+    const bound = deps.config.loadpoints.find((l) => l.name === name)?.vehicle
+    if (typeof v === 'string' && v !== bound) {
+      res
+        .status(400)
+        .json({ error: `vehicle must be null (guest) or the bound vehicle "${bound ?? ''}"` })
+      return
+    }
+    await deps.onVehicleOverride(name, v)
     res.json(deps.loadpoints.get(name))
   })
 

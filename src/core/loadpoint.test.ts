@@ -8,6 +8,7 @@ import {
   foldChargerStatus,
   setLoadpointTarget,
   setLoadpointMode,
+  setLoadpointGuestOverride,
   applyConfigToLoadpoints,
   type LoadpointLiveFields,
 } from './loadpoint.js'
@@ -190,6 +191,44 @@ test('minSoc: seeded from config, partial-updated independently, and declarative
         }
       ).min_soc,
     ).toBe(15)
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('setLoadpointTarget clears target_kwh with null, leaving other targets intact', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-lp-'))
+  const db = openDb(dir)
+  try {
+    loadLoadpointStates(db, [{ name: 'lp', targetSoc: 75, targetKWh: 40 }])
+    // null CLEARS the kWh cap (guest "just charge"); undefined would leave it (COALESCE).
+    setLoadpointTarget(db, 'lp', undefined, undefined, null)
+    const row = db
+      .prepare('SELECT target_soc, target_kwh FROM loadpoint_state WHERE name = ?')
+      .get('lp') as { target_soc: number; target_kwh: number | null }
+    expect(row.target_kwh).toBeNull() // cleared
+    expect(row.target_soc).toBe(75) // untouched
+    expect(loadLoadpointStates(db, [{ name: 'lp' }]).get('lp')?.targetKWh).toBeUndefined()
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('guest override persists, reads back, and clears to auto', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-lp-'))
+  const db = openDb(dir)
+  const ov = () => loadLoadpointStates(db, [{ name: 'lp' }]).get('lp')?.guestOverride
+  try {
+    loadLoadpointStates(db, [{ name: 'lp' }])
+    expect(ov()).toBeUndefined() // default = auto-detect
+    setLoadpointGuestOverride(db, 'lp', 'guest')
+    expect(ov()).toBe('guest')
+    setLoadpointGuestOverride(db, 'lp', 'vehicle')
+    expect(ov()).toBe('vehicle')
+    setLoadpointGuestOverride(db, 'lp', null) // back to auto
+    expect(ov()).toBeUndefined()
   } finally {
     db.close()
     rmSync(dir, { recursive: true, force: true })

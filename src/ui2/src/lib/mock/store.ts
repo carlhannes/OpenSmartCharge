@@ -33,7 +33,8 @@ export interface Charger {
   maxAmps: number;
   mode: Mode;
   status: ChargerRuntimeStatus;
-  activeVehicleId: string | null; // null = Guest
+  activeVehicleId: string | null; // resolved active vehicle from the backend; null = Guest
+  boundVehicleId?: string | null; // the loadpoint's configured vehicle binding (live only; static)
   currentPowerW: number;
   sessionKwh: number;
   sessionStart: number | null; // ms

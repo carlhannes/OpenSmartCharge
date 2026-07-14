@@ -11,6 +11,9 @@ export interface LoadpointState {
   targetKWh?: number
   /** Minimum SoC (%) safety floor — force-charge in smart mode when SoC drops below it. */
   minSoc?: number
+  /** Per-session vehicle-presence override (persisted): 'guest' = force guest, 'vehicle' = force the
+   * bound car; undefined = auto-detect. Reset on unplug. See smart-charging/guest.ts. */
+  guestOverride?: 'guest' | 'vehicle'
   connected: boolean
   charging: boolean
   /** Raw OCPP connector status (Available/Preparing/Charging/SuspendedEV/…). Undefined until the
@@ -33,6 +36,9 @@ export interface LoadpointState {
     budgetA: number
     sources: { energy: string; price: string; current: string }
   }
+  /** Resolved vehicle present this session: the bound car's name, or null (guest). Resolver-derived,
+   * recomputed each tick, not persisted; undefined until the first tick. See smart-charging/guest.ts. */
+  activeVehicle?: string | null
 }
 
 /** The live, charger-driven subset of loadpoint state. */
@@ -71,6 +77,7 @@ interface DbRow {
   target_time: string | null
   target_kwh: number | null
   min_soc: number | null
+  guest_override: string | null
 }
 
 export interface LoadpointInit {
@@ -115,6 +122,7 @@ export function loadLoadpointStates(
       targetTime: row.target_time ?? undefined,
       targetKWh: row.target_kwh ?? undefined,
       minSoc: row.min_soc ?? undefined,
+      guestOverride: (row.guest_override as 'guest' | 'vehicle' | null) ?? undefined,
       connected: false,
       charging: false,
       currentA: 0,
@@ -179,23 +187,43 @@ export function setLoadpointMode(db: DatabaseSync, name: string, mode: ChargeMod
 }
 
 // Partial update: an `undefined` field is left unchanged (COALESCE keeps the existing value), so
-// setting one target — e.g. just `targetSoc` — no longer NULLs out `targetTime`/`targetKWh`.
-// (Explicit clearing of a target is out of scope; use the config-apply CLI or a fresh DB for that.)
+// setting one target — e.g. just `targetSoc` — doesn't NULL out the others. `targetKWh` additionally
+// supports an explicit CLEAR: pass `null` to null the column (guest "just charge" = no kWh cap),
+// distinct from `undefined` (leave as-is). soc/time/minSoc keep leave-or-set-only semantics.
 export function setLoadpointTarget(
   db: DatabaseSync,
   name: string,
   targetSoc?: number,
   targetTime?: string,
-  targetKWh?: number,
+  targetKWh?: number | null,
   minSoc?: number,
 ): void {
   db.prepare(
     `UPDATE loadpoint_state
        SET target_soc  = COALESCE(?, target_soc),
            target_time = COALESCE(?, target_time),
-           target_kwh  = COALESCE(?, target_kwh),
+           target_kwh  = CASE WHEN ? THEN NULL ELSE COALESCE(?, target_kwh) END,
            min_soc     = COALESCE(?, min_soc),
            updated_at  = datetime('now')
      WHERE name = ?`,
-  ).run(targetSoc ?? null, targetTime ?? null, targetKWh ?? null, minSoc ?? null, name)
+  ).run(
+    targetSoc ?? null,
+    targetTime ?? null,
+    targetKWh === null ? 1 : 0,
+    typeof targetKWh === 'number' ? targetKWh : null,
+    minSoc ?? null,
+    name,
+  )
+}
+
+// Set (or clear with `null`) the per-session guest override. Full replace — `null` returns to
+// auto-detect. Runtime-only; the lifecycle resets it on unplug. See smart-charging/guest.ts.
+export function setLoadpointGuestOverride(
+  db: DatabaseSync,
+  name: string,
+  override: 'guest' | 'vehicle' | null,
+): void {
+  db.prepare(
+    `UPDATE loadpoint_state SET guest_override = ?, updated_at = datetime('now') WHERE name = ?`,
+  ).run(override, name)
 }

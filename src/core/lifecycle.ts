@@ -18,6 +18,7 @@ import {
   configToLoadpointInits,
   setLoadpointMode,
   setLoadpointTarget,
+  setLoadpointGuestOverride,
   foldChargerStatus,
 } from './loadpoint.js'
 import { createEventBus } from './events.js'
@@ -52,6 +53,7 @@ import { resolvePriceCurve } from './smart-charging/price.js'
 import { resolveCurrentBudget } from './smart-charging/current.js'
 import { decideShouldCharge, forceMinSoc, forceClimate } from './smart-charging/decide.js'
 import { shouldPollVehicle } from './smart-charging/vehicle-poll.js'
+import { resolveActiveVehicle } from './smart-charging/guest.js'
 import {
   buildCircuits,
   circuitForLoadpoint,
@@ -354,16 +356,17 @@ async function main() {
     name: string,
     soc?: number,
     time?: string,
-    kwh?: number,
+    kwh?: number | null,
     minSoc?: number,
   ): Promise<void> {
     const state = loadpointStates.get(name)
     if (!state) return
     // Merge: undefined = "leave unchanged", so a partial update (e.g. just soc) doesn't wipe the
-    // other targets. Mirrors setLoadpointTarget's COALESCE in the DB.
+    // other targets. `kwh: null` is an explicit CLEAR (guest "just charge" = no cap). Mirrors
+    // setLoadpointTarget's COALESCE/CASE in the DB.
     if (soc !== undefined) state.targetSoc = soc
     if (time !== undefined) state.targetTime = time
-    if (kwh !== undefined) state.targetKWh = kwh
+    if (kwh !== undefined) state.targetKWh = kwh ?? undefined
     if (minSoc !== undefined) state.minSoc = minSoc
     setLoadpointTarget(db, name, soc, time, kwh, minSoc)
     events.emit('loadpoint.target', {
@@ -374,6 +377,19 @@ async function main() {
       minSoc: state.minSoc,
     })
     // A new target changes the plan — tick the circuit now instead of waiting for the interval.
+    const circuit = circuitForLoadpoint(circuits, name)
+    if (circuit) void circuitTick(circuit)
+  }
+
+  // Guest / active-vehicle override: `null` = force guest, the bound vehicle's name = force the bound
+  // car (recourse when the car API wrongly reports unplugged). Persisted per-session (reset on
+  // unplug); ticks the circuit so the resolved activeVehicle + energy source update within ~1 s.
+  async function handleVehicleOverride(name: string, vehicle: string | null): Promise<void> {
+    const state = loadpointStates.get(name)
+    if (!state) return
+    const override = vehicle === null ? 'guest' : 'vehicle'
+    state.guestOverride = override
+    setLoadpointGuestOverride(db, name, override)
     const circuit = circuitForLoadpoint(circuits, name)
     if (circuit) void circuitTick(circuit)
   }
@@ -403,6 +419,7 @@ async function main() {
   // Last-emitted resolve per loadpoint (as JSON) — change-guard so `loadpoint.resolve` only fires
   // when the decision actually changes, not every ~30 s tick with an identical frame.
   const lastResolveByLoadpoint = new Map<string, string>()
+  const lastActiveVehicleByLoadpoint = new Map<string, string | null>()
 
   // On a FAILED warranted poll, retry with capped exponential backoff (seconds→minutes) instead of
   // waiting the full 15 min idle cadence — so a transient car-API outage recovers fast when it
@@ -476,17 +493,40 @@ async function main() {
     climateActive?: boolean
     sessionEnergyKWh: number
     efficiency: number
+    activeVehicle: string | null
   }> {
     const vehicle = lpCfg.vehicle ? vehicles.get(lpCfg.vehicle) : undefined
-    const capacity = vehicle?.getCachedCapacity()
+    let capacity = vehicle?.getCachedCapacity()
     let soc: number | undefined
     let range: number | undefined
     let climateActive: boolean | undefined
+    let pluggedIn: boolean | undefined
     if (vehicle) {
       const data = await vehicle.getData().catch(() => undefined)
       soc = data?.soc
       range = data?.range
       climateActive = data?.climateActive
+      pluggedIn = data?.pluggedIn
+    }
+    // Which car is present this session — the bound one, or a guest (null)? When it's NOT the bound
+    // car (auto-detected via pluggedIn vs charger-connected, or a manual override), suppress EVERY
+    // bound-car input so the resolver degrades to the kWh target / duty-cycle. estimatedSocPct feeds
+    // both resolveTarget and the minSoc floor, so nulling it here fixes both in one place.
+    const activeVehicle = resolveActiveVehicle({
+      boundVehicle: lpCfg.vehicle,
+      connected: state.connected,
+      pluggedIn,
+      override: state.guestOverride,
+    })
+    const usingBoundCar = activeVehicle != null && activeVehicle === lpCfg.vehicle
+    const estimatedSocPct = usingBoundCar
+      ? estimatedSocFor(lpCfg.name, capacity, state.sessionEnergyKWh)
+      : undefined
+    if (!usingBoundCar) {
+      capacity = undefined
+      soc = undefined
+      range = undefined
+      climateActive = undefined
     }
     const eff = effectiveEfficiencyFor(lpCfg.name, capacity)
     // Surface the observed-this-session efficiency when we have one, so it's visible in the logs
@@ -501,13 +541,14 @@ async function main() {
         'using observed session charging efficiency',
       )
     return {
-      estimatedSocPct: estimatedSocFor(lpCfg.name, capacity, state.sessionEnergyKWh),
+      estimatedSocPct,
       soc,
       range,
       capacity,
       climateActive,
       sessionEnergyKWh: state.sessionEnergyKWh,
       efficiency: eff.efficiency,
+      activeVehicle,
     }
   }
 
@@ -644,6 +685,8 @@ async function main() {
     /** Charging is driven ONLY by climate-force (target reached, price wouldn't charge) — so this is
      * just preconditioning: offer the IEC minimum, not the full budget. */
     climateOnly: boolean
+    /** Resolved vehicle present this session: the bound car's name, or null (guest). */
+    activeVehicle: string | null
     pricesAvailable: boolean
     sources: { energy: string; price: string; current: string }
   }
@@ -692,6 +735,7 @@ async function main() {
     // lets us size it (else the kWh-to-add fallback) — mirroring the ladder's own rung order.
     const ectx = await gatherEnergyContext(lpCfg, state)
     const estimatedSocPct = ectx.estimatedSocPct
+    state.activeVehicle = ectx.activeVehicle // exposed on GET /api/loadpoints + emitted below
     let target: Target | null = null
     if (activePlan) target = { unit: activePlan.unit, value: activePlan.target }
     else if (state.targetSoc != null && (ectx.capacity != null || state.targetKWh == null))
@@ -772,6 +816,7 @@ async function main() {
       state,
       shouldChargeNow,
       climateOnly,
+      activeVehicle: ectx.activeVehicle,
       pricesAvailable: !price.degraded,
       sources: { energy: energy.source, price: price.source, current: circuitBudget.source },
     }
@@ -883,6 +928,18 @@ async function main() {
       for (const lp of lpCfgs) {
         const st = loadpointStates.get(lp.name)
         if (!st) continue
+        // Session end (connector genuinely Available / unplugged): reset per-session state so the NEXT
+        // car re-auto-detects — clear the SoC anchor (else a guest's kWh extends the bound car's
+        // estimate), the efficiency sample, and any guest override (back to auto). Idempotent per tick;
+        // the DB write only fires once (guarded on a set override).
+        if (availableSince.get(lp.name) !== undefined) {
+          vehicleAnchor.delete(lp.name)
+          sessionFirstReading.delete(lp.name)
+          if (st.guestOverride !== undefined) {
+            st.guestOverride = undefined
+            setLoadpointGuestOverride(db, lp.name, null)
+          }
+        }
         // Fast is a boost until the car is unplugged: once the connector has been Available past the
         // grace, revert to smart (persist + emit). Brief unplugs / WS blips / restarts keep Fast.
         if (
@@ -939,6 +996,12 @@ async function main() {
           lastResolveByLoadpoint.set(r.state.name, key)
           events.emit('loadpoint.resolve', { name: r.state.name, ...r.state.resolve })
         }
+        // Same change-guard for the resolved active vehicle (Guest vs the bound car) — for the UI.
+        const av = r.activeVehicle ?? null
+        if (lastActiveVehicleByLoadpoint.get(r.state.name) !== av) {
+          lastActiveVehicleByLoadpoint.set(r.state.name, av)
+          events.emit('loadpoint.activeVehicle', { name: r.state.name, activeVehicle: av })
+        }
       }
 
       // Balancer circuits coordinate the applied amps across their loadpoints via allocate();
@@ -948,8 +1011,12 @@ async function main() {
         const balancer = balancers.get(circuit.balancerName)
         if (!balancer) return
         const snaps = resolved.map((r) => {
-          const lp = lpCfgs.find((l) => l.name === r.state.name)!
-          const snap = buildSnapshot(r.state, lp.vehicle, r.shouldChargeNow, r.pricesAvailable)
+          const snap = buildSnapshot(
+            r.state,
+            r.activeVehicle ?? undefined,
+            r.shouldChargeNow,
+            r.pricesAvailable,
+          )
           // Climate-only → cap this loadpoint's allocatable current at the IEC minimum.
           if (r.climateOnly) snap.maxCurrentA = Math.min(snap.maxCurrentA, CLIMATE_MAX_OFFER_A)
           return snap
@@ -1006,8 +1073,10 @@ async function main() {
         const lpId = r.state.name
         const charger = chargerLimitMap.get(lpId)
         if (!charger) continue
-        const lp = lpCfgs.find((l) => l.name === lpId)
-        const vehicle = lp?.vehicle ? vehicles.get(lp.vehicle) : undefined
+        // Use the RESOLVED active vehicle, not the static binding: for a guest the bound car isn't
+        // present, so the reconciler must rely on OCPP status + draw only (no spurious wake-car at the
+        // absent bound car).
+        const vehicle = r.activeVehicle ? vehicles.get(r.activeVehicle) : undefined
         // Cached read (no network) — the car's own plug/charging view as an independent cross-check.
         const carData = vehicle ? await vehicle.getData().catch(() => undefined) : undefined
         const commandedA = amps.get(lpId) ?? 0
@@ -1110,6 +1179,7 @@ async function main() {
     reconcile,
     onModeChange: handleModeChange,
     onTargetChange: handleTargetChange,
+    onVehicleOverride: handleVehicleOverride,
     onPlansChanged: handlePlansChanged,
   })
   log.info({ port: config.site.port }, 'HTTP server listening')

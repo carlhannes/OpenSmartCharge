@@ -90,6 +90,21 @@ export async function setMinSoc(chargerId: string, pct: number): Promise<void> {
   if (isLive()) await api.setTarget(chargerId, { minSoc: pct });
 }
 
+/** Guest / active-vehicle override: optimistic store set; POST /vehicle when live (null = Guest, or
+ *  the bound vehicle's id = force it). The `loadpoint.activeVehicle` SSE reconciles to the backend's
+ *  resolved value. */
+export async function setActiveVehicle(chargerId: string, vehicleId: string | null): Promise<void> {
+  useOsc.getState().setActiveVehicle(chargerId, vehicleId);
+  if (isLive()) await api.setLoadpointVehicle(chargerId, vehicleId);
+}
+
+/** Guest kWh target ("just charge" when null → clears the cap): optimistic; POST /target { kwh }
+ *  when live. The `loadpoint.target` SSE reconciles. */
+export async function setGuestTarget(chargerId: string, kwh: number | null): Promise<void> {
+  useOsc.getState().setGuestTarget(chargerId, kwh);
+  if (isLive()) await api.setTarget(chargerId, { kwh });
+}
+
 /** Site timezone: optimistic local; PUT /settings when live (SSE `settings.changed` reconciles). */
 export async function setTimezone(tz: string): Promise<void> {
   useOsc.getState().setTimezone(tz);
