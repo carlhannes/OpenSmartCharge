@@ -5,6 +5,38 @@ Each entry: **Symptom** (what was seen) · **Evidence** · **Where** · **Root c
 
 ---
 
+## 2026-07-14 — UI derives the charge "plan" on the frontend
+
+### 1. Charger chart computes the "cheap window" client-side, deadline-unaware  ·  severity: medium
+
+- **Symptom:** the charger-detail chart _"Next 24 hours · price & plan"_ shades a "cheap window" that
+  ignores the ready-by. With target **75% by 07:00**, it shaded the genuinely-cheapest block at **midday
+  (~11–14)** — hours the car can't use before an 07:00 deadline. It's labelled "plan" but shows no actual
+  backend plan (just a price curve + a client-side cheapest-hours guess + the ready-by marker).
+- **Evidence:** live prices min `0.674` / max `2.433` kr/kWh matched the chart's `0.67`/`2.43` (so the
+  _price_ data is correct), but the cheapest slots (11:45–14:30) are **after** the 07:00 ready-by, while the
+  backend was correctly `shouldChargeNow:false`, waiting for the cheapest pre-07:00 slots. The chart
+  contradicts what the backend will actually do.
+- **Where:** `src/ui2/src/components/charger/Timeline24h.tsx` calls `cheapWindows(prices)` from
+  `src/ui2/src/lib/mock/prices.ts` — a naive "cheapest ~35% of prices" threshold
+  (`threshold = prices.sorted[floor(len*0.35)]`) that takes **only prices** (no target, no deadline, nothing
+  from the planner). Prices are also downsampled to 24 **clock-hour** buckets in
+  `src/ui2/src/lib/live/map.ts` (`new Array<number>(24)`), so the axis is a "today 00–24" view, not the
+  titled "next 24 h".
+- **Root cause:** the frontend **recomputes charging intent** instead of deriving it from the backend. The
+  planner (`src/core/planner.ts`) already computes the deadline-constrained schedule every tick (cheapest
+  slots within `[now, readyBy]` that add the required kWh) — it just isn't exposed over the API, so the UI
+  fills the gap by guessing from prices.
+- **Fix idea:** (1) **Backend** — expose the planner's schedule for a loadpoint, e.g.
+  `GET /api/loadpoints/:name/plan` → the selected charge slots over the window + the price series +
+  ready-by. (2) **Frontend** — `Timeline24h` renders _that_ (selected slots + prices + ready-by marker);
+  delete the `cheapWindows` / `mock/prices` client-side computation, and make the window a true
+  next-24h-from-now. Principle (owner's call, 2026-07-14): **everything is derived from the backend — no
+  price/plan logic on the client.**
+- **Severity:** medium — display-only. The backend charges correctly; the chart just misleads.
+
+---
+
 ## 2026-07-08 — live session (WiFi switch, charger reboot, stale Skoda)
 
 Context: the laptop was briefly on the wrong WiFi. The Zaptec Go (LAN/OCPP) dropped and rebooted; the
