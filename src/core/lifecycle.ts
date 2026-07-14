@@ -71,6 +71,7 @@ import {
   type SessionReconcilerState,
 } from './session-reconciler.js'
 import { backoffDelayMs } from './source-reconciler.js'
+import { runPostStartup } from './post-startup.js'
 import type { ModuleHealth } from '../sdk/types.js'
 
 const PLUGINS_DIR = process.env.OSC_PLUGINS_DIR ?? './plugins'
@@ -1185,6 +1186,28 @@ async function main() {
   sweepHealth()
   const healthSweepInterval = setInterval(sweepHealth, 15_000)
 
+  // Now that the whole system is up, give each module ONE chance to reconcile its external world with
+  // reality — the in-memory view was just lost and peers may not re-announce state on a bare
+  // reconnect (e.g. a car plugged in BEFORE OSC started, while the charger still reports the connector
+  // Available). Modules stay timerless; the lifecycle owns the WHEN + the retry cadence. Fire-and-
+  // forget so "ready" isn't delayed; failures retry with capped backoff (30 s → 5 min, ≤6 attempts).
+  let postStartupTimer: ReturnType<typeof setTimeout> | undefined
+  void runPostStartup(
+    [
+      ...chargers.values(),
+      ...tariffs.values(),
+      ...meterReaders.values(),
+      ...vehicles.values(),
+      ...balancers.values(),
+    ],
+    {
+      cfg: { baseMs: 30_000, factor: 2, maxMs: 300_000 },
+      maxAttempts: 6,
+      delay: (ms) => new Promise<void>((resolve) => (postStartupTimer = setTimeout(resolve, ms))),
+      log,
+    },
+  )
+
   log.info('OpenSmartCharge ready')
 
   const shutdown = () => {
@@ -1192,6 +1215,7 @@ async function main() {
     clearInterval(controlInterval)
     clearInterval(logPruneInterval)
     clearInterval(healthSweepInterval)
+    if (postStartupTimer) clearTimeout(postStartupTimer)
     httpServer.close()
     if (ocppServer) void ocppServer.close()
     for (const b of balancers.values()) void b.stop()

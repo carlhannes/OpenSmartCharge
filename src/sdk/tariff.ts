@@ -1,4 +1,4 @@
-import type { ModuleCtx, ModuleHealth } from './types.js'
+import type { ModuleCtx, ModuleHealth, ModuleLifecycle } from './types.js'
 
 export interface TariffSlot {
   start: Date
@@ -7,7 +7,7 @@ export interface TariffSlot {
   currency: string
 }
 
-export interface Tariff {
+export interface Tariff extends ModuleLifecycle {
   readonly id: string
   start(): Promise<void>
   stop(): Promise<void>

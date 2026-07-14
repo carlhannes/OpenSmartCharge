@@ -1,4 +1,4 @@
-import type { ModuleCtx, ModuleHealth } from './types.js'
+import type { ModuleCtx, ModuleHealth, ModuleLifecycle } from './types.js'
 
 export interface ChargerStatus {
   connectorId: number
@@ -19,7 +19,7 @@ export interface ChargerStatus {
   sessionEnergyKWh?: number
 }
 
-export interface Charger {
+export interface Charger extends ModuleLifecycle {
   readonly id: string
   start(): Promise<void>
   stop(): Promise<void>

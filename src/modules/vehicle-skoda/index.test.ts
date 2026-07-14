@@ -113,6 +113,31 @@ test('refresh() maps SoC/range/state/target/power + plug + climate, and caches i
   expect(row).toMatchObject({ soc: 60, battery_capacity_kwh: 77, is_charging: 1 })
 })
 
+// postStartup() is the lifecycle's boot status-sync hook: it just runs one refresh(), so an
+// already-plugged car is detected + cached after a restart even when the charger reports Available.
+test('postStartup() runs a status-sync poll so plug state is cached', async () => {
+  const db = freshDb()
+  saveRefreshToken(db, 'enyaq', 'seed-refresh')
+  stubFetch({
+    charging: CHARGING,
+    aircon: { state: 'OFF', chargerConnectionState: 'CONNECTED' },
+    details: { specification: { battery: { capacityInKWh: 77 } } },
+  })
+  const v = makeVehicle(db)
+
+  await v.postStartup!()
+
+  // Reuses refresh(): telemetry is cached + readable without the network...
+  const data = await v.getData()
+  expect(data.pluggedIn).toBe(true)
+  expect(data.soc).toBe(60)
+  // ...and persisted, so the reconciler sees carPluggedIn on the next tick.
+  const row = db
+    .prepare('SELECT plugged_in FROM vehicle_cache WHERE vehicle_name = ?')
+    .get('enyaq') as { plugged_in: number } | undefined
+  expect(row?.plugged_in).toBe(1)
+})
+
 test('idle car: not charging, cable out, climate off → flags map to false', async () => {
   const db = freshDb()
   saveRefreshToken(db, 'enyaq', 'seed')

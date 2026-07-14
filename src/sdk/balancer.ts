@@ -1,4 +1,4 @@
-import type { ModuleCtx, ModuleHealth } from './types.js'
+import type { ModuleCtx, ModuleHealth, ModuleLifecycle } from './types.js'
 
 export type ChargeMode = 'disabled' | 'smart' | 'fast'
 
@@ -36,7 +36,7 @@ export interface BalancerOutput {
   allocations: Map<string, number>
 }
 
-export interface Balancer {
+export interface Balancer extends ModuleLifecycle {
   readonly id: string
   start(): Promise<void>
   stop(): Promise<void>

@@ -1,4 +1,4 @@
-import type { ModuleCtx, ModuleHealth } from './types.js'
+import type { ModuleCtx, ModuleHealth, ModuleLifecycle } from './types.js'
 
 export interface VehicleData {
   soc: number
@@ -18,7 +18,7 @@ export interface VehicleData {
   fetchedAt: Date
 }
 
-export interface Vehicle {
+export interface Vehicle extends ModuleLifecycle {
   readonly id: string
   /**
    * Perform ONE live fetch, update the cache, and return the fresh data. The lifecycle decides

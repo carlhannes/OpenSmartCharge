@@ -103,6 +103,15 @@ registerVehicle({
 
       refresh,
 
+      // Lifecycle post-startup hook: one status-sync poll after a (re)start so an ALREADY-plugged car
+      // is detected even when the charger reports the connector `Available` (it won't re-announce a
+      // car plugged before OSC connected). One-shot — the ongoing cadence (shouldPollVehicle) is
+      // unchanged, so a genuinely-unplugged car is polled once here and then left alone. May throw;
+      // the lifecycle retries with backoff.
+      async postStartup(): Promise<void> {
+        await refresh()
+      },
+
       async getData(): Promise<VehicleData> {
         if (!last) throw new Error(`vehicle ${cfg.name}: no data yet`)
         return last
