@@ -122,7 +122,7 @@ tariffs:
 
 **Shared fetch schedule (`elprisetjustnu` + `elering`):**
 
-- Nordpool publishes next-day prices around 13:00 CET. OSC waits until **13:15 Europe/Stockholm** before fetching tomorrow's data. On failure it retries at +30 min, then +1 h, +2 h, +4 h, … until midnight Stockholm, then retries the next day at 13:15. `health` is `degraded` between midnight and 13:15 — this is expected.
+- Nordpool publishes next-day prices around 13:00 CET. OSC waits until **13:15 Europe/Stockholm** before fetching tomorrow's data. On failure it retries with **exponential backoff — 10 min → 20 → 40, capped at hourly** — and keeps retrying (it never backs off past midnight, so a transient blip can't strand prices for a day). `health` is `degraded` from the 13:15 window until tomorrow's data lands; before 13:15, having only today's data is fine.
 - Scheduled fetches use `ctx.fetch` (0–120 s random jitter) so multiple OSC instances don't hit the API at the same millisecond.
 - The Nord Pool schedule, `tariff_slots` persistence, and health logic are shared in `src/sdk/nordpool-tariff.ts`; each provider module only supplies its HTTP fetch+parse.
 

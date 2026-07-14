@@ -18,10 +18,12 @@ import { localParts, msUntilLocalTime } from './local-time.js'
 const MARKET_TZ = 'Europe/Stockholm'
 const PUBLISH_HOUR = 13
 const PUBLISH_MINUTE = 15
-// Cap the after-publish retry backoff. A missing "tomorrow" past the publish window is a fetch
-// FAILURE (network/provider), not "not published yet" — so we keep retrying at most hourly until it
-// succeeds, instead of letting the backoff grow past midnight and stranding empty prices ~24 h.
-const MAX_RETRY_MS = 60 * 60_000
+// After-publish retry backoff. A missing "tomorrow" past the publish window is a fetch FAILURE
+// (network/provider), not "not published yet". Start SHORT — a transient blip usually clears within
+// minutes — and grow exponentially, but CAP at hourly so we keep retrying until it succeeds instead
+// of letting the backoff grow past midnight and stranding empty prices ~24 h.
+const BASE_RETRY_MS = 10 * 60_000 // first retry ~10 min
+const MAX_RETRY_MS = 60 * 60_000 // …doubling (10 → 20 → 40) to a 1 h ceiling
 
 /**
  * Thrown by a provider's `fetchSlots` when the configured zone is absent from the
@@ -139,11 +141,11 @@ export function nextDelay(
     }
   }
   // Past publish window, don't have tomorrow yet — a fetch failure, not "not published". Retry with
-  // capped exponential backoff (30 m, then 1 h, then hourly) so connectivity returning recovers
-  // within ~1 h. (Previously the backoff could grow past midnight and collapse to "next-day" —
-  // 13:15 tomorrow — stranding empty prices for ~24 h with no way to recover sooner.)
-  const n = state.consecutiveFailures
-  const raw = n === 0 ? 30 * 60_000 : Math.pow(2, n - 1) * 3600_000
+  // capped exponential backoff: 10 m → 20 m → 40 m → hourly, so a transient network blip recovers in
+  // ~10 min instead of stranding for an hour. The cap keeps it retrying rather than backing off past
+  // midnight and stranding empty prices ~24 h (which is why it never collapses to "next-day" here).
+  const attempt = Math.max(0, state.consecutiveFailures - 1) // 1st failure → 0 → BASE_RETRY_MS
+  const raw = 2 ** attempt * BASE_RETRY_MS
   return { delayMs: Math.min(raw, MAX_RETRY_MS), reason: 'retry' }
 }
 

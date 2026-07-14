@@ -92,15 +92,19 @@ test('nextDelay: next-day when tomorrow cached, wait-for-window before 13:15, re
   const s: SchedulerState = { consecutiveFailures: 0 }
   expect(nextDelay(s, true, new Date('2026-07-04T09:00:00Z')).reason).toBe('next-day')
   expect(nextDelay(s, false, new Date('2026-07-04T09:00:00Z')).reason).toBe('wait-for-window')
-  // After publish (14:00 Stockholm), no tomorrow, first failure → +30 min retry.
-  const retry = nextDelay(s, false, new Date('2026-07-04T12:00:00Z'))
-  expect(retry.reason).toBe('retry')
-  expect(retry.delayMs).toBe(30 * 60_000)
+  // After publish (14:00 Stockholm), no tomorrow → exponential backoff from 10 min, doubling.
+  const t = new Date('2026-07-04T12:00:00Z')
+  expect(nextDelay({ consecutiveFailures: 1 }, false, t)).toMatchObject({
+    reason: 'retry',
+    delayMs: 10 * 60_000, // 1st failure → 10 min
+  })
+  expect(nextDelay({ consecutiveFailures: 2 }, false, t).delayMs).toBe(20 * 60_000)
+  expect(nextDelay({ consecutiveFailures: 3 }, false, t).delayMs).toBe(40 * 60_000)
   // Backoff is CAPPED at 1 h and keeps retrying — it must NOT collapse to next-day (the ~24 h
   // strand bug). Even many failures late in the day stay on the hourly retry.
-  const backedOff = nextDelay({ consecutiveFailures: 6 }, false, new Date('2026-07-04T12:00:00Z'))
+  const backedOff = nextDelay({ consecutiveFailures: 6 }, false, t)
   expect(backedOff.reason).toBe('retry')
-  expect(backedOff.delayMs).toBe(60 * 60_000) // 2^5 h raw, clamped to the 1 h cap
+  expect(backedOff.delayMs).toBe(60 * 60_000) // 2^5·10 m raw, clamped to the 1 h cap
   const late = nextDelay({ consecutiveFailures: 6 }, false, new Date('2026-07-04T21:50:00Z'))
   expect(late.reason).toBe('retry') // was 'next-day' before the fix — no longer strands overnight
   expect(late.delayMs).toBe(60 * 60_000)
