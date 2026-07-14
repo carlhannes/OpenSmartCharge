@@ -9,7 +9,12 @@ import {
   type OverrideRow,
 } from './config-overrides.js'
 import { applyConfigToLoadpoints } from './loadpoint.js'
-import { setTimezone, setLogRetentionDays } from './settings.js'
+import {
+  setTimezone,
+  setLogRetentionDays,
+  isConfigMaterialized,
+  setConfigMaterialized,
+} from './settings.js'
 
 // Import/export serialization of the CONFIG (not runtime history/cache). The exported document is a
 // superset of osc.yaml: the config sections plus the runtime-owned settings that are still config
@@ -316,4 +321,29 @@ export function importConfig(
   }
 
   return { dryRun: false, mode: opts.mode, sections, restartRequired: true }
+}
+
+/**
+ * First-boot seed: if the DB config store is un-materialized (a fresh or cleared DB), import the
+ * osc.yaml document (replace) so the effective config = osc.yaml, then mark it materialized — after
+ * which osc.yaml is inert and the DB is the source of truth (edit via the API or a re-import). A
+ * no-op once materialized. With no osc.yaml, marks materialized without importing (configure via the
+ * API). Returns what it did, for boot logging.
+ */
+export function materializeConfigOnce(
+  db: DatabaseSync,
+  oscDoc: Record<string, unknown> | undefined,
+): { materialized: boolean; imported: boolean; sections: string[] } {
+  if (isConfigMaterialized(db)) return { materialized: false, imported: false, sections: [] }
+  let sections: string[] = []
+  if (oscDoc) {
+    // currentEffective = DEFAULTS (empty), NOT getEffectiveConfig(DEFAULTS, db): a pre-flip DB holds
+    // PARTIAL entity deltas (e.g. a charger override with maxA but no type, valid only over the
+    // osc.yaml base) that don't validate over defaults. A replace validates against defaults and uses
+    // currentEffective only to de-redact secrets — and osc.yaml carries plaintext creds — so the
+    // empty base is correct and side-steps those soon-to-be-cleared partials.
+    sections = importConfig(db, oscDoc, { mode: 'replace', currentEffective: DEFAULTS }).sections
+  }
+  setConfigMaterialized(db)
+  return { materialized: true, imported: !!oscDoc, sections }
 }

@@ -169,3 +169,22 @@ export function loadConfig(path: string): Config {
   }
   return configSchema.parse(parsed)
 }
+
+/**
+ * Read osc.yaml as a raw config DOCUMENT (parsed YAML, NO schema defaults applied) — the non-default
+ * fields the user actually wrote, for import / first-boot materialization. Returns undefined if the
+ * file is absent (a fresh install with no osc.yaml is configured via the API instead) or isn't a
+ * mapping. Unlike loadConfig, it does not validate — importConfig re-validates the merged result.
+ */
+export function readConfigDocument(path: string): Record<string, unknown> | undefined {
+  let raw: string
+  try {
+    raw = readFileSync(path, 'utf8')
+  } catch {
+    return undefined
+  }
+  const parsed = parse(raw)
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : undefined
+}

@@ -22,6 +22,16 @@ export function setSetting(db: DatabaseSync, key: string, value: string): void {
   ).run(key, value)
 }
 
+// Whether the DB config store has been seeded from osc.yaml. Unset on a fresh (or cleared) DB → the
+// lifecycle imports osc.yaml once, then sets this so the file becomes inert (edit via API / re-import).
+const MATERIALIZED_KEY = 'config.materialized'
+export function isConfigMaterialized(db: DatabaseSync): boolean {
+  return getSetting(db, MATERIALIZED_KEY) === '1'
+}
+export function setConfigMaterialized(db: DatabaseSync): void {
+  setSetting(db, MATERIALIZED_KEY, '1')
+}
+
 /** The effective SITE timezone (what the user reasons about — night window, plans, targets). */
 export function getTimezone(db: DatabaseSync): string {
   return getSetting(db, 'timezone') ?? DEFAULT_TIMEZONE

@@ -10,6 +10,7 @@ import {
   buildConfigExport,
   serializeConfig,
   importConfig,
+  materializeConfigOnce,
   REDACTED,
   type LoadpointRuntime,
 } from './config-io.js'
@@ -206,5 +207,33 @@ test('import rejects an invalid config without writing anything', () => {
       ),
     ).toThrow()
     expect(getEffectiveConfig(base, db)).toEqual(before) // validate-first → untouched
+  })
+})
+
+test('materializeConfigOnce seeds osc.yaml once, then is inert', () => {
+  withDb((db, base) => {
+    const doc = { site: { mainBreakerA: 16 }, vehicles: [{ name: 'enyaq', type: 'skoda' }] }
+    const first = materializeConfigOnce(db, doc)
+    expect(first).toMatchObject({ materialized: true, imported: true })
+    let eff = getEffectiveConfig(base, db)
+    expect(eff.site.mainBreakerA).toBe(16)
+    expect(eff.vehicles.map((v) => v.name)).toEqual(['enyaq'])
+
+    // Second boot: already materialized → no-op, even if osc.yaml changed.
+    const second = materializeConfigOnce(db, { site: { mainBreakerA: 25 } })
+    expect(second).toMatchObject({ materialized: false, imported: false })
+    eff = getEffectiveConfig(base, db)
+    expect(eff.site.mainBreakerA).toBe(16) // unchanged — osc.yaml is now inert
+  })
+})
+
+test('materializeConfigOnce with no osc.yaml marks materialized without importing', () => {
+  withDb((db, base) => {
+    expect(materializeConfigOnce(db, undefined)).toMatchObject({
+      materialized: true,
+      imported: false,
+    })
+    expect(getEffectiveConfig(base, db)).toEqual(base) // all-defaults; configure via the API
+    expect(materializeConfigOnce(db, { site: { mainBreakerA: 16 } }).materialized).toBe(false)
   })
 })

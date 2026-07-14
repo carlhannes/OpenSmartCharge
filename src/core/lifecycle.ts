@@ -8,7 +8,7 @@ import '../modules/meter-mqtt-phase/index.js'
 import '../modules/balancer-mqtt-circuit/index.js'
 import '../modules/vehicle-skoda/index.js'
 
-import { loadConfig, CONFIG_PATH, DATA_DIR } from './config.js'
+import { readConfigDocument, configSchema, CONFIG_PATH, DATA_DIR } from './config.js'
 import { openDb } from './db.js'
 import { createLogger } from './logger.js'
 import { createLogCaptureStream, patchConsole, pruneLogs } from './log-store.js'
@@ -39,6 +39,7 @@ import { recordHouseholdLoad, pruneHouseholdLoad, worstCaseLoadA } from './smart
 import { localDateKey, localHour, msUntilLocalTime } from '../sdk/local-time.js'
 import { getTimezone, seedSettings, getLogRetentionDays } from './settings.js'
 import { getEffectiveConfig } from './config-overrides.js'
+import { materializeConfigOnce } from './config-io.js'
 import { createReconciler } from './reconcile.js'
 import { listPlans, selectActivePlan, planTargetTime } from './plans.js'
 import type { Balancer, LoadpointSnapshot } from '../sdk/balancer.js'
@@ -83,9 +84,15 @@ async function main() {
   log.info('OpenSmartCharge starting')
   log.info({ dataDir: DATA_DIR }, 'database ready')
 
-  // Effective config = parsed osc.yaml (seed) + runtime DB overrides (persist-wins). The lifecycle
-  // runs on this object; the reconcile seam keeps it in sync IN PLACE on API-driven config changes.
-  const baseConfig = loadConfig(CONFIG_PATH)
+  // Config model: the DB config store (config_overrides + settings + loadpoint_state) is the source
+  // of truth; the effective config = defaults ⊕ DB. osc.yaml is an IMPORT format, materialized into
+  // the DB once on an un-materialized DB (fresh or cleared), then inert — edit via the API or a
+  // re-import (POST /api/config/import, `npm run config:apply`). The lifecycle runs on this object;
+  // the reconcile seam keeps it in sync IN PLACE on API-driven config changes. See docs/config.md.
+  const baseConfig = configSchema.parse({})
+  const seed = materializeConfigOnce(db, readConfigDocument(CONFIG_PATH))
+  if (seed.imported)
+    log.info({ sections: seed.sections }, 'config: materialized osc.yaml into DB (now import-only)')
   const config = getEffectiveConfig(baseConfig, db)
   log.info({ site: config.site.name, port: config.site.port }, 'config loaded')
 

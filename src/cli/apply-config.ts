@@ -1,52 +1,33 @@
-// CLI: declaratively apply osc.yaml's loadpoint defaults (mode + targets) into the persisted DB,
-// OVERWRITING the runtime state. At runtime the DB is the source of truth — changes made via the
-// UI/API/MQTT persist and win on restart (see loadLoadpointStates' persist-wins seeding). This
-// command is the deliberate escape hatch: run it to re-assert osc.yaml onto the DB (e.g. after
-// editing the file, or to reset runtime tweaks). Resolves the same OSC_CONFIG / OSC_DATA_DIR as
-// the server. Run via `npm run config:apply`.
-import { loadConfig, CONFIG_PATH, DATA_DIR } from '../core/config.js'
+// CLI: import osc.yaml into the DB config store (mode: replace), OVERWRITING the runtime config.
+//
+// The DB is the source of truth: effective config = defaults ⊕ DB (config_overrides + settings +
+// loadpoint_state). osc.yaml is an import format — materialized into the DB once on first boot, then
+// inert. This command re-asserts osc.yaml onto the DB: it CLEARS the existing config (overrides,
+// loadpoint mode/targets, timezone/retention) and re-imports the file — the escape hatch for editing
+// osc.yaml after first boot, or resetting runtime tweaks. History/data (transactions, meter samples,
+// tariff cache, the Škoda token) is untouched. Restart the server to apply. Run via
+// `npm run config:apply`.
+import { readConfigDocument, configSchema, CONFIG_PATH, DATA_DIR } from '../core/config.js'
 import { openDb } from '../core/db.js'
-import { configToLoadpointInits, applyConfigToLoadpoints } from '../core/loadpoint.js'
-import { applyConfigSettings, getTimezone } from '../core/settings.js'
-import { applyConfigOverrides } from '../core/config-overrides.js'
-
-interface StateRow {
-  mode: string
-  target_soc: number | null
-  target_time: string | null
-  target_kwh: number | null
-}
+import { importConfig } from '../core/config-io.js'
+import { setConfigMaterialized } from '../core/settings.js'
 
 function main(): void {
-  const prune = process.argv.includes('--prune')
-  const config = loadConfig(CONFIG_PATH)
+  const doc = readConfigDocument(CONFIG_PATH)
+  if (!doc) {
+    console.error(`No config document found at ${CONFIG_PATH} (nothing to import).`)
+    process.exit(1)
+  }
   const db = openDb(DATA_DIR)
   try {
-    const inits = configToLoadpointInits(config)
-    const stmt = db.prepare(
-      'SELECT mode, target_soc, target_time, target_kwh FROM loadpoint_state WHERE name = ?',
-    )
-    const read = (name: string): StateRow | undefined => stmt.get(name) as StateRow | undefined
-    const before = new Map(inits.map((i) => [i.name, read(i.name)]))
-
-    applyConfigSettings(db, config)
-    applyConfigToLoadpoints(db, inits)
-    // Re-assert structural config: clear overrides for entities the file defines; preserve
-    // runtime-added ones (claimed chargers / added vehicles) unless --prune.
-    const { cleared, preserved } = applyConfigOverrides(config, db, { prune })
-
-    console.log(`Applied ${CONFIG_PATH} → ${DATA_DIR}:`)
-    console.log(`  settings.timezone → ${getTimezone(db)}`)
-    console.log(`  ${inits.length} loadpoint(s):`)
-    for (const i of inits) {
-      console.log(
-        `  ${i.name}: ${JSON.stringify(before.get(i.name) ?? null)} → ${JSON.stringify(read(i.name) ?? null)}`,
-      )
-    }
-    console.log(
-      `  config overrides: cleared ${cleared.length}, preserved ${preserved.length}${prune ? ' (--prune)' : ''}`,
-    )
-    for (const o of preserved) console.log(`    preserved (runtime-added): ${o.kind}/${o.name}`)
+    // currentEffective = empty defaults: a replace validates against defaults and only uses it to
+    // de-redact secrets (osc.yaml carries plaintext), and a pre-flip DB's partial overrides wouldn't
+    // validate over defaults anyway. See materializeConfigOnce.
+    const result = importConfig(db, doc, { mode: 'replace', currentEffective: configSchema.parse({}) })
+    setConfigMaterialized(db)
+    console.log(`Imported ${CONFIG_PATH} → ${DATA_DIR} (replace, clears prior config):`)
+    console.log(`  sections: ${result.sections.join(', ') || '(none)'}`)
+    console.log(`  Restart the server to apply.`)
   } finally {
     db.close()
   }
