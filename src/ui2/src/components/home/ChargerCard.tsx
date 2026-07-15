@@ -1,6 +1,6 @@
 import { useOsc, type Charger } from "@/lib/mock/store";
 import { StatusPill } from "@/components/StatusPill";
-import { fmtKW, fmtPct } from "@/lib/format";
+import { fmtKW, fmtPct, fmtKWh } from "@/lib/format";
 import { resolveActivePlan } from "@/lib/plan";
 
 interface Props {
@@ -18,12 +18,19 @@ export function ChargerCard({ charger, onOpen }: Props) {
   );
 
   const soc = vehicle?.soc ?? 0;
-  // Backend-computed display %; null for kwh/no-car → no target arc, just the SoC ring.
-  const targetPct = plan?.resolvedSoc ?? null;
+  // Bound car: backend-resolved SoC target %. A guest has no SoC plan, so suppress the "of X%" arc/text
+  // (showing the bound car's tomorrow-plan % while a guest charges is misleading) and instead fill the
+  // ring by kWh delivered / the session's kWh target, when one is set.
+  const targetPct = vehicle ? (plan?.resolvedSoc ?? null) : null;
+  const guestFrac =
+    !vehicle && charger.guestTargetKwh
+      ? Math.min(charger.sessionKwh / charger.guestTargetKwh, 1)
+      : null;
 
   const R = 44;
   const C = 2 * Math.PI * R;
-  const socOffset = C - (Math.min(soc, targetPct ?? 100) / 100) * C;
+  const primaryFrac = vehicle ? Math.min(soc, targetPct ?? 100) / 100 : (guestFrac ?? 0);
+  const socOffset = C - primaryFrac * C;
   const targetOffset = targetPct != null ? C - (targetPct / 100) * C : C;
 
   return (
@@ -74,10 +81,10 @@ export function ChargerCard({ charger, onOpen }: Props) {
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <span className="font-display text-xl font-semibold tabular-nums">
-              {vehicle ? fmtPct(vehicle.soc) : "—"}
+              {vehicle ? fmtPct(vehicle.soc) : charger.sessionKwh.toFixed(1)}
             </span>
             <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
-              {targetPct != null ? `of ${targetPct}%` : " "}
+              {vehicle ? (targetPct != null ? `of ${targetPct}%` : " ") : "kWh charged"}
             </span>
           </div>
         </div>
@@ -87,6 +94,15 @@ export function ChargerCard({ charger, onOpen }: Props) {
         <div className="text-sm">
           <span className="text-muted-foreground">Now </span>
           <span className="font-display tabular-nums">{fmtKW(charger.currentPowerW)}</span>
+          {charger.sessionKwh > 0 && (
+            <span className="text-muted-foreground">
+              {" · "}
+              <span className="tabular-nums text-foreground">
+                {fmtKWh(charger.sessionKwh)}
+              </span>{" "}
+              charged
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {vehicle && <span>🚗 {vehicle.name}</span>}

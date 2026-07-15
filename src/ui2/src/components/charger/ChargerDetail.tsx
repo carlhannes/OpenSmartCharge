@@ -184,7 +184,10 @@ export function ChargerDetail({ charger, onClose }: Props) {
                   min={0}
                   value={charger.guestTargetKwh ?? ""}
                   onChange={(e) =>
-                    void setGuestTarget(charger.id, e.target.value ? parseFloat(e.target.value) : null)
+                    void setGuestTarget(
+                      charger.id,
+                      e.target.value ? parseFloat(e.target.value) : null,
+                    )
                   }
                   placeholder="Just charge"
                   className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring/40"
