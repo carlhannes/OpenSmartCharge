@@ -43,7 +43,7 @@ import { getTimezone, seedSettings, getLogRetentionDays } from './settings.js'
 import { getEffectiveConfig } from './config-overrides.js'
 import { materializeConfigOnce } from './config-io.js'
 import { createReconciler } from './reconcile.js'
-import { listPlans, selectActivePlan, planTargetTime } from './plans.js'
+import { listAllPlans, selectActivePlan, planTargetTime } from './plans.js'
 import type { Balancer, LoadpointSnapshot } from '../sdk/balancer.js'
 import type { Vehicle, VehicleData } from '../sdk/vehicle.js'
 import type { LoadpointState } from './loadpoint.js'
@@ -56,7 +56,6 @@ import { decideShouldCharge, forceMinSoc, forceClimate } from './smart-charging/
 import { shouldPollVehicle } from './smart-charging/vehicle-poll.js'
 import { resolveActiveVehicle, positiveClaimant } from './smart-charging/guest.js'
 import { resolveSessionComplete, SESSION_COMPLETE } from './smart-charging/session-complete.js'
-import type { EnergyRung } from './smart-charging/types.js'
 import {
   buildCircuits,
   circuitForLoadpoint,
@@ -657,6 +656,8 @@ async function main() {
     lpCfgVehicle: string | undefined,
     shouldChargeNow?: boolean,
     pricesAvailable = false,
+    targetReached = false,
+    pauseOnTarget = true,
   ): LoadpointSnapshot {
     let estimatedSocVal: number | undefined
     if (lpCfgVehicle) {
@@ -678,6 +679,8 @@ async function main() {
       maxCurrentA: state.maxCurrentA,
       pricesAvailable,
       shouldChargeNow,
+      targetReached,
+      pauseOnTarget,
     }
   }
 
@@ -718,6 +721,12 @@ async function main() {
     requiredKWh: number
     /** The car is preconditioning while plugged — never "complete" while true. */
     climateActive: boolean
+    /** The target has been reached (requiredKWh <= 0). */
+    targetReached: boolean
+    /** The active plan's "pause when target reached" toggle (default true; the Guest default is false).
+     *  When true, targetReached stops charging in ALL modes + marks the session Ready; when false the
+     *  target is planning-only (never stops). */
+    pauseOnTarget: boolean
   }
 
   // Resolve a loadpoint's charge decision + current budget through the degradation ladders.
@@ -733,13 +742,30 @@ async function main() {
     const nightWindow = sc.nightWindow
     const tz = getTimezone(db) // site timezone — all wall-clock planning this tick uses it
 
-    // A recurring plan that governs NOW takes precedence over the ad-hoc loadpoint target; with no
-    // active plan we fall back to state.target* (guest / manual one-off). Plans are read live each
-    // tick — no reload (see core/plans.ts for the resolution rule).
-    const activePlan = selectActivePlan(listPlans(db, lpCfg.name), now, tz)
+    // Resolve which vehicle is present FIRST — plan selection filters by it (plans are vehicle-scoped),
+    // and the target/SoC come from the identified car.
+    const ectx = await gatherEnergyContext(lpCfg, state)
+    const estimatedSocPct = ectx.estimatedSocPct
+    // Identity flip (guest→identified car, or a supersede): drop the SoC anchor so the newly-active
+    // car re-anchors from its own poll rather than carrying a stale reading forward.
+    if (state.activeVehicle !== ectx.activeVehicle) {
+      vehicleAnchor.delete(lpCfg.name)
+      sessionFirstReading.delete(lpCfg.name)
+    }
+    state.activeVehicle = ectx.activeVehicle // exposed on GET /api/loadpoints + emitted below
+
+    // A recurring plan that APPLIES to the active vehicle and governs NOW takes precedence over the
+    // ad-hoc loadpoint target; with none we fall back to state.target*. Plans are vehicle-scoped and
+    // read live each tick (see core/plans.ts for the resolution rule).
+    const activePlan = selectActivePlan(listAllPlans(db), now, tz, ectx.activeVehicle)
     if (activePlan)
       log.debug(
-        { loadpoint: lpCfg.name, plan: activePlan.id, readyBy: activePlan.readyBy },
+        {
+          loadpoint: lpCfg.name,
+          plan: activePlan.id,
+          readyBy: activePlan.readyBy,
+          vehicle: ectx.activeVehicle,
+        },
         'active plan governs',
       )
 
@@ -759,18 +785,8 @@ async function main() {
     const phases = balancerCfg?.phases ?? chargerCfg?.phases ?? 3
 
     // One target → one resolved { requiredKWh (charge) + resolvedSoc (display) } through the single
-    // resolver, which owns unit conversion (km→% via the car's ratio) and the degradation ladder.
-    // The target is the governing plan or the ad-hoc loadpoint target, preferring % when capacity
-    // lets us size it (else the kWh-to-add fallback) — mirroring the ladder's own rung order.
-    const ectx = await gatherEnergyContext(lpCfg, state)
-    const estimatedSocPct = ectx.estimatedSocPct
-    // Identity flip (guest→identified car, or a supersede): drop the SoC anchor so the newly-active
-    // car re-anchors from its own poll rather than carrying a stale reading forward.
-    if (state.activeVehicle !== ectx.activeVehicle) {
-      vehicleAnchor.delete(lpCfg.name)
-      sessionFirstReading.delete(lpCfg.name)
-    }
-    state.activeVehicle = ectx.activeVehicle // exposed on GET /api/loadpoints + emitted below
+    // resolver (unit conversion + the degradation ladder). The target is the governing plan or the
+    // ad-hoc loadpoint target, preferring % when capacity lets us size it (else the kWh-to-add fallback).
     let target: Target | null = null
     if (activePlan) target = { unit: activePlan.unit, value: activePlan.target }
     else if (state.targetSoc != null && (ectx.capacity != null || state.targetKWh == null))
@@ -856,6 +872,10 @@ async function main() {
       sources: { energy: energy.source, price: price.source, current: circuitBudget.source },
       requiredKWh: energy.requiredKWh,
       climateActive: ectx.climateActive ?? false,
+      targetReached: energy.requiredKWh <= 0,
+      // No plan: a real car's ad-hoc target still hard-stops (pause ON), but a GUEST's ad-hoc kWh is a
+      // planning estimate only (pause OFF) — it never stops/marks-Ready; only the car stopping does.
+      pauseOnTarget: activePlan?.pauseOnTarget ?? (ectx.activeVehicle === null ? false : true),
     }
   }
 
@@ -1056,6 +1076,8 @@ async function main() {
             r.activeVehicle ?? undefined,
             r.shouldChargeNow,
             r.pricesAvailable,
+            r.targetReached,
+            r.pauseOnTarget,
           )
           // Climate-only → cap this loadpoint's allocatable current at the IEC minimum.
           if (r.climateOnly) snap.maxCurrentA = Math.min(snap.maxCurrentA, CLIMATE_MAX_OFFER_A)
@@ -1088,6 +1110,8 @@ async function main() {
           ? Math.min(CLIMATE_MAX_OFFER_A, circuitBudget.value)
           : circuitBudget.value,
         lastCommandedA: lastCommandedA.get(r.state.name),
+        targetReached: r.targetReached,
+        pauseOnTarget: r.pauseOnTarget,
       }))
       const { amps, writes } = planCircuit(decisions, allocations, config.smartCharging.deadbandA)
       for (const [lpId, w] of writes) {
@@ -1135,7 +1159,7 @@ async function main() {
             commandedA,
             drawingA: r.state.currentA,
             requiredKWh: r.requiredKWh,
-            energySource: r.sources.energy as EnergyRung,
+            pauseOnTarget: r.pauseOnTarget,
             zeroDrawSinceMs: zeroDrawSince.get(lpId),
             now: sessionNowMs,
           },

@@ -15,6 +15,7 @@ import {
   updatePlan,
   deletePlan,
   selectActivePlan,
+  planApplies,
   type Plan,
   type DayKey,
 } from './plans.js'
@@ -55,6 +56,8 @@ function mkPlan(over: Partial<Plan>): Plan {
     target: 80,
     unit: 'pct',
     enabled: true,
+    vehicles: [],
+    pauseOnTarget: true,
     ...over,
   }
 }
@@ -65,15 +68,29 @@ test('selectActivePlan: earliest still-upcoming ready-by among today’s enabled
   const passed = mkPlan({ readyBy: '07:00' }) // already past today
   const notToday = mkPlan({ days: [OTHER], readyBy: '08:30' })
   const disabled = mkPlan({ readyBy: '08:30', enabled: false })
-  const active = selectActivePlan([later, passed, notToday, disabled, a], NOW, TZ)
+  const active = selectActivePlan([later, passed, notToday, disabled, a], NOW, TZ, null)
   expect(active?.id).toBe(a.id)
 })
 
 test('selectActivePlan returns undefined when no plan qualifies today', () => {
-  expect(selectActivePlan([], NOW, TZ)).toBeUndefined()
-  expect(selectActivePlan([mkPlan({ days: [OTHER] })], NOW, TZ)).toBeUndefined() // wrong day
-  expect(selectActivePlan([mkPlan({ readyBy: '06:00' })], NOW, TZ)).toBeUndefined() // all passed
-  expect(selectActivePlan([mkPlan({ enabled: false })], NOW, TZ)).toBeUndefined() // disabled
+  expect(selectActivePlan([], NOW, TZ, null)).toBeUndefined()
+  expect(selectActivePlan([mkPlan({ days: [OTHER] })], NOW, TZ, null)).toBeUndefined() // wrong day
+  expect(selectActivePlan([mkPlan({ readyBy: '06:00' })], NOW, TZ, null)).toBeUndefined() // all passed
+  expect(selectActivePlan([mkPlan({ enabled: false })], NOW, TZ, null)).toBeUndefined() // disabled
+})
+
+test('planApplies + selectActivePlan filter by the active vehicle', () => {
+  expect(planApplies(mkPlan({ vehicles: [] }), 'enyaq')).toBe(true) // empty = any (catch-all)
+  expect(planApplies(mkPlan({ vehicles: [] }), null)).toBe(true) // incl. guest
+  expect(planApplies(mkPlan({ vehicles: ['enyaq'] }), 'enyaq')).toBe(true)
+  expect(planApplies(mkPlan({ vehicles: ['enyaq'] }), 'opel')).toBe(false)
+  expect(planApplies(mkPlan({ vehicles: ['guest'] }), null)).toBe(true) // null active = guest
+  expect(planApplies(mkPlan({ vehicles: ['enyaq'] }), null)).toBe(false)
+  // Selection only considers plans that apply to the active vehicle.
+  const enyaqPlan = mkPlan({ readyBy: '09:00', vehicles: ['enyaq'] })
+  const guestPlan = mkPlan({ readyBy: '08:30', vehicles: ['guest'] })
+  expect(selectActivePlan([enyaqPlan, guestPlan], NOW, TZ, 'enyaq')?.id).toBe(enyaqPlan.id)
+  expect(selectActivePlan([enyaqPlan, guestPlan], NOW, TZ, null)?.id).toBe(guestPlan.id)
 })
 
 // Target conversion (pct/km/kwh → SoC%, resolveTarget) moved to smart-charging/energy.test.ts —

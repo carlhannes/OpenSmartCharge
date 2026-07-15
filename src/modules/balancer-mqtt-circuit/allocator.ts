@@ -20,8 +20,9 @@ export function allocate(input: { loadpoints: LoadpointSnapshot[]; circuitBudget
   // Who wants current this tick?
   const wanting = loadpoints.filter((lp) => {
     if (lp.mode === 'disabled') return false
-    if (lp.mode === 'smart' && lp.shouldChargeNow === false) return false
-    return true
+    if (lp.mode === 'smart') return lp.shouldChargeNow !== false // smart folds target/minSoc/climate/price
+    // fast: wants budget unless its plan's target is reached and pause-on-target is set (→ Ready)
+    return !(lp.targetReached && lp.pauseOnTarget)
   })
 
   // Zero out non-wanting loadpoints first.

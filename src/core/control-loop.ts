@@ -55,10 +55,16 @@ export function bareCircuitAmps(
   mode: ChargeMode,
   shouldChargeNow: boolean | undefined,
   budgetA: number,
+  targetReached: boolean,
+  pauseOnTarget: boolean,
 ): number {
   if (mode === 'disabled') return 0
-  if (mode === 'smart' && shouldChargeNow === false) return 0
-  return budgetA
+  // Smart already folds target/minSoc/climate/price into shouldChargeNow (minSoc/climate override the
+  // target-stop there), so honour it directly.
+  if (mode === 'smart') return shouldChargeNow === false ? 0 : budgetA
+  // Fast charges unconditionally EXCEPT when the active plan's target is reached and pause-on-target is
+  // set — then it pauses too (→ "Ready"). pause-on-target OFF (e.g. the Guest default) keeps charging.
+  return targetReached && pauseOnTarget ? 0 : budgetA
 }
 
 /** Default grace before a `fast` boost expires back to `smart` once the car is unplugged. */
@@ -146,6 +152,10 @@ export interface LpDecision {
   /** Resolved current budget, already clamped to maxA and floored (<6 ⇒ 0). */
   budgetA: number
   lastCommandedA?: number
+  /** The active plan's target is reached (requiredKWh <= 0). */
+  targetReached: boolean
+  /** The active plan's pause-on-target toggle — stops charging at target in ALL modes when true. */
+  pauseOnTarget: boolean
 }
 
 export interface CircuitPlan {
@@ -170,7 +180,7 @@ export function planCircuit(
   for (const d of decisions) {
     const a = balancerAllocations
       ? (balancerAllocations.get(d.loadpointName) ?? 0)
-      : bareCircuitAmps(d.mode, d.shouldChargeNow, d.budgetA)
+      : bareCircuitAmps(d.mode, d.shouldChargeNow, d.budgetA, d.targetReached, d.pauseOnTarget)
     amps.set(d.loadpointName, a)
   }
   const writes = new Map<string, number>()

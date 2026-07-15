@@ -31,6 +31,7 @@ import { getOcppServer } from '../modules/charger-ocpp16/index.js'
 import { isValidTimeZone } from '../sdk/local-time.js'
 import {
   listPlans,
+  listAllPlans,
   createPlan,
   updatePlan,
   deletePlan,
@@ -105,6 +106,8 @@ function toPlanDto(p: Plan, reading: EnergyReading) {
     target: p.target,
     unit: p.unit,
     enabled: p.enabled,
+    vehicles: p.vehicles,
+    pauseOnTarget: p.pauseOnTarget,
     resolvedSoc: targetToSoc({ unit: p.unit, value: p.target }, reading),
   }
 }
@@ -128,6 +131,24 @@ export function createApiRouter(deps: ApiDeps): Router {
     if (!veh) return {}
     const data = await veh.getData().catch(() => undefined)
     return { soc: data?.soc, range: data?.range, capacity: veh.getCachedCapacity() }
+  }
+
+  // Cached reading (no network) for a specific vehicle by name — used for a plan's resolvedSoc (its
+  // target vehicle), independent of any loadpoint binding.
+  const vehicleReadingFor = async (name: string | undefined): Promise<EnergyReading> => {
+    const veh = name ? deps.vehicles.get(name) : undefined
+    if (!veh) return {}
+    const data = await veh.getData().catch(() => undefined)
+    return { soc: data?.soc, range: data?.range, capacity: veh.getCachedCapacity() }
+  }
+
+  // Validate a plan's target-vehicle list: undefined → [] (catch-all); else an array whose entries are
+  // each a configured vehicle name or the 'guest' sentinel. null on any invalid entry.
+  const parsePlanVehicles = (v: unknown): string[] | null => {
+    if (v === undefined) return []
+    if (!Array.isArray(v)) return null
+    const known = new Set(['guest', ...deps.config.vehicles.map((x) => x.name)])
+    return v.every((n) => typeof n === 'string' && known.has(n)) ? (v as string[]) : null
   }
 
   // GET /api/loadpoints — each loadpoint carries availableTargetUnits (which target units its data
@@ -700,6 +721,8 @@ export function createApiRouter(deps: ApiDeps): Router {
       target?: unknown
       unit?: unknown
       enabled?: unknown
+      vehicles?: unknown
+      pauseOnTarget?: unknown
     }
     const days = parsePlanDays(b.days)
     const unit = parsePlanUnit(b.unit)
@@ -711,8 +734,26 @@ export function createApiRouter(deps: ApiDeps): Router {
       })
       return
     }
+    const vehicles = parsePlanVehicles(b.vehicles)
+    if (vehicles === null) {
+      res.status(400).json({ error: 'vehicles must be an array of configured vehicle names or "guest"' })
+      return
+    }
     const enabled = typeof b.enabled === 'boolean' ? b.enabled : true
-    const plan = createPlan(deps.db, name, { days, readyBy, target, unit, enabled })
+    // Default pause-on-target ON, except a guest-only plan (its kWh is a planning estimate).
+    const pauseOnTarget =
+      typeof b.pauseOnTarget === 'boolean'
+        ? b.pauseOnTarget
+        : !(vehicles.length === 1 && vehicles[0] === 'guest')
+    const plan = createPlan(deps.db, name, {
+      days,
+      readyBy,
+      target,
+      unit,
+      enabled,
+      vehicles,
+      pauseOnTarget,
+    })
     deps.onPlansChanged(name)
     res.status(201).json(toPlanDto(plan, await vehicleReadingForLoadpoint(name)))
   })
@@ -732,8 +773,25 @@ export function createApiRouter(deps: ApiDeps): Router {
       target?: unknown
       unit?: unknown
       enabled?: unknown
+      vehicles?: unknown
+      pauseOnTarget?: unknown
     }
     const patch: PlanPatch = {}
+    if (b.vehicles !== undefined) {
+      const vs = parsePlanVehicles(b.vehicles)
+      if (vs === null) {
+        res.status(400).json({ error: 'vehicles must be an array of configured vehicle names or "guest"' })
+        return
+      }
+      patch.vehicles = vs
+    }
+    if (b.pauseOnTarget !== undefined) {
+      if (typeof b.pauseOnTarget !== 'boolean') {
+        res.status(400).json({ error: 'pauseOnTarget must be a boolean' })
+        return
+      }
+      patch.pauseOnTarget = b.pauseOnTarget
+    }
     if (b.days !== undefined) {
       const d = parsePlanDays(b.days)
       if (!d) {
@@ -794,6 +852,17 @@ export function createApiRouter(deps: ApiDeps): Router {
     deletePlan(deps.db, id)
     deps.onPlansChanged(name)
     res.status(204).end()
+  })
+
+  // GET /api/plans — ALL plans across loadpoints (plans are vehicle-scoped; the Settings view lists
+  // every plan with its target vehicles). resolvedSoc uses each plan's first app-car target's reading.
+  router.get('/plans', async (_req: Request, res: Response) => {
+    const dtos = await Promise.all(
+      listAllPlans(deps.db).map(async (p) =>
+        toPlanDto(p, await vehicleReadingFor(p.vehicles.find((v) => v !== 'guest'))),
+      ),
+    )
+    res.json(dtos)
   })
 
   // POST /api/loadpoints/:name/mode

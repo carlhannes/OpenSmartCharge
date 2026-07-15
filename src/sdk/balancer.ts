@@ -21,6 +21,10 @@ export interface LoadpointSnapshot {
   maxCurrentA: number
   /** Set by lifecycle for smart-mode loadpoints: false = expensive slot, skip charging. Undefined = charge. */
   shouldChargeNow?: boolean
+  /** The active plan's target is reached (requiredKWh <= 0). */
+  targetReached?: boolean
+  /** The active plan's pause-on-target toggle — when true + targetReached, the loadpoint pauses (all modes). */
+  pauseOnTarget?: boolean
 }
 
 export interface BalancerInput {

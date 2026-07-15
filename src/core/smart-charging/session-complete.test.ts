@@ -13,7 +13,7 @@ const base: SessionCompleteInput = {
   commandedA: 16,
   drawingA: 0, // not drawing (the interesting case)
   requiredKWh: 5, // target NOT yet met by default
-  energySource: 'soc-capacity',
+  pauseOnTarget: true,
   zeroDrawSinceMs: undefined,
   now: 100_000,
 }
@@ -33,30 +33,19 @@ test('not connected / climatising / nothing delivered / actively drawing → nev
   ).toEqual({ complete: false, zeroDrawSinceMs: undefined })
 })
 
-test('socTargetReached: a real SoC target met → complete immediately (even when not offering current)', () => {
-  // Smart mode at target: requiredKWh 0, not offering (commandedA 0), not drawing → Ready now.
+test('target reached + pauseOnTarget → complete immediately (even when not offering current)', () => {
+  // At target, not offering (commandedA 0), not drawing, pause-on-target ON → Ready now.
   expect(
-    resolveSessionComplete(
-      { ...base, requiredKWh: 0, commandedA: 0, energySource: 'soc-capacity' },
-      cfg,
-    ).complete,
+    resolveSessionComplete({ ...base, requiredKWh: 0, commandedA: 0, pauseOnTarget: true }, cfg)
+      .complete,
   ).toBe(true)
 })
 
-test('guest kWh estimate is NEVER a completion trigger (target-kwh rung)', () => {
-  // requiredKWh 0 on the kWh rung → planning estimate, not a stop. Only the car stopping completes it.
+test('target reached + pauseOnTarget OFF (e.g. Guest default) is NEVER a completion trigger', () => {
+  // Planning-only: reaching the target does not complete; only the car stopping itself does.
   expect(
-    resolveSessionComplete(
-      { ...base, requiredKWh: 0, commandedA: 0, energySource: 'target-kwh' },
-      cfg,
-    ).complete,
-  ).toBe(false)
-  // duty-cycle rung likewise never completes on requiredKWh
-  expect(
-    resolveSessionComplete(
-      { ...base, requiredKWh: 0, commandedA: 0, energySource: 'duty-cycle' },
-      cfg,
-    ).complete,
+    resolveSessionComplete({ ...base, requiredKWh: 0, commandedA: 0, pauseOnTarget: false }, cfg)
+      .complete,
   ).toBe(false)
 })
 

@@ -15,12 +15,19 @@ export const DAY_KEYS: readonly DayKey[] = ['mon', 'tue', 'wed', 'thu', 'fri', '
 
 export interface Plan {
   id: number
+  /** Loadpoint the plan was created at (vestigial: plans are vehicle-scoped — resolution filters by
+   *  `vehicles`, not this). Kept for back-compat/display. */
   loadpointName: string
   days: DayKey[]
   readyBy: string // "HH:MM" (site-local)
   target: number
   unit: PlanUnit
   enabled: boolean
+  /** Vehicles this plan applies to (names + the sentinel 'guest'). Empty = any active vehicle (catch-all). */
+  vehicles: string[]
+  /** Reaching the target pauses charging (→ "Ready"). Default true; the Guest default plan is false
+   *  (the estimate is planning-only, never a hard stop). */
+  pauseOnTarget: boolean
 }
 
 export interface PlanInput {
@@ -29,6 +36,8 @@ export interface PlanInput {
   target: number
   unit: PlanUnit
   enabled?: boolean
+  vehicles?: string[]
+  pauseOnTarget?: boolean
 }
 
 export type PlanPatch = Partial<PlanInput>
@@ -56,6 +65,19 @@ interface PlanRow {
   target_value: number
   target_unit: string
   enabled: number
+  target_vehicles: string | null
+  pause_on_target: number | null
+}
+
+/** Parse the JSON `target_vehicles` column → string[]; NULL / bad JSON → [] (catch-all). */
+function parseVehicles(raw: string | null): string[] {
+  if (!raw) return []
+  try {
+    const a: unknown = JSON.parse(raw)
+    return Array.isArray(a) ? a.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
 }
 
 function rowToPlan(r: PlanRow): Plan {
@@ -67,6 +89,9 @@ function rowToPlan(r: PlanRow): Plan {
     target: r.target_value,
     unit: r.target_unit as PlanUnit,
     enabled: r.enabled === 1,
+    vehicles: parseVehicles(r.target_vehicles),
+    // Existing rows (pre-migration) read NULL → default ON.
+    pauseOnTarget: r.pause_on_target == null ? true : r.pause_on_target === 1,
   }
 }
 
@@ -82,11 +107,21 @@ export function listPlans(db: DatabaseSync, loadpointName: string): Plan[] {
   return rows.map(rowToPlan)
 }
 
+/** All plans, across every loadpoint — plans are vehicle-scoped, so resolution + the global (Settings)
+ *  view read this and filter by the active vehicle (see selectActivePlan / planApplies). */
+export function listAllPlans(db: DatabaseSync): Plan[] {
+  const rows = db
+    .prepare('SELECT * FROM charge_plans ORDER BY ready_by, id')
+    .all() as unknown as PlanRow[]
+  return rows.map(rowToPlan)
+}
+
 export function createPlan(db: DatabaseSync, loadpointName: string, input: PlanInput): Plan {
   const res = db
     .prepare(
-      `INSERT INTO charge_plans (loadpoint_name, days_mask, ready_by, target_value, target_unit, enabled)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO charge_plans
+         (loadpoint_name, days_mask, ready_by, target_value, target_unit, enabled, target_vehicles, pause_on_target)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       loadpointName,
@@ -95,6 +130,8 @@ export function createPlan(db: DatabaseSync, loadpointName: string, input: PlanI
       input.target,
       input.unit,
       input.enabled === false ? 0 : 1,
+      JSON.stringify(input.vehicles ?? []),
+      input.pauseOnTarget === false ? 0 : 1,
     )
   return getPlan(db, Number(res.lastInsertRowid))!
 }
@@ -104,12 +141,14 @@ export function createPlan(db: DatabaseSync, loadpointName: string, input: PlanI
 export function updatePlan(db: DatabaseSync, id: number, patch: PlanPatch): Plan | undefined {
   db.prepare(
     `UPDATE charge_plans SET
-       days_mask    = COALESCE(?, days_mask),
-       ready_by     = COALESCE(?, ready_by),
-       target_value = COALESCE(?, target_value),
-       target_unit  = COALESCE(?, target_unit),
-       enabled      = COALESCE(?, enabled),
-       updated_at   = datetime('now')
+       days_mask       = COALESCE(?, days_mask),
+       ready_by        = COALESCE(?, ready_by),
+       target_value    = COALESCE(?, target_value),
+       target_unit     = COALESCE(?, target_unit),
+       enabled         = COALESCE(?, enabled),
+       target_vehicles = COALESCE(?, target_vehicles),
+       pause_on_target = COALESCE(?, pause_on_target),
+       updated_at      = datetime('now')
      WHERE id = ?`,
   ).run(
     patch.days ? daysToMask(patch.days) : null,
@@ -117,6 +156,8 @@ export function updatePlan(db: DatabaseSync, id: number, patch: PlanPatch): Plan
     patch.target ?? null,
     patch.unit ?? null,
     patch.enabled === undefined ? null : patch.enabled ? 1 : 0,
+    patch.vehicles === undefined ? null : JSON.stringify(patch.vehicles),
+    patch.pauseOnTarget === undefined ? null : patch.pauseOnTarget ? 1 : 0,
     id,
   )
   return getPlan(db, id)
@@ -133,18 +174,33 @@ function readyByMinutes(hhmm: string): number {
   return h * 60 + m
 }
 
+/** Does this plan apply to the loadpoint's currently-active vehicle? Empty target set = any car
+ *  (catch-all); a null active vehicle (guest) matches the 'guest' sentinel. */
+export function planApplies(plan: Plan, activeVehicle: string | null): boolean {
+  return plan.vehicles.length === 0 || plan.vehicles.includes(activeVehicle ?? 'guest')
+}
+
 /**
- * The governing plan for `now`: among ENABLED plans whose `days` include today (site-local) and
- * whose `readyBy` is still later today, the earliest `readyBy` wins. Returns undefined when none
- * qualifies (a day-mask excluding today, all today's ready-bys passed, or no plans) — the caller
- * then falls back to the ad-hoc loadpoint target.
+ * The governing plan for `now` given the active vehicle: among ENABLED plans that APPLY to the active
+ * vehicle, whose `days` include today (site-local), and whose `readyBy` is still later today, the
+ * earliest `readyBy` wins. Returns undefined when none qualifies — the caller then falls back to the
+ * ad-hoc loadpoint target.
  */
-export function selectActivePlan(plans: Plan[], now: Date, tz: string): Plan | undefined {
+export function selectActivePlan(
+  plans: Plan[],
+  now: Date,
+  tz: string,
+  activeVehicle: string | null,
+): Plan | undefined {
   const { weekday, hour, minute } = localParts(now, tz)
   const nowMin = hour * 60 + minute
   const todayKey = DAY_KEYS[weekday]
   const candidates = plans.filter(
-    (p) => p.enabled && p.days.includes(todayKey) && readyByMinutes(p.readyBy) > nowMin,
+    (p) =>
+      p.enabled &&
+      planApplies(p, activeVehicle) &&
+      p.days.includes(todayKey) &&
+      readyByMinutes(p.readyBy) > nowMin,
   )
   if (candidates.length === 0) return undefined
   return candidates.reduce((best, p) =>

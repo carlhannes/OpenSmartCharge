@@ -106,6 +106,8 @@ function runMigrations(db: DatabaseSync): void {
       target_value   REAL NOT NULL,
       target_unit    TEXT NOT NULL,
       enabled        INTEGER NOT NULL DEFAULT 1,
+      target_vehicles TEXT,
+      pause_on_target INTEGER NOT NULL DEFAULT 1,
       updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_charge_plans_lp ON charge_plans (loadpoint_name);
@@ -145,8 +147,13 @@ function runMigrations(db: DatabaseSync): void {
   addColumnIfMissing(db, 'transactions', 'meter_start', 'REAL')
   addColumnIfMissing(db, 'loadpoint_state', 'target_kwh', 'REAL')
   addColumnIfMissing(db, 'loadpoint_state', 'min_soc', 'REAL')
-  // Per-session guest override ('guest'|'vehicle'; NULL = auto-detect). Runtime-only; reset on unplug.
+  // Per-session vehicle override ('guest' | a vehicle name; NULL = auto-detect). Sticky per session.
   addColumnIfMissing(db, 'loadpoint_state', 'guest_override', 'TEXT')
+  // Vehicle-scoped plans: which vehicles a plan targets (JSON array; NULL/'[]' = any), and whether
+  // reaching its target pauses charging (default ON; the Guest default plan is OFF). Existing rows get
+  // NULL → treated as catch-all + pause-ON in rowToPlan.
+  addColumnIfMissing(db, 'charge_plans', 'target_vehicles', 'TEXT')
+  addColumnIfMissing(db, 'charge_plans', 'pause_on_target', 'INTEGER')
   // Persist the car's own target/plug/climate so the SessionReconciler's carAtTarget + plug guards
   // aren't blind for a poll after a restart (they were undefined until the first live refresh).
   addColumnIfMissing(db, 'vehicle_cache', 'target_soc', 'REAL')

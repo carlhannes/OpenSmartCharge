@@ -121,18 +121,27 @@ test('softStartLimit: resume from ~0 commands half the target (≥6A); then full
   expect(softStartLimit(16, 16)).toBe(16)
 })
 
-test('bareCircuitAmps: disabled and smart-not-now → 0; smart-now/fast → the budget', () => {
-  expect(bareCircuitAmps('disabled', undefined, 10)).toBe(0)
-  expect(bareCircuitAmps('smart', false, 10)).toBe(0)
-  expect(bareCircuitAmps('smart', true, 10)).toBe(10)
-  expect(bareCircuitAmps('fast', undefined, 10)).toBe(10)
+test('bareCircuitAmps: disabled/smart-not-now → 0; smart-now/fast → budget; fast pauses at a reached target', () => {
+  expect(bareCircuitAmps('disabled', undefined, 10, false, true)).toBe(0)
+  expect(bareCircuitAmps('smart', false, 10, false, true)).toBe(0)
+  expect(bareCircuitAmps('smart', true, 10, false, true)).toBe(10)
+  expect(bareCircuitAmps('fast', undefined, 10, false, true)).toBe(10)
+  // Fast pauses when the plan's target is reached AND pause-on-target is set; keeps going if pause-off.
+  expect(bareCircuitAmps('fast', undefined, 10, true, true)).toBe(0)
+  expect(bareCircuitAmps('fast', undefined, 10, true, false)).toBe(10)
+})
+
+const D = (over: Partial<LpDecision> & Pick<LpDecision, 'loadpointName' | 'mode' | 'budgetA'>): LpDecision => ({
+  targetReached: false,
+  pauseOnTarget: true,
+  ...over,
 })
 
 test('planCircuit (bare): amps from bareCircuitAmps; never exceeds the resolved budget', () => {
   const decisions: LpDecision[] = [
-    { loadpointName: 'a', mode: 'smart', shouldChargeNow: true, budgetA: 8 },
-    { loadpointName: 'b', mode: 'smart', shouldChargeNow: false, budgetA: 8, lastCommandedA: 0 },
-    { loadpointName: 'c', mode: 'disabled', budgetA: 16, lastCommandedA: 10 },
+    D({ loadpointName: 'a', mode: 'smart', shouldChargeNow: true, budgetA: 8 }),
+    D({ loadpointName: 'b', mode: 'smart', shouldChargeNow: false, budgetA: 8, lastCommandedA: 0 }),
+    D({ loadpointName: 'c', mode: 'disabled', budgetA: 16, lastCommandedA: 10 }),
   ]
   const { amps, writes } = planCircuit(decisions, null, 1)
   expect(amps.get('a')).toBe(8)
@@ -146,8 +155,8 @@ test('planCircuit (bare): amps from bareCircuitAmps; never exceeds the resolved 
 
 test('planCircuit (balancer): uses coordinated allocations; deadband still applies', () => {
   const decisions: LpDecision[] = [
-    { loadpointName: 'a', mode: 'smart', shouldChargeNow: true, budgetA: 0, lastCommandedA: 6 },
-    { loadpointName: 'b', mode: 'fast', budgetA: 0, lastCommandedA: 10 },
+    D({ loadpointName: 'a', mode: 'smart', shouldChargeNow: true, budgetA: 0, lastCommandedA: 6 }),
+    D({ loadpointName: 'b', mode: 'fast', budgetA: 0, lastCommandedA: 10 }),
   ]
   const alloc = new Map([
     ['a', 6],
@@ -162,7 +171,7 @@ test('planCircuit (balancer): uses coordinated allocations; deadband still appli
 
 test('planCircuit deadband suppresses a sub-1A change', () => {
   const decisions: LpDecision[] = [
-    { loadpointName: 'a', mode: 'fast', budgetA: 10.4, lastCommandedA: 10 },
+    D({ loadpointName: 'a', mode: 'fast', budgetA: 10.4, lastCommandedA: 10 }),
   ]
   expect(planCircuit(decisions, null, 1).writes.has('a')).toBe(false)
 })

@@ -1,4 +1,3 @@
-import type { EnergyRung } from './types.js'
 
 // Pure decision: has the current plug-in session COMPLETED? A session is "done" when the car has
 // stopped taking charge for a real reason — a genuine target was reached, or the car itself refuses
@@ -25,10 +24,10 @@ export interface SessionCompleteInput {
   drawingA: number
   /** kWh still needed for the resolved target (0 = target met). */
   requiredKWh: number
-  /** Which rung the energy target resolved on. Only a REAL SoC target ('soc-capacity') completes on
-   *  `requiredKWh<=0`; a 'target-kwh' figure (especially a guest's) is a planning estimate, never a
-   *  stop — the guest session completes only when the car itself refuses charge. */
-  energySource: EnergyRung
+  /** The active plan's "pause when target reached" toggle. When true, reaching the target completes the
+   *  session (any unit); when false (e.g. the Guest default) the target is planning-only and the session
+   *  completes only when the car itself refuses charge (carStoppedItself). */
+  pauseOnTarget: boolean
   /** ms epoch when the car first went ~0 A while we were offering current, threaded across ticks;
    *  undefined resets the settle timer. */
   zeroDrawSinceMs?: number
@@ -76,13 +75,14 @@ export function resolveSessionComplete(
     return { complete: false, zeroDrawSinceMs: undefined }
   }
 
-  // A real SoC target met (NOT a kWh estimate) → done immediately, whatever we're commanding.
-  const socTargetReached = i.requiredKWh <= 0 && i.energySource === 'soc-capacity'
+  // Target reached AND the plan pauses on target → done immediately (any unit), whatever we command.
+  // A pause-off plan (e.g. the Guest default) never completes on the target — only carStoppedItself.
+  const targetComplete = i.requiredKWh <= 0 && i.pauseOnTarget
 
   // Sustained refusal: we're offering current but the car draws ~0. Anchor the window on the first
   // such tick (drawing is already excluded above); clear it when we stop offering.
   const zeroDrawSinceMs = i.commandedA > 0 ? (i.zeroDrawSinceMs ?? i.now) : undefined
   const carStoppedItself = zeroDrawSinceMs !== undefined && i.now - zeroDrawSinceMs >= cfg.settleMs
 
-  return { complete: socTargetReached || carStoppedItself, zeroDrawSinceMs }
+  return { complete: targetComplete || carStoppedItself, zeroDrawSinceMs }
 }
