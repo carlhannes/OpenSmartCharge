@@ -5,6 +5,27 @@ Each entry: **Symptom** (what was seen) · **Evidence** · **Where** · **Root c
 
 ---
 
+## 2026-07-15 — Logs/times shown in UTC, not the server timezone
+
+### 1. Log timestamps rendered in UTC instead of Europe/Stockholm  ·  severity: low (UX, owner-flagged)
+
+- **Symptom:** log times are shown in UTC on human-facing surfaces, not the server's configured timezone
+  (Europe/Stockholm). Owner directive: logs must **always** read in the server tz, **never** UTC.
+- **Where:** (a) `src/core/log-store.ts` `exportLogsText` writes the raw ISO string `e.time`
+  (`2026-07-15T12:19:38.514Z …`) → the exported `.log` is entirely UTC. (b) the ui2 viewer
+  `src/ui2/src/routes/settings.logs.tsx` (`fmtClock(new Date(e.time))` + `new Date(e.time).toLocaleString()`,
+  via `src/ui2/src/lib/logs.ts`) formats with the **browser's** timezone — correct only by accident when the
+  browser is in Stockholm, not pinned to the server tz.
+- **Root cause:** storage is UTC ISO in the `logs.time` column (correct: sortable, DST-safe, retention prunes
+  via a string `WHERE time < cutoff`), but nothing converts to the server tz at display time.
+- **Fix idea:** convert to `Europe/Stockholm` at every display surface — the export formatter, the ui2 viewer
+  (pin the formatter to the server tz, already known via `settings.timezone`), and agent/chat reporting. **Keep
+  storage UTC** (convert only for display): storing local strings would reintroduce the DST fall-back hour as a
+  duplicated/ambiguous timestamp and break the string sort + retention pruning.
+- **Severity:** low — display-only; charging + stored data unaffected.
+
+---
+
 ## 2026-07-14 — UI derives the charge "plan" on the frontend
 
 ### 1. Charger chart computes the "cheap window" client-side, deadline-unaware  ·  severity: medium
