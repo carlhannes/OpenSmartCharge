@@ -6,6 +6,9 @@ export function openDb(dataDir: string): DatabaseSync {
   mkdirSync(dataDir, { recursive: true })
   const db = new DatabaseSync(join(dataDir, 'osc.db'))
   db.exec('PRAGMA journal_mode = WAL')
+  // Wait up to 5s on a locked DB rather than throwing SQLITE_BUSY immediately — hardens both normal
+  // writes and the shutdown `wal_checkpoint(TRUNCATE)` against a transient checkpoint/write overlap.
+  db.exec('PRAGMA busy_timeout = 5000')
   runMigrations(db)
   return db
 }

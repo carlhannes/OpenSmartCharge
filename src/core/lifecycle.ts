@@ -12,6 +12,7 @@ import '../modules/vehicle-manual/index.js'
 import { readConfigDocument, configSchema, CONFIG_PATH, DATA_DIR } from './config.js'
 import { openDb } from './db.js'
 import { createLogger } from './logger.js'
+import { createSignalShutdown } from './shutdown.js'
 import { createLogCaptureStream, patchConsole, pruneLogs } from './log-store.js'
 import { loadPlugins } from './plugin-loader.js'
 import {
@@ -1300,8 +1301,9 @@ async function main() {
   }
 
   // MQTT bridge (optional)
+  let mqttBridge: { stop: () => Promise<void> } | undefined
   if (config.mqttBridge) {
-    startMqttBridge(
+    mqttBridge = startMqttBridge(
       config.mqttBridge,
       {
         events,
@@ -1374,24 +1376,30 @@ async function main() {
 
   log.info('OpenSmartCharge ready')
 
-  const shutdown = () => {
-    log.info('shutting down gracefully')
-    clearInterval(controlInterval)
-    clearInterval(logPruneInterval)
-    clearInterval(healthSweepInterval)
-    if (postStartupTimer) clearTimeout(postStartupTimer)
-    httpServer.close()
-    if (ocppServer) void ocppServer.close()
-    for (const b of balancers.values()) void b.stop()
-    for (const v of vehicles.values()) void v.stop()
-    for (const t of tariffs.values()) void t.stop()
-    for (const r of meterReaders.values()) void r.stop()
-    db.close()
-    process.exit(0)
-  }
+  // Graceful shutdown: idempotent, watchdog-guarded drain + WAL checkpoint (see createSignalShutdown).
+  // The watchdog GUARANTEES the process exits within SHUTDOWN_TIMEOUT_MS even if a teardown step hangs —
+  // so a restart never needs a SIGKILL. This only fires if the signal actually reaches this process:
+  // prod runs the compiled single process (`node dist/core/lifecycle.js`), not `tsx …` (which spawns a
+  // child the signal wouldn't reach).
+  const shutdown = createSignalShutdown(
+    {
+      timers: [controlInterval, logPruneInterval, healthSweepInterval, postStartupTimer],
+      httpServer,
+      ocppServer,
+      mqttBridge,
+      modules: [
+        ...balancers.values(),
+        ...vehicles.values(),
+        ...tariffs.values(),
+        ...meterReaders.values(),
+      ],
+      db,
+    },
+    log,
+  )
 
-  process.once('SIGINT', shutdown)
-  process.once('SIGTERM', shutdown)
+  process.once('SIGINT', () => void shutdown('SIGINT'))
+  process.once('SIGTERM', () => void shutdown('SIGTERM'))
 }
 
 // Parse "HH:MM" into the next occurrence of that time in the SITE-local wall-clock (today or

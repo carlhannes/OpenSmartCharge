@@ -28,7 +28,11 @@ export interface MqttBridgeDeps {
   onTargetChange(name: string, soc?: number, time?: string, kwh?: number): Promise<void>
 }
 
-export function startMqttBridge(config: MqttBridgeConfig, deps: MqttBridgeDeps, log: Logger): void {
+export function startMqttBridge(
+  config: MqttBridgeConfig,
+  deps: MqttBridgeDeps,
+  log: Logger,
+): { stop: () => Promise<void> } {
   const client = mqtt.connect({
     host: config.broker.host,
     port: config.broker.port,
@@ -39,6 +43,10 @@ export function startMqttBridge(config: MqttBridgeConfig, deps: MqttBridgeDeps, 
   })
 
   const prefix = config.topicPrefix
+
+  // Latest hourly-tariff schedule; the connect handler re-creates it on every (re)connect, so we clear
+  // the prior one (avoids a timer leak across reconnects) and expose it to stop() for a clean teardown.
+  let tariffSchedule: { clear: () => void } | undefined
 
   client.on('connect', () => {
     log.info({ host: config.broker.host, port: config.broker.port }, 'MQTT bridge connected')
@@ -79,7 +87,8 @@ export function startMqttBridge(config: MqttBridgeConfig, deps: MqttBridgeDeps, 
 
     // Publish current slot prices for all configured tariffs
     void publishTariffNow(client, prefix, deps.tariffs)
-    scheduleHourlyTariffPublish(client, prefix, deps.tariffs)
+    tariffSchedule?.clear() // a reconnect re-runs this handler — drop the previous schedule first
+    tariffSchedule = scheduleHourlyTariffPublish(client, prefix, deps.tariffs)
   })
 
   client.on('error', (err) => {
@@ -177,6 +186,17 @@ export function startMqttBridge(config: MqttBridgeConfig, deps: MqttBridgeDeps, 
     if (state) publishState(client, prefix, state)
     else clearState(client, prefix, p.name)
   })
+
+  // Teardown for graceful shutdown: stop the hourly timers + close the MQTT connection cleanly (sends a
+  // DISCONNECT). Event listeners aren't removed — the process exits right after, and publishing on an
+  // ended client is a harmless no-op.
+  return {
+    stop: () =>
+      new Promise<void>((resolve) => {
+        tariffSchedule?.clear()
+        client.end(false, {}, () => resolve())
+      }),
+  }
 }
 
 function publishState(client: mqtt.MqttClient, prefix: string, state: LoadpointState): void {
@@ -224,11 +244,18 @@ function scheduleHourlyTariffPublish(
   client: mqtt.MqttClient,
   prefix: string,
   tariffs: Map<string, Tariff>,
-): void {
+): { clear: () => void } {
   // Re-publish at the top of each hour as the "now" slot advances
   const msUntilNextHour = 3600_000 - (Date.now() % 3600_000)
-  setTimeout(() => {
+  let interval: ReturnType<typeof setInterval> | undefined
+  const timeout = setTimeout(() => {
     void publishTariffNow(client, prefix, tariffs)
-    setInterval(() => void publishTariffNow(client, prefix, tariffs), 3600_000)
+    interval = setInterval(() => void publishTariffNow(client, prefix, tariffs), 3600_000)
   }, msUntilNextHour)
+  return {
+    clear: () => {
+      clearTimeout(timeout)
+      if (interval) clearInterval(interval)
+    },
+  }
 }

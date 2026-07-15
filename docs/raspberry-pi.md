@@ -70,6 +70,56 @@ NTP=192.168.1.1   # your router's IP
 
 Then restart: `sudo systemctl restart systemd-timesyncd`.
 
+## Running OSC as a systemd service
+
+The Pi is a good fit for a LAN deployment. Build once, then run the **compiled** entry point as a single
+process — `node` receives `SIGTERM` directly, so the graceful shutdown handler runs on every
+`systemctl stop`/`restart`: it stops the control loop, closes the OCPP/HTTP/MQTT connections, and
+**checkpoints the SQLite WAL** before exiting, with a watchdog that forces exit within ~8 s if any teardown
+step stalls (so a restart never hangs).
+
+```bash
+cd ~/OpenSmartCharge
+npm ci
+npm run build            # produces dist/ (tsc + vite build)
+```
+
+`/etc/systemd/system/osc.service`:
+
+```ini
+[Unit]
+Description=OpenSmartCharge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/OpenSmartCharge
+ExecStart=/usr/bin/node dist/core/lifecycle.js
+Restart=on-failure
+# Give the graceful handler room to drain + checkpoint the WAL. Its own watchdog exits at ~8 s;
+# keep this comfortably above that so systemd never SIGKILLs mid-checkpoint.
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now osc
+journalctl -u osc -f          # watch logs; on stop you should see "shutdown complete"
+```
+
+> Run the **compiled** `dist/` build in production, not `tsx src/…`: `tsx` spawns a child process that the
+> signal may not reach, so `systemctl stop` would hang until the kill timeout. `WorkingDirectory` must be
+> the repo root so the `data/osc.db` path resolves.
+
 ## Docker notes
 
 The OSC container inherits the host clock — no NTP configuration is needed inside Docker. Fix the Pi host clock and all containers get it automatically.
+
+The shipped image already runs the compiled single process (`node dist/core/lifecycle.js`, PID 1), so
+`docker stop` delivers `SIGTERM` straight to the handler. Keep the stop grace above the ~8 s watchdog
+(Docker's default is 10 s; raise with `stop_grace_period` if you tune the watchdog up).
