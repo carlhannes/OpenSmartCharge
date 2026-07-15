@@ -24,6 +24,21 @@ Each entry: **Symptom** (what was seen) · **Evidence** · **Where** · **Root c
   duplicated/ambiguous timestamp and break the string sort + retention pruning.
 - **Severity:** low — display-only; charging + stored data unaffected.
 
+### 2. Confirm SoC with a one-shot poll when the estimate reaches target (don't wait for the cadence)  ·  severity: low (enhancement)
+
+- **Symptom:** when the backend's SoC *estimate* (anchor + kWh × efficiency ÷ capacity) reaches the plan
+  target, it pauses charging + marks Ready immediately — but the car's REAL SoC isn't re-polled until the
+  next cadence poll (~15 min drawing / ~10 min idle-day), so the displayed % + the final confirmation can
+  lag minutes (owner saw ~73% / "still charging" for ~1 min before a poll caught it up to 75% + paused).
+- **Where:** `src/core/smart-charging/vehicle-poll.ts` `shouldPollVehicle` warrants only on connect + the
+  drawing/idle cadence + failure-backoff — no "estimate crossed target" warrant. `maybePollVehicles`
+  (`src/core/lifecycle.ts`) drives it.
+- **Fix idea:** a ONE-SHOT confirmation poll when the estimate first crosses the target this session
+  (debounced, reset on unplug — same demand-driven pattern as the connect poll). Bonus: self-corrects an
+  optimistic estimate (real SoC below target → charging resumes) instead of falsely finishing early, and
+  refreshes the displayed % promptly.
+- **Severity:** low — behaviour is correct; this only tightens the confirm/display latency.
+
 ---
 
 ## 2026-07-14 — UI derives the charge "plan" on the frontend
