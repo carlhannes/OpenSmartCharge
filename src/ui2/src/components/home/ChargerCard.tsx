@@ -15,6 +15,7 @@ export function ChargerCard({ charger, onOpen }: Props) {
   const plan = resolveActivePlan(
     plans.filter((p) => p.chargerId === charger.id),
     timezone,
+    charger.activeVehicleId,
   );
 
   const soc = vehicle?.soc ?? 0;

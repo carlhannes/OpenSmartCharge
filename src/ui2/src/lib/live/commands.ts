@@ -55,12 +55,16 @@ export async function viewComposite(chargerId: string): Promise<string> {
 }
 
 // The editable subset of a Plan (never touches id/chargerId) — maps 1:1 onto PlanDto fields.
-type PlanPatch = Partial<Pick<Plan, "days" | "readyBy" | "target" | "unit" | "enabled">>;
+type PlanPatch = Partial<
+  Pick<Plan, "days" | "readyBy" | "target" | "unit" | "enabled" | "vehicles" | "pauseOnTarget">
+>;
 
-/** Add a plan: optimistic local (temp id); POST when live. The `loadpoint.plans` SSE re-fetch
- *  then replaces the temp row with the authoritative one (real id) — self-healing. */
-export async function addPlan(chargerId: string): Promise<void> {
+/** Add a plan: optimistic local (temp id); POST when live. `vehicles` attaches it to a target set
+ *  (e.g. the charger's active car). The `loadpoint.plans` SSE re-fetch replaces the temp row with the
+ *  authoritative one (real id) — self-healing. */
+export async function addPlan(chargerId: string, vehicles: string[] = []): Promise<void> {
   const p = useOsc.getState().addPlan(chargerId);
+  if (vehicles.length) useOsc.getState().updatePlan(p.id, { vehicles });
   if (isLive()) {
     await api.createPlan(chargerId, {
       days: p.days,
@@ -68,6 +72,8 @@ export async function addPlan(chargerId: string): Promise<void> {
       target: p.target,
       unit: p.unit,
       enabled: p.enabled,
+      vehicles,
+      pauseOnTarget: p.pauseOnTarget,
     });
   }
 }
@@ -90,12 +96,49 @@ export async function setMinSoc(chargerId: string, pct: number): Promise<void> {
   if (isLive()) await api.setTarget(chargerId, { minSoc: pct });
 }
 
-/** Guest / active-vehicle override: optimistic store set; POST /vehicle when live (null = Guest, or
- *  the bound vehicle's id = force it). The `loadpoint.activeVehicle` SSE reconciles to the backend's
- *  resolved value. */
-export async function setActiveVehicle(chargerId: string, vehicleId: string | null): Promise<void> {
-  useOsc.getState().setActiveVehicle(chargerId, vehicleId);
-  if (isLive()) await api.setLoadpointVehicle(chargerId, vehicleId);
+/** Sticky active-vehicle override: null = Auto (identify decides), 'guest' = force Guest, or a vehicle
+ *  id = force it. Optimistically sets the override (drives the picker highlight) + a resolved-display
+ *  guess; the `loadpoint.activeVehicle` SSE reconciles the resolved value. */
+export async function setActiveVehicle(chargerId: string, override: string | null): Promise<void> {
+  const resolved = override === "guest" ? null : override; // Auto/Guest → guest-ish display until SSE
+  useOsc
+    .getState()
+    .patchCharger(chargerId, { vehicleOverride: override, activeVehicleId: resolved });
+  if (isLive()) await api.setLoadpointVehicle(chargerId, override);
+}
+
+/** Add a vehicle. Live: POST /api/vehicles (the `config.changed` SSE → rehydrateSite adds it to the
+ *  store). Demo: insert a store Vehicle directly. `manual` = no API (kWh-only, no telemetry). */
+export async function addVehicle(body: {
+  name: string;
+  type: "skoda" | "manual";
+  username?: string;
+  password?: string;
+  vin?: string;
+}): Promise<void> {
+  if (isLive()) {
+    await api.addVehicle(body);
+    return;
+  }
+  useOsc.getState().addVehicle({
+    name: body.name,
+    brand: body.type === "skoda" ? "Škoda" : "",
+    soc: 0,
+    rangeKm: 0,
+    batteryKwh: 0,
+    connected: false,
+    targetUnits: body.type === "manual" ? ["kwh"] : ["pct", "km", "kwh"],
+    hasTelemetry: body.type !== "manual",
+  });
+}
+
+/** Remove a vehicle. Live: DELETE (config.changed → rehydrateSite drops it); demo: store remove. */
+export async function removeVehicle(id: string): Promise<void> {
+  if (isLive()) {
+    await api.deleteVehicle(id);
+    return;
+  }
+  useOsc.getState().removeVehicle(id);
 }
 
 /** Guest kWh target ("just charge" when null → clears the cap): optimistic; POST /target { kwh }

@@ -1,5 +1,5 @@
 import { useOsc, type Mode } from "@/lib/mock/store";
-import type { Charger } from "@/lib/mock/store";
+import type { Charger, Vehicle } from "@/lib/mock/store";
 import {
   changeMode,
   applyOneShot,
@@ -16,7 +16,7 @@ import { Timeline24h } from "./Timeline24h";
 import { StatusPill } from "@/components/StatusPill";
 import { modeLabel } from "@/lib/copy";
 import { fmtKW, fmtPct, fmtKm, DAYS, DAY_KEYS, type DayKey } from "@/lib/format";
-import { resolveActivePlan } from "@/lib/plan";
+import { resolveActivePlan, planApplies } from "@/lib/plan";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { ActionButton } from "@/components/ui/action-button";
@@ -35,8 +35,9 @@ export function ChargerDetail({ charger, onClose }: Props) {
   const vehicles = useOsc((s) => s.vehicles);
   const allPlans = useOsc((s) => s.plans);
   const plans = useMemo(
-    () => allPlans.filter((p) => p.chargerId === charger?.id),
-    [allPlans, charger?.id],
+    // Vehicle-scoped: show the plans that APPLY to the charger's active vehicle (empty target = any car).
+    () => (charger ? allPlans.filter((p) => planApplies(p, charger.activeVehicleId)) : []),
+    [allPlans, charger],
   );
   const oneShotAmps = useOsc((s) => s.oneShotAmps);
   const timezone = useOsc((s) => s.timezone);
@@ -63,15 +64,14 @@ export function ChargerDetail({ charger, onClose }: Props) {
     setLastCmd(label);
   };
 
+  // The resolved active vehicle (for the telemetry block); null = Guest.
   const vehicle = vehicles.find((v) => v.id === charger.activeVehicleId) ?? null;
-  // Offer only what the backend can honor: Guest + the loadpoint's BOUND car. (Live sets
-  // boundVehicleId; in demo it's absent → fall back to all vehicles.)
-  const tabVehicles =
-    charger.boundVehicleId != null
-      ? vehicles.filter((v) => v.id === charger.boundVehicleId)
-      : vehicles;
-  const nextReady = resolveActivePlan(plans, timezone)?.readyBy;
+  const nextReady = resolveActivePlan(plans, timezone, charger.activeVehicleId)?.readyBy;
   const readyByHour = nextReady ? parseInt(nextReady.split(":")[0], 10) : undefined;
+  const pickTab = (active: boolean) =>
+    `rounded-full px-3 py-1.5 text-xs font-medium transition ${
+      active ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"
+    }`;
 
   return (
     <Sheet open={!!charger} onOpenChange={(o) => !o && onClose()}>
@@ -116,39 +116,40 @@ export function ChargerDetail({ charger, onClose }: Props) {
 
           <Timeline24h readyByHour={readyByHour} />
 
-          {/* Vehicle */}
+          {/* Vehicle — Auto (identify) · Guest · each configured car. Highlights the sticky pick. */}
           <div className="mt-5 rounded-2xl border border-border/60 bg-card p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <div className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
-                Vehicle
-              </div>
+            <div className="mb-3 text-xs font-medium uppercase tracking-widest text-muted-foreground">
+              Vehicle
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => void setActiveVehicle(charger.id, null)}
-                className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
-                  !vehicle
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-secondary text-secondary-foreground"
-                }`}
+                className={pickTab(charger.vehicleOverride == null)}
+              >
+                Auto
+              </button>
+              <button
+                onClick={() => void setActiveVehicle(charger.id, "guest")}
+                className={pickTab(charger.vehicleOverride === "guest")}
               >
                 Guest
               </button>
-              {tabVehicles.map((v) => (
+              {vehicles.map((v) => (
                 <button
                   key={v.id}
                   onClick={() => void setActiveVehicle(charger.id, v.id)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
-                    vehicle?.id === v.id
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-secondary text-secondary-foreground"
-                  }`}
+                  className={pickTab(charger.vehicleOverride === v.id)}
                 >
                   🚗 {v.name}
                 </button>
               ))}
             </div>
-            {vehicle ? (
+            {charger.vehicleOverride == null && (
+              <div className="mt-2 text-[11px] text-muted-foreground">
+                Auto-detecting · currently {vehicle ? `🚗 ${vehicle.name}` : "Guest"}
+              </div>
+            )}
+            {vehicle?.hasTelemetry ? (
               <>
                 <div className="mt-3 flex items-baseline justify-between">
                   <div className="font-display text-3xl font-semibold">{fmtPct(vehicle.soc)}</div>
@@ -192,6 +193,11 @@ export function ChargerDetail({ charger, onClose }: Props) {
                   placeholder="Just charge"
                   className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring/40"
                 />
+                <div className="mt-1 text-[11px] text-muted-foreground">
+                  {vehicle
+                    ? `${vehicle.name} has no app connection — charge by kWh.`
+                    : "No car identified — charge by kWh."}
+                </div>
               </div>
             )}
           </div>
@@ -203,7 +209,12 @@ export function ChargerDetail({ charger, onClose }: Props) {
                 Plans
               </h3>
               <button
-                onClick={() => void addPlanCmd(charger.id)}
+                onClick={() =>
+                  void addPlanCmd(
+                    charger.id,
+                    charger.activeVehicleId ? [charger.activeVehicleId] : ["guest"],
+                  )
+                }
                 className="inline-flex items-center gap-1 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
               >
                 <Plus className="h-3.5 w-3.5" /> Add plan
@@ -216,7 +227,7 @@ export function ChargerDetail({ charger, onClose }: Props) {
                 </div>
               )}
               {plans.map((p) => (
-                <PlanRow key={p.id} planId={p.id} availableUnits={charger.availableTargetUnits} />
+                <PlanRow key={p.id} planId={p.id} vehicles={vehicles} />
               ))}
             </div>
           </div>
@@ -316,13 +327,7 @@ export function ChargerDetail({ charger, onClose }: Props) {
   );
 }
 
-function PlanRow({
-  planId,
-  availableUnits,
-}: {
-  planId: string;
-  availableUnits: Charger["availableTargetUnits"];
-}) {
+export function PlanRow({ planId, vehicles }: { planId: string; vehicles: Vehicle[] }) {
   const plan = useOsc((s) => s.plans.find((p) => p.id === planId)!);
   if (!plan) return null;
 
@@ -333,11 +338,28 @@ function PlanRow({
     void updatePlanCmd(plan.id, { days: Array.from(set) });
   };
 
-  // Units the picker offers: what the loadpoint's data can back now, plus the plan's current unit
-  // (so the active selection is never hidden). The backend computes resolvedSoc — never recomputed here.
-  const units = (["pct", "km", "kwh"] as const).filter(
-    (u) => availableUnits.includes(u) || u === plan.unit,
-  );
+  const toggleTarget = (id: string) => {
+    const set = new Set(plan.vehicles);
+    if (set.has(id)) set.delete(id);
+    else set.add(id);
+    void updatePlanCmd(plan.id, { vehicles: Array.from(set) });
+  };
+
+  // Units this plan can offer = the intersection of its target vehicles' capabilities (empty target =
+  // any car → all units; a 'guest'/manual/unknown target → kWh only). Keep the current unit selectable.
+  const cap = (
+    plan.vehicles.length === 0
+      ? (["pct", "km", "kwh"] as const)
+      : (["pct", "km", "kwh"] as const).filter((u) =>
+          plan.vehicles.every((v) =>
+            (v === "guest"
+              ? ["kwh"]
+              : (vehicles.find((x) => x.id === v)?.targetUnits ?? ["kwh"])
+            ).includes(u),
+          ),
+        )
+  ) as ("pct" | "km" | "kwh")[];
+  const units = cap.includes(plan.unit) ? cap : [...cap, plan.unit];
 
   return (
     <div
@@ -363,6 +385,31 @@ function PlanRow({
         >
           <Trash2 className="h-4 w-4" />
         </button>
+      </div>
+
+      {/* Target vehicles (empty = any car) */}
+      <div className="mb-3">
+        <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted-foreground">
+          For {plan.vehicles.length === 0 ? "any car (incl. guest)" : "these cars"}
+        </label>
+        <div className="flex flex-wrap gap-1">
+          {[{ id: "guest", name: "Guest" }, ...vehicles].map((v) => {
+            const active = plan.vehicles.includes(v.id);
+            return (
+              <button
+                key={v.id}
+                onClick={() => toggleTarget(v.id)}
+                className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
+                  active
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-secondary text-muted-foreground"
+                }`}
+              >
+                {v.id === "guest" ? "Guest" : `🚗 ${v.name}`}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="mb-3 flex gap-1">
@@ -413,6 +460,15 @@ function PlanRow({
           </div>
         </div>
       </div>
+      {/* Pause when the target is reached (default on; a Guest-only plan defaults off — planning-only). */}
+      <div className="mt-3 flex items-center justify-between">
+        <label className="text-xs text-muted-foreground">Pause charging when target reached</label>
+        <Switch
+          checked={plan.pauseOnTarget}
+          onCheckedChange={(v) => void updatePlanCmd(plan.id, { pauseOnTarget: v })}
+        />
+      </div>
+
       {plan.unit !== "pct" && plan.resolvedSoc != null && (
         <div className="mt-2 text-[11px] text-muted-foreground">≈ {plan.resolvedSoc}%</div>
       )}

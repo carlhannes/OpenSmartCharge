@@ -9,6 +9,7 @@ export const Route = createFileRoute("/settings")({
 const sections = [
   { to: "/settings/chargers", label: "Chargers", desc: "Names, amp limits, pending." },
   { to: "/settings/vehicles", label: "Vehicles", desc: "Škoda / VW logins, guest defaults." },
+  { to: "/settings/plans", label: "Charge plans", desc: "Targets per vehicle, ready-by, pause." },
   {
     to: "/settings/region",
     label: "Electricity region",

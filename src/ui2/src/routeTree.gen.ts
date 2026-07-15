@@ -17,6 +17,7 @@ import { Route as SettingsIndexRouteImport } from './routes/settings.index'
 import { Route as SettingsVehiclesRouteImport } from './routes/settings.vehicles'
 import { Route as SettingsSystemRouteImport } from './routes/settings.system'
 import { Route as SettingsRegionRouteImport } from './routes/settings.region'
+import { Route as SettingsPlansRouteImport } from './routes/settings.plans'
 import { Route as SettingsLogsRouteImport } from './routes/settings.logs'
 import { Route as SettingsHouseRouteImport } from './routes/settings.house'
 import { Route as SettingsChargersRouteImport } from './routes/settings.chargers'
@@ -64,6 +65,11 @@ const SettingsRegionRoute = SettingsRegionRouteImport.update({
   path: '/region',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsPlansRoute = SettingsPlansRouteImport.update({
+  id: '/plans',
+  path: '/plans',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsLogsRoute = SettingsLogsRouteImport.update({
   id: '/logs',
   path: '/logs',
@@ -106,6 +112,7 @@ export interface FileRoutesByFullPath {
   '/settings/chargers': typeof SettingsChargersRoute
   '/settings/house': typeof SettingsHouseRoute
   '/settings/logs': typeof SettingsLogsRoute
+  '/settings/plans': typeof SettingsPlansRoute
   '/settings/region': typeof SettingsRegionRoute
   '/settings/system': typeof SettingsSystemRoute
   '/settings/vehicles': typeof SettingsVehiclesRoute
@@ -121,6 +128,7 @@ export interface FileRoutesByTo {
   '/settings/chargers': typeof SettingsChargersRoute
   '/settings/house': typeof SettingsHouseRoute
   '/settings/logs': typeof SettingsLogsRoute
+  '/settings/plans': typeof SettingsPlansRoute
   '/settings/region': typeof SettingsRegionRoute
   '/settings/system': typeof SettingsSystemRoute
   '/settings/vehicles': typeof SettingsVehiclesRoute
@@ -138,6 +146,7 @@ export interface FileRoutesById {
   '/settings/chargers': typeof SettingsChargersRoute
   '/settings/house': typeof SettingsHouseRoute
   '/settings/logs': typeof SettingsLogsRoute
+  '/settings/plans': typeof SettingsPlansRoute
   '/settings/region': typeof SettingsRegionRoute
   '/settings/system': typeof SettingsSystemRoute
   '/settings/vehicles': typeof SettingsVehiclesRoute
@@ -156,6 +165,7 @@ export interface FileRouteTypes {
     | '/settings/chargers'
     | '/settings/house'
     | '/settings/logs'
+    | '/settings/plans'
     | '/settings/region'
     | '/settings/system'
     | '/settings/vehicles'
@@ -171,6 +181,7 @@ export interface FileRouteTypes {
     | '/settings/chargers'
     | '/settings/house'
     | '/settings/logs'
+    | '/settings/plans'
     | '/settings/region'
     | '/settings/system'
     | '/settings/vehicles'
@@ -187,6 +198,7 @@ export interface FileRouteTypes {
     | '/settings/chargers'
     | '/settings/house'
     | '/settings/logs'
+    | '/settings/plans'
     | '/settings/region'
     | '/settings/system'
     | '/settings/vehicles'
@@ -256,6 +268,13 @@ declare module '@tanstack/react-router' {
       path: '/region'
       fullPath: '/settings/region'
       preLoaderRoute: typeof SettingsRegionRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/plans': {
+      id: '/settings/plans'
+      path: '/plans'
+      fullPath: '/settings/plans'
+      preLoaderRoute: typeof SettingsPlansRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/logs': {
@@ -331,6 +350,7 @@ interface SettingsRouteChildren {
   SettingsChargersRoute: typeof SettingsChargersRoute
   SettingsHouseRoute: typeof SettingsHouseRoute
   SettingsLogsRoute: typeof SettingsLogsRoute
+  SettingsPlansRoute: typeof SettingsPlansRoute
   SettingsRegionRoute: typeof SettingsRegionRoute
   SettingsSystemRoute: typeof SettingsSystemRoute
   SettingsVehiclesRoute: typeof SettingsVehiclesRoute
@@ -342,6 +362,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsChargersRoute: SettingsChargersRoute,
   SettingsHouseRoute: SettingsHouseRoute,
   SettingsLogsRoute: SettingsLogsRoute,
+  SettingsPlansRoute: SettingsPlansRoute,
   SettingsRegionRoute: SettingsRegionRoute,
   SettingsSystemRoute: SettingsSystemRoute,
   SettingsVehiclesRoute: SettingsVehiclesRoute,

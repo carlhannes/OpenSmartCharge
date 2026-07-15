@@ -75,11 +75,7 @@ export function LogsExport({
       title="Export selected logs (.log)"
       className="shrink-0 rounded-full p-1.5 text-muted-foreground hover:text-foreground disabled:opacity-50"
     >
-      {busy ? (
-        <Loader2 className="h-4 w-4 animate-spin" />
-      ) : (
-        <Download className="h-4 w-4" />
-      )}
+      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
     </button>
   );
 }

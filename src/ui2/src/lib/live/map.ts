@@ -74,6 +74,7 @@ export function mapLoadpoint(lp: LoadpointStateDto, site?: SiteDto): Charger {
     // the first tick populates it. boundVehicleId keeps the static binding for the UI's tab set.
     activeVehicleId: lp.activeVehicle !== undefined ? lp.activeVehicle : boundVehicle,
     boundVehicleId: boundVehicle,
+    vehicleOverride: lp.vehicleOverride ?? null,
     // Power comes from the backend (3-phase MeterValues), NOT recomputed single-phase here.
     currentPowerW: lp.powerW ?? Math.round(lp.currentA * VOLTAGE),
     // Session total = the peak-hold delivered kWh (survives the transaction churn); the live
@@ -96,6 +97,8 @@ export function mapPlan(dto: PlanDto): Plan {
     target: dto.target,
     unit: dto.unit,
     enabled: dto.enabled,
+    vehicles: dto.vehicles ?? [],
+    pauseOnTarget: dto.pauseOnTarget ?? true,
     resolvedSoc: dto.resolvedSoc,
   };
 }
@@ -111,6 +114,10 @@ export function mapVehicle(name: string, dto: VehicleStateDto): Vehicle {
     batteryKwh: dto.capacityKWh ?? d?.batteryCapacity ?? 0,
     connected: d?.pluggedIn ?? false,
     climateOn: d?.climateActive,
+    // Capabilities from the backend (self-reported by the module). Default to full telemetry when
+    // absent (demo / older backend) so the UI stays functional.
+    targetUnits: dto.targetUnits ?? ["pct", "km", "kwh"],
+    hasTelemetry: dto.capabilities?.soc ?? true,
   };
 }
 

@@ -21,6 +21,7 @@ export function HeroStatus() {
   const plan = resolveActivePlan(
     plans.filter((p) => p.chargerId === primary.id),
     timezone,
+    primary.activeVehicleId,
   );
 
   let headline = statusLabel(primary.status);

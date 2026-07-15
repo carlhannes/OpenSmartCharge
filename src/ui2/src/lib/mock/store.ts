@@ -14,6 +14,10 @@ export interface Vehicle {
   batteryKwh: number;
   connected: boolean;
   climateOn?: boolean;
+  // Units this car can target (backend capabilities): app car → pct/km/kwh; manual/API-less → kwh only.
+  targetUnits: ("pct" | "km" | "kwh")[];
+  // Has SoC/range telemetry (an app car) vs a manual/API-less car — gates the SoC display + auto-detect.
+  hasTelemetry: boolean;
 }
 
 export interface Plan {
@@ -24,6 +28,8 @@ export interface Plan {
   target: number;
   unit: "pct" | "km" | "kwh";
   enabled: boolean;
+  vehicles: string[]; // target vehicles (names + 'guest'); [] = any (catch-all)
+  pauseOnTarget: boolean; // reaching the target pauses charging (→ Ready); false = planning-only
   resolvedSoc: number | null; // backend display %: pct→value, km→ratio, kwh/no-car→null
 }
 
@@ -39,6 +45,8 @@ export interface Charger {
   charging: boolean;
   drawingA: number;
   activeVehicleId: string | null; // resolved active vehicle from the backend; null = Guest
+  // Sticky manual pick (for the charger picker highlight): undefined/null = Auto, 'guest', or a vehicle id.
+  vehicleOverride?: string | null;
   boundVehicleId?: string | null; // the loadpoint's configured vehicle binding (live only; static)
   currentPowerW: number;
   sessionKwh: number;
@@ -172,6 +180,8 @@ function seed(): Pick<
     rangeKm: 310,
     batteryKwh: 77,
     connected: true,
+    targetUnits: ["pct", "km", "kwh"],
+    hasTelemetry: true,
   };
   const charger: Charger = {
     id: "c_garage",
@@ -200,6 +210,8 @@ function seed(): Pick<
     target: 80,
     unit: "pct",
     enabled: true,
+    vehicles: ["v_enyaq"],
+    pauseOnTarget: true,
     resolvedSoc: 80, // pct passthrough; demo-only (live replaces plans from the backend)
   };
 
@@ -302,6 +314,8 @@ export const useOsc = create<OscState>()((set, get) => ({
       target: 80,
       unit: "pct",
       enabled: true,
+      vehicles: [],
+      pauseOnTarget: true,
       resolvedSoc: null, // backend fills this via the loadpoint.plans SSE re-fetch
     };
     set((s) => ({ plans: [...s.plans, plan] }));

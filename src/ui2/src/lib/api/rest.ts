@@ -27,6 +27,8 @@ export interface LoadpointStateDto {
   sessionComplete?: boolean;
   /** Resolved vehicle present this session: the bound car's name, or null (guest); undefined pre-first-tick. */
   activeVehicle?: string | null;
+  // The sticky manual override: undefined/null = Auto (identify decides), 'guest', or a vehicle name.
+  vehicleOverride?: string | null;
   availableTargetUnits?: PlanDto["unit"][]; // units the data can back now (kwh always; pct/km need car data)
   resolve?: LoadpointResolveDto; // latest control-loop decision (the "why"); undefined until first tick
 }
@@ -51,8 +53,12 @@ export interface PlanDto {
   target: number;
   unit: "pct" | "km" | "kwh";
   enabled: boolean;
+  vehicles: string[]; // target vehicles (names + 'guest'); [] = any (catch-all)
+  pauseOnTarget: boolean; // reaching the target pauses charging (→ Ready); false = planning-only
   resolvedSoc: number | null; // backend display %: pct→value, km→range/soc ratio, kwh/no-car→null
 }
+
+export type PlanUnit = PlanDto["unit"];
 
 export interface SettingsDto {
   timezone: string;
@@ -86,11 +92,23 @@ export interface VehicleDataDto {
   fetchedAt: string;
 }
 
+// What a vehicle module can report (self-declared). Drives plan target-units + the auto/manual picker.
+export interface VehicleCapabilitiesDto {
+  soc: boolean;
+  range: boolean;
+  capacity: boolean;
+  presence: boolean; // reports pluggedIn → auto-identifiable
+  climate: boolean;
+  targetSoc: boolean;
+}
+
 export interface VehicleStateDto {
   name: string;
   health: ModuleHealth;
   data: VehicleDataDto | null;
   capacityKWh: number | null;
+  capabilities?: VehicleCapabilitiesDto;
+  targetUnits?: PlanUnit[]; // units this vehicle can back (derived from capabilities)
 }
 
 export interface MeterStateDto {
@@ -161,6 +179,8 @@ export interface SiteVehicleDto {
   name: string;
   type: string;
   vin?: string;
+  capabilities?: VehicleCapabilitiesDto;
+  targetUnits?: PlanUnit[];
 }
 export interface SiteMeterDto {
   name: string;
@@ -227,16 +247,30 @@ export const getCompositeSchedule = (name: string, duration = 60) =>
 export const setProfile = (name: string, amps: number) =>
   apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/profile`, json({ amps }));
 
-// Plans (per loadpoint)
-export const getPlans = (name: string) => apiFetch<PlanDto[]>(`/api/loadpoints/${name}/plans`);
+// Plans. Vehicle-scoped: list ALL globally (the UI filters by charger/active vehicle); create/update/
+// delete still route through the plan's loadpoint (its `loadpointName`).
+export const getAllPlans = () => apiFetch<PlanDto[]>("/api/plans");
 export const createPlan = (
-  name: string,
+  loadpointName: string,
   body: Omit<PlanDto, "id" | "loadpointName" | "resolvedSoc">,
-) => apiFetch<PlanDto>(`/api/loadpoints/${name}/plans`, jsonBody("POST", body));
-export const updatePlanApi = (name: string, id: string, patch: Partial<PlanDto>) =>
-  apiFetch<PlanDto>(`/api/loadpoints/${name}/plans/${id}`, jsonBody("PUT", patch));
-export const deletePlan = (name: string, id: string) =>
-  apiVoid(`/api/loadpoints/${name}/plans/${id}`, { method: "DELETE" });
+) => apiFetch<PlanDto>(`/api/loadpoints/${loadpointName}/plans`, jsonBody("POST", body));
+export const updatePlanApi = (loadpointName: string, id: string, patch: Partial<PlanDto>) =>
+  apiFetch<PlanDto>(`/api/loadpoints/${loadpointName}/plans/${id}`, jsonBody("PUT", patch));
+export const deletePlan = (loadpointName: string, id: string) =>
+  apiVoid(`/api/loadpoints/${loadpointName}/plans/${id}`, { method: "DELETE" });
+
+// Vehicle management (backend CRUD; creds never echoed). type 'skoda' needs username/password/vin;
+// 'manual' needs only a name (no API, kWh-only).
+export const addVehicle = (body: {
+  name: string;
+  type: "skoda" | "manual";
+  username?: string;
+  password?: string;
+  vin?: string;
+}) =>
+  apiFetch<{ name: string; type: string; vin?: string }>("/api/vehicles", jsonBody("POST", body));
+export const deleteVehicle = (name: string) =>
+  apiVoid(`/api/vehicles/${name}`, { method: "DELETE" });
 
 // Settings (site timezone)
 export const getSettings = () => apiFetch<SettingsDto>("/api/settings");

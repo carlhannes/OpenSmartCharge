@@ -30,12 +30,10 @@ function applyAllocations(alloc: Record<string, number> | null) {
   }
 }
 
-/** Re-fetch one loadpoint's plans, replacing that charger's plans and keeping the others. */
-async function refetchPlansFor(name: string) {
+/** Re-fetch ALL plans (plans are vehicle-scoped/global) and replace the store's set. */
+async function refetchAllPlans() {
   try {
-    const fresh = (await api.getPlans(name)).map(mapPlan);
-    const others = useOsc.getState().plans.filter((p) => p.chargerId !== name);
-    useOsc.getState().hydrate({ plans: [...others, ...fresh] });
+    useOsc.getState().hydrate({ plans: (await api.getAllPlans()).map(mapPlan) });
   } catch {
     /* ignore */
   }
@@ -79,6 +77,19 @@ async function rehydrateSite(
         : {}),
     });
     useOsc.getState().setMeterName(site.meterReaders[0]?.name ?? null);
+    // Vehicles (name + capabilities + live reading) — mapped here so add/remove (config.changed)
+    // reflects without a reload. getVehicle tolerates a manual car (data: null) → mapVehicle degrades.
+    const vehicles = (
+      await Promise.all(
+        site.vehicles.map((v) =>
+          api
+            .getVehicle(v.name)
+            .then((dto) => mapVehicle(v.name, dto))
+            .catch(() => null),
+        ),
+      )
+    ).filter((v): v is Vehicle => v != null);
+    useOsc.getState().hydrate({ vehicles });
   }
   return site;
 }
@@ -117,14 +128,9 @@ export function useLiveSync() {
       const site = await rehydrateSite(loadpoints);
       if (cancelled) return;
 
-      // Plans per loadpoint + site timezone.
+      // All plans (vehicle-scoped/global). Vehicles were mapped by rehydrateSite above.
       try {
-        const plans = (
-          await Promise.all(loadpoints.map((lp) => api.getPlans(lp.name).catch(() => [])))
-        )
-          .flat()
-          .map(mapPlan);
-        if (!cancelled) store.hydrate({ plans });
+        if (!cancelled) store.hydrate({ plans: (await api.getAllPlans()).map(mapPlan) });
       } catch {
         /* plans optional */
       }
@@ -142,18 +148,6 @@ export function useLiveSync() {
       }
 
       if (site) {
-        const vehicles = (
-          await Promise.all(
-            site.vehicles.map((v) =>
-              api
-                .getVehicle(v.name)
-                .then((dto) => mapVehicle(v.name, dto))
-                .catch(() => null),
-            ),
-          )
-        ).filter((v): v is Vehicle => v != null);
-        if (!cancelled && vehicles.length) store.hydrate({ vehicles });
-
         const tariff = site.tariffs[0];
         if (tariff) {
           const { now, to } = next24h();
@@ -300,9 +294,8 @@ export function useLiveSync() {
             .then((slots) => useOsc.getState().hydrate({ prices: mapPrices(slots) }))
             .catch(() => {});
         }),
-        subscribe("loadpoint.plans", (d) => {
-          const e = d as { name: string };
-          void refetchPlansFor(e.name);
+        subscribe("loadpoint.plans", () => {
+          void refetchAllPlans();
         }),
         subscribe("settings.changed", (d) => {
           const e = d as { timezone: string };

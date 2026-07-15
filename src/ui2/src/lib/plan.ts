@@ -22,22 +22,31 @@ function nowHHMM(timezone: string, now: Date): string {
   }).format(now);
 }
 
+/** Does this plan apply to the loadpoint's active vehicle? Empty target set = any (catch-all); a null
+ *  active vehicle (guest) matches the 'guest' sentinel. Mirrors backend core/plans.ts planApplies. */
+export function planApplies(plan: Plan, activeVehicle: string | null): boolean {
+  return plan.vehicles.length === 0 || plan.vehicles.includes(activeVehicle ?? "guest");
+}
+
 /**
- * The plan the backend would charge to right now: among ENABLED plans whose `days`
- * include today (site timezone) with a `readyBy` still later today, the earliest
- * `readyBy` wins. Returns null if none qualify — the caller then falls back to the
- * ad-hoc target ("just charge when plugged in").
+ * The plan the backend would charge to right now: among ENABLED plans that APPLY to the active vehicle,
+ * whose `days` include today (site timezone) with a `readyBy` still later today, the earliest `readyBy`
+ * wins. Returns null if none qualify. Mirrors backend core/plans.ts selectActivePlan — keep in sync.
  */
 export function resolveActivePlan(
   plans: Plan[],
   timezone: string,
+  activeVehicle: string | null,
   now: Date = new Date(),
 ): Plan | null {
   const today = todayKey(timezone, now);
   const hhmm = nowHHMM(timezone, now);
   return (
     plans
-      .filter((p) => p.enabled && p.days.includes(today) && p.readyBy > hhmm)
+      .filter(
+        (p) =>
+          p.enabled && planApplies(p, activeVehicle) && p.days.includes(today) && p.readyBy > hhmm,
+      )
       .sort((a, b) => a.readyBy.localeCompare(b.readyBy))[0] ?? null
   );
 }

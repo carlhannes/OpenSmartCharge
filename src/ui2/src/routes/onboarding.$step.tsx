@@ -381,6 +381,8 @@ function CarStep() {
               rangeKm: 280,
               batteryKwh: 77,
               connected: true,
+              targetUnits: ["pct", "km", "kwh"],
+              hasTelemetry: true,
             });
             setAdded(true);
           }}
