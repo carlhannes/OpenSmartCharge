@@ -1,6 +1,7 @@
 import { chargeRateKW, DEFAULT_CHARGING_EFFICIENCY, DUTY_CYCLE_FALLBACK } from '../electrical.js'
 import type { PlanUnit } from '../plans.js'
 import type { Resolved, EnergyRung } from './types.js'
+import type { VehicleCapabilities } from '../../sdk/vehicle.js'
 
 /** A user target: an amount (`value`) in one of three units. `pct`/`km` are absolute battery
  *  STATES (need live SoC); `kwh` is relative energy-to-add (charger-measured, no car needed). */
@@ -41,6 +42,23 @@ export function availableUnits(reading: EnergyReading): PlanUnit[] {
   if (hasSoc && hasCap && reading.range != null) units.push('km')
   units.push('kwh')
   return units
+}
+
+/** Target units a vehicle CAN back, derived from its declared CAPABILITIES (type-based — what the
+ *  module fundamentally supports, for the plan editor). Mirror of availableUnits, over capabilities
+ *  rather than a live reading; the resolver still degrades gracefully when live data is momentarily
+ *  absent. A plan targeting several vehicles offers the intersection of their targetUnitsFor. */
+export function targetUnitsFor(caps: VehicleCapabilities): PlanUnit[] {
+  const units: PlanUnit[] = []
+  if (caps.soc && caps.capacity) units.push('pct')
+  if (caps.soc && caps.capacity && caps.range) units.push('km')
+  units.push('kwh')
+  return units
+}
+
+/** A vehicle is eligible for identify-on-plug iff it reports cable presence (its own pluggedIn). */
+export function autoIdentifiable(caps: VehicleCapabilities): boolean {
+  return caps.presence
 }
 
 export interface EnergyInputs {

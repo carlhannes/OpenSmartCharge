@@ -7,6 +7,7 @@ import '../modules/meter-tibber-pulse/index.js'
 import '../modules/meter-mqtt-phase/index.js'
 import '../modules/balancer-mqtt-circuit/index.js'
 import '../modules/vehicle-skoda/index.js'
+import '../modules/vehicle-manual/index.js'
 
 import { readConfigDocument, configSchema, CONFIG_PATH, DATA_DIR } from './config.js'
 import { openDb } from './db.js'
@@ -18,7 +19,7 @@ import {
   configToLoadpointInits,
   setLoadpointMode,
   setLoadpointTarget,
-  setLoadpointGuestOverride,
+  setLoadpointVehicleOverride,
   foldChargerStatus,
 } from './loadpoint.js'
 import { createEventBus } from './events.js'
@@ -44,7 +45,7 @@ import { materializeConfigOnce } from './config-io.js'
 import { createReconciler } from './reconcile.js'
 import { listPlans, selectActivePlan, planTargetTime } from './plans.js'
 import type { Balancer, LoadpointSnapshot } from '../sdk/balancer.js'
-import type { Vehicle } from '../sdk/vehicle.js'
+import type { Vehicle, VehicleData } from '../sdk/vehicle.js'
 import type { LoadpointState } from './loadpoint.js'
 import type { ChargeMode, LoadpointConfig } from './config.js'
 import { estimateSocSinceAnchor, observedEfficiency } from './estimator.js'
@@ -53,7 +54,7 @@ import { resolvePriceCurve } from './smart-charging/price.js'
 import { resolveCurrentBudget } from './smart-charging/current.js'
 import { decideShouldCharge, forceMinSoc, forceClimate } from './smart-charging/decide.js'
 import { shouldPollVehicle } from './smart-charging/vehicle-poll.js'
-import { resolveActiveVehicle } from './smart-charging/guest.js'
+import { resolveActiveVehicle, positiveClaimant } from './smart-charging/guest.js'
 import { resolveSessionComplete, SESSION_COMPLETE } from './smart-charging/session-complete.js'
 import type { EnergyRung } from './smart-charging/types.js'
 import {
@@ -387,15 +388,15 @@ async function main() {
     if (circuit) void circuitTick(circuit)
   }
 
-  // Guest / active-vehicle override: `null` = force guest, the bound vehicle's name = force the bound
-  // car (recourse when the car API wrongly reports unplugged). Persisted per-session (reset on
-  // unplug); ticks the circuit so the resolved activeVehicle + energy source update within ~1 s.
-  async function handleVehicleOverride(name: string, vehicle: string | null): Promise<void> {
+  // Manual active-vehicle override (3-state): `null` = Auto (clear the sticky override, let identify
+  // decide); `'guest'` = force guest; a vehicle name = force that car. STICKY — persists across
+  // unplug; superseded only by a positive app-car auto-detection (in gatherEnergyContext) or the next
+  // manual change. Ticks the circuit so the resolved activeVehicle + energy source update within ~1 s.
+  async function handleVehicleOverride(name: string, override: string | null): Promise<void> {
     const state = loadpointStates.get(name)
     if (!state) return
-    const override = vehicle === null ? 'guest' : 'vehicle'
-    state.guestOverride = override
-    setLoadpointGuestOverride(db, name, override)
+    state.vehicleOverride = override ?? undefined
+    setLoadpointVehicleOverride(db, name, override)
     const circuit = circuitForLoadpoint(circuits, name)
     if (circuit) void circuitTick(circuit)
   }
@@ -505,39 +506,44 @@ async function main() {
     efficiency: number
     activeVehicle: string | null
   }> {
-    const vehicle = lpCfg.vehicle ? vehicles.get(lpCfg.vehicle) : undefined
-    let capacity = vehicle?.getCachedCapacity()
-    let soc: number | undefined
-    let range: number | undefined
-    let climateActive: boolean | undefined
-    let pluggedIn: boolean | undefined
-    if (vehicle) {
-      const data = await vehicle.getData().catch(() => undefined)
-      soc = data?.soc
-      range = data?.range
-      climateActive = data?.climateActive
-      pluggedIn = data?.pluggedIn
+    // Candidates = all configured vehicles (identify-on-plug picks whoever's plugged; manual/guest
+    // come via the sticky override). Cached reads (no network) give each candidate's own plug view.
+    const candidateNames = config.vehicles.map((v) => v.name)
+    const dataByName: Record<string, VehicleData | undefined> = {}
+    const readings: Record<string, { pluggedIn?: boolean }> = {}
+    for (const name of candidateNames) {
+      const data = await vehicles
+        .get(name)
+        ?.getData()
+        .catch(() => undefined)
+      dataByName[name] = data ?? undefined
+      readings[name] = { pluggedIn: data?.pluggedIn }
     }
-    // Which car is present this session — the bound one, or a guest (null)? When it's NOT the bound
-    // car (auto-detected via pluggedIn vs charger-connected, or a manual override), suppress EVERY
-    // bound-car input so the resolver degrades to the kWh target / duty-cycle. estimatedSocPct feeds
-    // both resolveTarget and the minSoc floor, so nulling it here fixes both in one place.
     const activeVehicle = resolveActiveVehicle({
-      boundVehicle: lpCfg.vehicle,
+      candidates: candidateNames,
       connected: state.connected,
-      pluggedIn,
-      override: state.guestOverride,
+      readings,
+      override: state.vehicleOverride,
+      latched: state.activeVehicle ?? null,
     })
-    const usingBoundCar = activeVehicle != null && activeVehicle === lpCfg.vehicle
-    const estimatedSocPct = usingBoundCar
+    // A single positive app-claim that differs from a sticky override supersedes AND clears it
+    // ("auto-detected another vehicle") — so a manual pick doesn't linger once a known car shows up.
+    const claim = positiveClaimant(candidateNames, readings)
+    if (claim && state.vehicleOverride !== undefined && claim !== state.vehicleOverride) {
+      state.vehicleOverride = undefined
+      setLoadpointVehicleOverride(db, lpCfg.name, null)
+    }
+    // Use the IDENTIFIED vehicle's telemetry; a guest (null) or a manual car (no data) leaves it all
+    // undefined, so the resolver degrades to the kWh target / duty-cycle. estimatedSocPct feeds both
+    // resolveTarget and the minSoc floor, so this single gate fixes both.
+    const activeData = activeVehicle ? dataByName[activeVehicle] : undefined
+    const capacity = activeVehicle ? vehicles.get(activeVehicle)?.getCachedCapacity() : undefined
+    const soc = activeData?.soc
+    const range = activeData?.range
+    const climateActive = activeData?.climateActive
+    const estimatedSocPct = activeVehicle
       ? estimatedSocFor(lpCfg.name, capacity, state.sessionEnergyKWh)
       : undefined
-    if (!usingBoundCar) {
-      capacity = undefined
-      soc = undefined
-      range = undefined
-      climateActive = undefined
-    }
     const eff = effectiveEfficiencyFor(lpCfg.name, capacity)
     // Surface the observed-this-session efficiency when we have one, so it's visible in the logs
     // overnight (fallback is the configured constant, not logged as it's the uninteresting case).
@@ -562,77 +568,86 @@ async function main() {
     }
   }
 
-  // Poll gate: refresh a loadpoint's vehicle on (re)connect, then on two cadences while plugged in —
-  // vehiclePollIntervalSec while actively drawing (re-anchor the estimate), the faster
-  // vehicleIdlePollIntervalSec while connected-but-idle (catch climate/plug changes). Never while
-  // unplugged. Fire-and-forget — the fresh reading + its anchor are used from the next tick.
-  function maybePollVehicle(lpCfg: LoadpointConfig, state: LoadpointState, nowMs: number): void {
-    if (!lpCfg.vehicle) return
-    const vehicle = vehicles.get(lpCfg.vehicle)
-    if (!vehicle) return
-    const vp = vehiclePollState.get(lpCfg.name) ?? {
-      lastPollAt: 0,
-      polledThisConnection: false,
-      consecutiveFailures: 0,
-    }
+  // Poll gate (multi-candidate): on (re)connect and on the drawing/idle cadences, refresh the vehicles
+  // this loadpoint needs — the identified active car once known, else a FAN-OUT over every
+  // auto-identifiable candidate to discover which is plugged (their `pluggedIn` feeds identify-on-plug
+  // next tick). Manual cars (no telemetry) are never polled. Per-vehicle backoff; fire-and-forget.
+  function maybePollVehicles(lpCfg: LoadpointConfig, state: LoadpointState, nowMs: number): void {
+    const candidateNames = config.vehicles.map((v) => v.name)
     if (!state.connected) {
-      vp.polledThisConnection = false // reset so the next connection re-anchors on its first tick
-      vp.consecutiveFailures = 0 // fresh connection → drop any stale backoff
-      vehiclePollState.set(lpCfg.name, vp)
-      sessionFirstReading.delete(lpCfg.name) // each new charging session measures its own efficiency
+      for (const name of candidateNames) {
+        const vp = vehiclePollState.get(name)
+        if (vp) {
+          vp.polledThisConnection = false // next connection re-anchors on its first tick
+          vp.consecutiveFailures = 0 // fresh connection → drop stale backoff
+        }
+      }
+      sessionFirstReading.delete(lpCfg.name) // each session measures its own efficiency
       return
     }
-    // Idle polling is faster during the day window (when preconditioning/departure happens) and
-    // falls back to the slow charging cadence at night, so an overnight-plugged car isn't hammered.
+    const active = state.activeVehicle
+    const pollSet =
+      active && vehicles.get(active)?.capabilities.presence
+        ? [active]
+        : candidateNames.filter((n) => vehicles.get(n)?.capabilities.presence)
+    // Idle polling is faster during the day window (preconditioning/departure) and slower at night.
     const sc = config.smartCharging
     const h = localHour(new Date(nowMs), getTimezone(db))
     const { startHour: ds, endHour: de } = sc.vehicleIdlePollDayWindow
     const isDay = ds <= de ? h >= ds && h < de : h >= ds || h < de
-    // While a poll is failing, override the normal cadence with a short backoff so recovery is
-    // prompt instead of one-per-15-min; otherwise use the drawing/idle cadence as usual.
-    const backoffMs = backoffDelayMs(vp.consecutiveFailures, VEHICLE_POLL_BACKOFF)
-    const chargingIntervalMs = backoffMs > 0 ? backoffMs : sc.vehiclePollIntervalSec * 1000
-    const idleIntervalMs =
-      backoffMs > 0
-        ? backoffMs
-        : (isDay ? sc.vehicleIdlePollIntervalSec : sc.vehiclePollIntervalSec) * 1000
-    const should = shouldPollVehicle({
-      now: nowMs,
-      connected: state.connected,
-      drawing: state.currentA > 0,
-      lastPollAt: vp.lastPollAt,
-      chargingIntervalMs,
-      idleIntervalMs,
-      polledThisConnection: vp.polledThisConnection,
-    })
-    if (!should) {
-      vehiclePollState.set(lpCfg.name, vp)
-      return
+    for (const name of pollSet) {
+      const vehicle = vehicles.get(name)
+      if (!vehicle) continue
+      const vp = vehiclePollState.get(name) ?? {
+        lastPollAt: 0,
+        polledThisConnection: false,
+        consecutiveFailures: 0,
+      }
+      // While a poll is failing, a short backoff replaces the normal cadence so recovery is prompt.
+      const backoffMs = backoffDelayMs(vp.consecutiveFailures, VEHICLE_POLL_BACKOFF)
+      const chargingIntervalMs = backoffMs > 0 ? backoffMs : sc.vehiclePollIntervalSec * 1000
+      const idleIntervalMs =
+        backoffMs > 0
+          ? backoffMs
+          : (isDay ? sc.vehicleIdlePollIntervalSec : sc.vehiclePollIntervalSec) * 1000
+      const should = shouldPollVehicle({
+        now: nowMs,
+        connected: state.connected,
+        drawing: state.currentA > 0 && name === active, // only the active car counts as drawing
+        lastPollAt: vp.lastPollAt,
+        chargingIntervalMs,
+        idleIntervalMs,
+        polledThisConnection: vp.polledThisConnection,
+      })
+      if (!should) {
+        vehiclePollState.set(name, vp)
+        continue
+      }
+      vp.lastPollAt = nowMs
+      vp.polledThisConnection = true
+      vehiclePollState.set(name, vp)
+      void vehicle
+        .refresh()
+        .then((data) => {
+          vp.consecutiveFailures = 0 // success → clear backoff
+          // Anchor ONLY for the active car (its SoC + this loadpoint's session energy). Fan-out polls
+          // of other candidates refresh their pluggedIn for identification but must not touch the anchor.
+          if (name === state.activeVehicle) {
+            const reading = { soc: data.soc, sessionEnergyKWh: state.sessionEnergyKWh }
+            vehicleAnchor.set(lpCfg.name, reading)
+            if (!sessionFirstReading.has(lpCfg.name)) sessionFirstReading.set(lpCfg.name, reading)
+          }
+          setHealth(name, vehicle.health())
+        })
+        .catch((err) => {
+          vp.consecutiveFailures++
+          setHealth(name, vehicle.health())
+          log.warn(
+            { err, vehicle: name, consecutiveFailures: vp.consecutiveFailures },
+            'vehicle refresh failed',
+          )
+        })
     }
-    vp.lastPollAt = nowMs
-    vp.polledThisConnection = true
-    vehiclePollState.set(lpCfg.name, vp)
-    const vehicleName = lpCfg.vehicle
-    void vehicle
-      .refresh()
-      .then((data) => {
-        vp.consecutiveFailures = 0 // success → clear backoff, back to the normal cadence
-        const reading = { soc: data.soc, sessionEnergyKWh: state.sessionEnergyKWh }
-        vehicleAnchor.set(lpCfg.name, reading)
-        // Record the session's first real reading once; with a later one it yields observed efficiency.
-        if (!sessionFirstReading.has(lpCfg.name)) sessionFirstReading.set(lpCfg.name, reading)
-        setHealth(vehicleName, vehicle.health())
-      })
-      .catch((err) => {
-        // Count the failure so the next poll retries on the short backoff, and reflect the now-
-        // failure-aware module health immediately (don't wait for the periodic sweep).
-        vp.consecutiveFailures++
-        setHealth(vehicleName, vehicle.health())
-        log.warn(
-          { err, vehicle: vehicleName, consecutiveFailures: vp.consecutiveFailures },
-          'vehicle refresh failed',
-        )
-      })
   }
 
   // Build a LoadpointSnapshot from live state.
@@ -749,6 +764,12 @@ async function main() {
     // lets us size it (else the kWh-to-add fallback) — mirroring the ladder's own rung order.
     const ectx = await gatherEnergyContext(lpCfg, state)
     const estimatedSocPct = ectx.estimatedSocPct
+    // Identity flip (guest→identified car, or a supersede): drop the SoC anchor so the newly-active
+    // car re-anchors from its own poll rather than carrying a stale reading forward.
+    if (state.activeVehicle !== ectx.activeVehicle) {
+      vehicleAnchor.delete(lpCfg.name)
+      sessionFirstReading.delete(lpCfg.name)
+    }
     state.activeVehicle = ectx.activeVehicle // exposed on GET /api/loadpoints + emitted below
     let target: Target | null = null
     if (activePlan) target = { unit: activePlan.unit, value: activePlan.target }
@@ -945,19 +966,15 @@ async function main() {
         const st = loadpointStates.get(lp.name)
         if (!st) continue
         // Session end (connector genuinely Available / unplugged): reset per-session state so the NEXT
-        // car re-auto-detects — clear the SoC anchor (else a guest's kWh extends the bound car's
-        // estimate), the efficiency sample, and any guest override (back to auto). Idempotent per tick;
-        // the DB write only fires once (guarded on a set override).
+        // car re-auto-detects — clear the SoC anchor, the efficiency sample, and completion. The
+        // vehicle override is deliberately NOT reset here: it's sticky (persists across unplug),
+        // cleared only when an app-car is auto-detected (gatherEnergyContext) or the user changes it.
         if (availableSince.get(lp.name) !== undefined) {
           vehicleAnchor.delete(lp.name)
           sessionFirstReading.delete(lp.name)
           st.deliveredKWh = 0
           st.sessionComplete = false
           zeroDrawSince.delete(lp.name)
-          if (st.guestOverride !== undefined) {
-            st.guestOverride = undefined
-            setLoadpointGuestOverride(db, lp.name, null)
-          }
         }
         // Peak-hold the energy delivered this plug-in: the live sessionEnergyKWh is zeroed on every
         // OCPP StartTransaction/StopTransaction (the empty-session churn), so ratchet the max here.
@@ -982,7 +999,7 @@ async function main() {
             'fast boost expired (car unplugged past grace) — reverting to smart',
           )
         }
-        maybePollVehicle(lp, st, nowMs)
+        maybePollVehicles(lp, st, nowMs)
       }
 
       // One budget for the whole circuit (the only meter read this tick); each loadpoint resolves

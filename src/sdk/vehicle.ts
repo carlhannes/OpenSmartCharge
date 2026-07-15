@@ -18,8 +18,35 @@ export interface VehicleData {
   fetchedAt: Date
 }
 
+/**
+ * What signals a vehicle module can provide (static per module; a module may compute it from config).
+ * Plan target units and auto-identify eligibility DERIVE from this (see targetUnitsFor/autoIdentifiable
+ * in smart-charging/energy.ts) — consumers branch on capabilities, never on the module `type`. A module
+ * reporting `presence` (cable-connected via its own API) is eligible for identify-on-plug.
+ */
+export interface VehicleCapabilities {
+  soc: boolean
+  range: boolean
+  capacity: boolean
+  presence: boolean
+  climate: boolean
+  targetSoc: boolean
+}
+
+/** No-telemetry capabilities — a manual / API-less vehicle (kWh-only, never auto-identified). */
+export const VEHICLE_CAPS_NONE: VehicleCapabilities = {
+  soc: false,
+  range: false,
+  capacity: false,
+  presence: false,
+  climate: false,
+  targetSoc: false,
+}
+
 export interface Vehicle extends ModuleLifecycle {
   readonly id: string
+  /** Standardized capability descriptor — what this module can report (drives plan units + auto-ID). */
+  readonly capabilities: VehicleCapabilities
   /**
    * Perform ONE live fetch, update the cache, and return the fresh data. The lifecycle decides
    * WHEN to call this (on charger-connect + periodically during charging) — the module owns no

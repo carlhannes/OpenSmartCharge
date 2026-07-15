@@ -8,7 +8,7 @@ import {
   foldChargerStatus,
   setLoadpointTarget,
   setLoadpointMode,
-  setLoadpointGuestOverride,
+  setLoadpointVehicleOverride,
   applyConfigToLoadpoints,
   type LoadpointLiveFields,
 } from './loadpoint.js'
@@ -216,18 +216,18 @@ test('setLoadpointTarget clears target_kwh with null, leaving other targets inta
   }
 })
 
-test('guest override persists, reads back, and clears to auto', () => {
+test('vehicle override persists, reads back a name or guest, and clears to auto', () => {
   const dir = mkdtempSync(join(tmpdir(), 'osc-lp-'))
   const db = openDb(dir)
-  const ov = () => loadLoadpointStates(db, [{ name: 'lp' }]).get('lp')?.guestOverride
+  const ov = () => loadLoadpointStates(db, [{ name: 'lp' }]).get('lp')?.vehicleOverride
   try {
     loadLoadpointStates(db, [{ name: 'lp' }])
     expect(ov()).toBeUndefined() // default = auto-detect
-    setLoadpointGuestOverride(db, 'lp', 'guest')
+    setLoadpointVehicleOverride(db, 'lp', 'guest')
     expect(ov()).toBe('guest')
-    setLoadpointGuestOverride(db, 'lp', 'vehicle')
-    expect(ov()).toBe('vehicle')
-    setLoadpointGuestOverride(db, 'lp', null) // back to auto
+    setLoadpointVehicleOverride(db, 'lp', 'enyaq') // a specific vehicle name (sticky)
+    expect(ov()).toBe('enyaq')
+    setLoadpointVehicleOverride(db, 'lp', null) // back to auto
     expect(ov()).toBeUndefined()
   } finally {
     db.close()

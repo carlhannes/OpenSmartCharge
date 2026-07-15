@@ -695,24 +695,34 @@ test('POST /target validates minSoc and passes it through', async () => {
   }
 })
 
-test('POST /loadpoints/:name/vehicle: guest (null) / bound name accepted, other → 400, unknown → 404', async () => {
+test('POST /loadpoints/:name/vehicle: null (auto) / "guest" / any configured vehicle accepted, unknown → 400, unknown loadpoint → 404', async () => {
   const calls: Array<[string, string | null]> = []
   const deps = {
-    config: { loadpoints: [{ name: 'garage', charger: 'g', vehicle: 'enyaq' }] },
+    config: {
+      loadpoints: [{ name: 'garage', charger: 'g', vehicle: 'enyaq' }],
+      vehicles: [
+        { name: 'enyaq', type: 'skoda' },
+        { name: 'opel', type: 'manual' },
+      ],
+    },
     loadpoints: new Map([['garage', { name: 'garage' }]]),
     onVehicleOverride: async (name: string, v: string | null) => void calls.push([name, v]),
   } as unknown as ApiDeps
   await withApi(deps, async (baseUrl) => {
     const post = (b: unknown) => postJson(`${baseUrl}/api/loadpoints/garage/vehicle`, b)
-    expect((await post({ vehicle: null })).status).toBe(200) // Guest
-    expect((await post({ vehicle: 'enyaq' })).status).toBe(200) // force the bound car
-    expect((await post({ vehicle: 'someone-else' })).status).toBe(400) // not the bound car
+    expect((await post({ vehicle: null })).status).toBe(200) // Auto (clear the override)
+    expect((await post({ vehicle: 'guest' })).status).toBe(200) // force Guest
+    expect((await post({ vehicle: 'enyaq' })).status).toBe(200) // force an app car
+    expect((await post({ vehicle: 'opel' })).status).toBe(200) // force a manual car
+    expect((await post({ vehicle: 'nobody' })).status).toBe(400) // not a configured vehicle
     expect(
       (await postJson(`${baseUrl}/api/loadpoints/nope/vehicle`, { vehicle: null })).status,
     ).toBe(404)
     expect(calls).toEqual([
       ['garage', null],
+      ['garage', 'guest'],
       ['garage', 'enyaq'],
+      ['garage', 'opel'],
     ])
   })
 })

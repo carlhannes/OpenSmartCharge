@@ -11,9 +11,10 @@ export interface LoadpointState {
   targetKWh?: number
   /** Minimum SoC (%) safety floor — force-charge in smart mode when SoC drops below it. */
   minSoc?: number
-  /** Per-session vehicle-presence override (persisted): 'guest' = force guest, 'vehicle' = force the
-   * bound car; undefined = auto-detect. Reset on unplug. See smart-charging/guest.ts. */
-  guestOverride?: 'guest' | 'vehicle'
+  /** Sticky per-session vehicle override (persisted in the `guest_override` column): 'guest' = force
+   * guest, a vehicle name = force that car; undefined = auto-detect. Persists across unplug — cleared
+   * only when an app-car is auto-detected, or the user changes it. See smart-charging/guest.ts. */
+  vehicleOverride?: string
   connected: boolean
   charging: boolean
   /** Raw OCPP connector status (Available/Preparing/Charging/SuspendedEV/…). Undefined until the
@@ -131,7 +132,7 @@ export function loadLoadpointStates(
       targetTime: row.target_time ?? undefined,
       targetKWh: row.target_kwh ?? undefined,
       minSoc: row.min_soc ?? undefined,
-      guestOverride: (row.guest_override as 'guest' | 'vehicle' | null) ?? undefined,
+      vehicleOverride: row.guest_override ?? undefined,
       connected: false,
       charging: false,
       currentA: 0,
@@ -225,12 +226,12 @@ export function setLoadpointTarget(
   )
 }
 
-// Set (or clear with `null`) the per-session guest override. Full replace — `null` returns to
-// auto-detect. Runtime-only; the lifecycle resets it on unplug. See smart-charging/guest.ts.
-export function setLoadpointGuestOverride(
+// Set (or clear with `null`) the sticky per-session vehicle override. Full replace — `null` returns
+// to auto-detect. Stored in the `guest_override` column. Runtime-only. See smart-charging/guest.ts.
+export function setLoadpointVehicleOverride(
   db: DatabaseSync,
   name: string,
-  override: 'guest' | 'vehicle' | null,
+  override: string | null,
 ): void {
   db.prepare(
     `UPDATE loadpoint_state SET guest_override = ?, updated_at = datetime('now') WHERE name = ?`,

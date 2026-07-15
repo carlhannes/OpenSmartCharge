@@ -41,7 +41,12 @@ import {
   type PlanUnit,
   type DayKey,
 } from '../core/plans.js'
-import { targetToSoc, availableUnits, type EnergyReading } from '../core/smart-charging/energy.js'
+import {
+  targetToSoc,
+  availableUnits,
+  targetUnitsFor,
+  type EnergyReading,
+} from '../core/smart-charging/energy.js'
 
 export interface ApiDeps {
   db: DatabaseSync
@@ -595,25 +600,31 @@ export function createApiRouter(deps: ApiDeps): Router {
       res.status(409).json({ error: `name "${name}" already in use` })
       return
     }
-    if (type !== 'skoda') {
-      res.status(400).json({ error: 'only vehicle type "skoda" is supported' })
+    if (type !== 'skoda' && type !== 'manual') {
+      res.status(400).json({ error: 'vehicle type must be "skoda" or "manual"' })
       return
     }
-    if (!username || !password) {
-      res.status(400).json({ error: 'username and password are required' })
-      return
+    if (type === 'skoda') {
+      if (!username || !password) {
+        res.status(400).json({ error: 'username and password are required' })
+        return
+      }
+      if (vin.length !== 17) {
+        res.status(400).json({ error: 'vin must be 17 characters' })
+        return
+      }
+      setOverride(deps.db, 'vehicle', name, { type, username, password, vin })
+    } else {
+      // manual: a named, API-less car — no credentials, no telemetry (kWh-only, manual selection).
+      setOverride(deps.db, 'vehicle', name, { type })
     }
-    if (vin.length !== 17) {
-      res.status(400).json({ error: 'vin must be 17 characters' })
-      return
-    }
-    setOverride(deps.db, 'vehicle', name, { type, username, password, vin })
     await deps.reconcile.addVehicle(name)
-    void deps.vehicles
-      .get(name)
-      ?.refresh()
-      .catch(() => {}) // background auth + fetch
-    res.status(201).json({ name, type, vin }) // never echo credentials
+    if (type === 'skoda')
+      void deps.vehicles
+        .get(name)
+        ?.refresh()
+        .catch(() => {}) // background auth + fetch (a manual vehicle has nothing to fetch)
+    res.status(201).json({ name, type, ...(type === 'skoda' ? { vin } : {}) }) // never echo credentials
   })
 
   // DELETE /api/vehicles/:name — remove a vehicle + drop its cached data. A loadpoint bound to it
@@ -839,10 +850,11 @@ export function createApiRouter(deps: ApiDeps): Router {
     res.json(deps.loadpoints.get(name))
   })
 
-  // POST /api/loadpoints/:name/vehicle — set the per-session active-vehicle override. Body
-  // { vehicle: string | null }: null = force Guest, or the loadpoint's BOUND vehicle name = force it
-  // (the recourse when the car API wrongly reports unplugged). Any other value → 400 (OSC can only
-  // charge the bound car or a guest — no SoC source for another). Resets to auto-detect on unplug.
+  // POST /api/loadpoints/:name/vehicle — set the sticky active-vehicle override. Body
+  // { vehicle: string | null }: null = Auto (clear the override, let identify decide), "guest" = force
+  // Guest, or a CONFIGURED vehicle name = force that car (a manual/API-less car, or override an
+  // ambiguous auto-detect). Sticky across unplug; superseded when an app-car is auto-detected or the
+  // user changes it.
   router.post('/loadpoints/:name/vehicle', async (req: Request, res: Response) => {
     const name = String(req.params.name)
     if (!deps.loadpoints.has(name)) {
@@ -851,16 +863,13 @@ export function createApiRouter(deps: ApiDeps): Router {
     }
     const v = (req.body as { vehicle?: unknown }).vehicle
     if (v !== null && typeof v !== 'string') {
-      res
-        .status(400)
-        .json({ error: 'vehicle must be a string (the bound vehicle) or null (guest)' })
+      res.status(400).json({ error: 'vehicle must be a string (a vehicle name or "guest") or null (auto)' })
       return
     }
-    const bound = deps.config.loadpoints.find((l) => l.name === name)?.vehicle
-    if (typeof v === 'string' && v !== bound) {
+    if (typeof v === 'string' && v !== 'guest' && !deps.config.vehicles.some((veh) => veh.name === v)) {
       res
         .status(400)
-        .json({ error: `vehicle must be null (guest) or the bound vehicle "${bound ?? ''}"` })
+        .json({ error: `unknown vehicle "${v}" — must be a configured vehicle, "guest", or null (auto)` })
       return
     }
     await deps.onVehicleOverride(name, v)
@@ -942,6 +951,8 @@ export function createApiRouter(deps: ApiDeps): Router {
           health: vehicle.health(),
           data,
           capacityKWh: vehicle.getCachedCapacity() ?? null,
+          capabilities: vehicle.capabilities,
+          targetUnits: targetUnitsFor(vehicle.capabilities),
         }),
       )
       .catch(() =>
@@ -950,6 +961,8 @@ export function createApiRouter(deps: ApiDeps): Router {
           health: vehicle.health(),
           data: null,
           capacityKWh: vehicle.getCachedCapacity() ?? null,
+          capabilities: vehicle.capabilities,
+          targetUnits: targetUnitsFor(vehicle.capabilities),
         }),
       )
   })
@@ -1124,11 +1137,17 @@ export function createApiRouter(deps: ApiDeps): Router {
         type: t.type,
         zone: (t as { zone?: string }).zone,
       })),
-      vehicles: c.vehicles.map((v) => ({
-        name: v.name,
-        type: v.type,
-        vin: (v as { vin?: string }).vin,
-      })),
+      vehicles: c.vehicles.map((v) => {
+        const caps = deps.vehicles.get(v.name)?.capabilities
+        return {
+          name: v.name,
+          type: v.type,
+          vin: (v as { vin?: string }).vin,
+          // Capabilities from the live module instance (drives the UI's target-unit + auto/manual logic).
+          capabilities: caps,
+          targetUnits: caps ? targetUnitsFor(caps) : ['kwh'],
+        }
+      }),
       meterReaders: c.meterReaders.map((m) => ({
         name: m.name,
         type: m.type,

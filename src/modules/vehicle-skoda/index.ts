@@ -101,6 +101,16 @@ registerVehicle({
     return {
       id: cfg.name,
 
+      // Full telemetry via the MySkoda cloud API → all target units + auto-identify.
+      capabilities: {
+        soc: true,
+        range: true,
+        capacity: true,
+        presence: true,
+        climate: true,
+        targetSoc: true,
+      },
+
       refresh,
 
       // Lifecycle post-startup hook: one status-sync poll after a (re)start so an ALREADY-plugged car
