@@ -30,12 +30,17 @@ export function deriveStatus(lp: {
    *  drawing 0 A (suspended: paused for a cheap window, or done at target) — that is NOT "charging". */
   drawing: boolean;
   mode: "off" | "smart" | "fast";
+  /** Backend-resolved session-complete (a real target met, or the car stopped itself after
+   *  delivering). The backend owns this — the client can't tell "done" from "paused" from draw alone. */
+  finished: boolean;
 }): ChargerRuntimeStatus {
   if (!lp.connected) return "unplugged";
-  // Only "charging" when the car is genuinely drawing. An open-but-0 A session (SuspendedEV) means
-  // paused/at-target — fall through to the mode-based paused status so the pill doesn't claim it's
-  // charging when it isn't (e.g. sitting at the 75 % target).
+  // Only "charging" when the car is genuinely drawing — and a drawing car wins over a stale finished
+  // flag (correctness first). An open-but-0 A session (SuspendedEV) is NOT "charging".
   if (lp.charging && lp.drawing) return lp.mode === "fast" ? "fast_charging" : "charging";
+  // Backend says the session is done (target reached / car full) → "Ready", ahead of the paused states
+  // — this is what tells "done" apart from "paused for a cheap window" / "waiting for a mode".
+  if (lp.finished) return "ready";
   if (lp.mode === "off") return "off";
   if (lp.mode === "smart") return "waiting_cheap";
   return "plugged_paused";
@@ -57,14 +62,23 @@ export function mapLoadpoint(lp: LoadpointStateDto, site?: SiteDto): Charger {
       charging: lp.charging,
       drawing: (lp.currentA ?? 0) > 0.5,
       mode,
+      finished: lp.sessionComplete ?? false,
     }),
+    finished: lp.sessionComplete ?? false,
+    // Raw status inputs kept so a later loadpoint.session SSE (which carries only the finished flag)
+    // can recompute status without re-deriving these.
+    connected: lp.connected,
+    charging: lp.charging,
+    drawingA: lp.currentA ?? 0,
     // Resolved active vehicle from the backend (Guest = null); fall back to the static binding until
     // the first tick populates it. boundVehicleId keeps the static binding for the UI's tab set.
     activeVehicleId: lp.activeVehicle !== undefined ? lp.activeVehicle : boundVehicle,
     boundVehicleId: boundVehicle,
     // Power comes from the backend (3-phase MeterValues), NOT recomputed single-phase here.
     currentPowerW: lp.powerW ?? Math.round(lp.currentA * VOLTAGE),
-    sessionKwh: lp.sessionEnergyKWh,
+    // Session total = the peak-hold delivered kWh (survives the transaction churn); the live
+    // per-transaction value is the fallback until the first tick populates deliveredKWh.
+    sessionKwh: lp.deliveredKWh ?? lp.sessionEnergyKWh,
     sessionStart: null,
     guestTargetKwh: lp.targetKWh ?? null,
     minSoc: lp.minSoc ?? null,

@@ -211,25 +211,44 @@ export function useLiveSync() {
             currentA: number;
             powerW: number;
             sessionEnergyKWh: number;
+            sessionComplete?: boolean;
+            deliveredKWh?: number;
           };
           const cur = useOsc.getState().chargers.find((c) => c.id === e.name);
           const mode = cur?.mode ?? "smart";
+          const finished = e.sessionComplete ?? false;
           useOsc.getState().patchCharger(e.name, {
             status: deriveStatus({
               connected: e.connected,
               charging: e.charging,
               drawing: (e.currentA ?? 0) > 0.5,
               mode,
+              finished,
             }),
+            finished,
+            connected: e.connected,
+            charging: e.charging,
+            drawingA: e.currentA ?? 0,
             currentPowerW: e.powerW ?? Math.round(e.currentA * 230), // backend 3-phase power, not single-phase
-            sessionKwh: e.sessionEnergyKWh,
+            sessionKwh: e.deliveredKWh ?? e.sessionEnergyKWh,
           });
         }),
         subscribe("loadpoint.mode", (d) => {
           const e = d as { name: string; mode: api.ChargeMode };
           const mode: Charger["mode"] = e.mode === "disabled" ? "off" : e.mode;
+          const cur = useOsc.getState().chargers.find((c) => c.id === e.name);
           const patch: Partial<Charger> = { mode };
-          if (mode === "off") patch.status = "off";
+          // Recompute status from the current raw inputs so a mode change doesn't clobber "ready"
+          // (a completed session stays Ready); fall back to "off" only before we have the charger.
+          if (cur)
+            patch.status = deriveStatus({
+              connected: cur.connected,
+              charging: cur.charging,
+              drawing: cur.drawingA > 0.5,
+              mode,
+              finished: cur.finished,
+            });
+          else if (mode === "off") patch.status = "off";
           useOsc.getState().patchCharger(e.name, patch);
         }),
         subscribe("loadpoint.target", (d) => {
@@ -242,6 +261,28 @@ export function useLiveSync() {
         subscribe("loadpoint.activeVehicle", (d) => {
           const e = d as { name: string; activeVehicle: string | null };
           useOsc.getState().patchCharger(e.name, { activeVehicleId: e.activeVehicle });
+        }),
+        subscribe("loadpoint.session", (d) => {
+          const e = d as { name: string; complete: boolean; deliveredKWh: number };
+          const cur = useOsc.getState().chargers.find((c) => c.id === e.name);
+          // Tick-derived: the session-complete flag + the peak-hold delivered total. Recompute status
+          // from the stored raw inputs (this event carries only the finished flag), so "Ready" surfaces
+          // even when meter frames stop once the car idles at 0 A.
+          useOsc.getState().patchCharger(e.name, {
+            finished: e.complete,
+            sessionKwh: e.deliveredKWh,
+            ...(cur
+              ? {
+                  status: deriveStatus({
+                    connected: cur.connected,
+                    charging: cur.charging,
+                    drawing: cur.drawingA > 0.5,
+                    mode: cur.mode,
+                    finished: e.complete,
+                  }),
+                }
+              : {}),
+          });
         }),
         subscribe("vehicle.poll", (d) => {
           const e = d as { name: string; soc: number };

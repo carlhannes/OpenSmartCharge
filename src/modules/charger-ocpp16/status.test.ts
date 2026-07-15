@@ -25,21 +25,25 @@ test('computeConnectionState: an unknown status counts as connected but not char
   expect(computeConnectionState('SomethingNew')).toEqual({ charging: false, connected: true })
 })
 
-test('shouldAutoStartTransaction: Preparing + no active tx + enabled → true', () => {
-  expect(shouldAutoStartTransaction('Preparing', false, true)).toBe(true)
+test('shouldAutoStartTransaction: Preparing + no active tx + enabled + not-yet-started → true', () => {
+  expect(shouldAutoStartTransaction('Preparing', false, true, false)).toBe(true)
 })
 
 test('shouldAutoStartTransaction: disabled → false', () => {
-  expect(shouldAutoStartTransaction('Preparing', false, false)).toBe(false)
+  expect(shouldAutoStartTransaction('Preparing', false, false, false)).toBe(false)
 })
 
 test('shouldAutoStartTransaction: a transaction is already active → false', () => {
-  expect(shouldAutoStartTransaction('Preparing', true, true)).toBe(false)
+  expect(shouldAutoStartTransaction('Preparing', true, true, false)).toBe(false)
+})
+
+test('shouldAutoStartTransaction: already auto-started this plug-in → false (no re-churn on a full car)', () => {
+  expect(shouldAutoStartTransaction('Preparing', false, true, true)).toBe(false)
 })
 
 test('shouldAutoStartTransaction: non-Preparing status → false', () => {
-  expect(shouldAutoStartTransaction('Charging', false, true)).toBe(false)
-  expect(shouldAutoStartTransaction('Available', false, true)).toBe(false)
+  expect(shouldAutoStartTransaction('Charging', false, true, false)).toBe(false)
+  expect(shouldAutoStartTransaction('Available', false, true, false)).toBe(false)
 })
 
 test('computeHealth: no registered stations → ok', () => {

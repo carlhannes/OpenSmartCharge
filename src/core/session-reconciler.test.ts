@@ -149,6 +149,25 @@ test('trusts the car: reports charging (near-full taper) or at its own ceiling �
   expect(full.next).toEqual(fresh)
 })
 
+test('sessionComplete (guest-capable) → no recovery, episode resets, even with a stalled episode', () => {
+  // The guest full-car case: no car telemetry (carAtTarget stays false), status latched, 0 A — but the
+  // lifecycle-derived sessionComplete says "done", so the reconciler must NOT resume/restart (no churn).
+  const mid: SessionReconcilerState = {
+    stalledSinceMs: 0,
+    lastActionMs: 100_000,
+    phaseAttempts: 2,
+    totalActions: 3,
+    phase: 'session-open',
+  }
+  const done = decideSession(
+    mid,
+    input({ status: 'Charging', carCharging: undefined, sessionComplete: true, now: 400_000 }),
+    cfg,
+  )
+  expect(done.action.kind).toBe('none')
+  expect(done.next).toEqual(fresh)
+})
+
 test('escalates through the full session-open ladder, clamps at reset, then gives up at the cap', () => {
   const at = (state: SessionReconcilerState, now: number) =>
     decideSession(state, input({ status: 'SuspendedEV', carCharging: false, now }), cfg)

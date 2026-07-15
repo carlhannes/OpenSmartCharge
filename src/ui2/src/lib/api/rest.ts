@@ -19,6 +19,12 @@ export interface LoadpointStateDto {
   powerW: number; // instantaneous draw (W) from MeterValues; 0 when not charging
   sessionEnergyKWh: number;
   maxCurrentA: number;
+  /** kWh delivered this plug-in, peak-held across the OCPP transaction churn — the session total to
+   *  display (survives the empty-session churn that zeroes sessionEnergyKWh). Undefined pre-first-tick. */
+  deliveredKWh?: number;
+  /** The session has completed — a real SoC/%/km target was met, or the car stopped accepting charge
+   *  on its own after delivering energy. Drives the UI "Ready" state. Undefined pre-first-tick. */
+  sessionComplete?: boolean;
   /** Resolved vehicle present this session: the bound car's name, or null (guest); undefined pre-first-tick. */
   activeVehicle?: string | null;
   availableTargetUnits?: PlanDto["unit"][]; // units the data can back now (kwh always; pct/km need car data)

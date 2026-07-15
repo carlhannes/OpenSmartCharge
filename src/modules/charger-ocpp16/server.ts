@@ -67,6 +67,9 @@ interface StationState {
   connectorId: number
   statusCallbacks: Set<StatusCallback>
   autoStartTransaction: boolean
+  /** Auto-start fires ONCE per plug-in; reset to false on a genuine Available (unplug). Keeps a full
+   *  car that cycles Preparing↔Charging (cable still in) from churning fresh empty transactions. */
+  hasAutoStarted: boolean
 }
 
 export class OcppServer {
@@ -322,6 +325,7 @@ export class OcppServer {
       connectorId: 1,
       statusCallbacks: this.subsFor(stationId), // persistent set — survives reconnects
       autoStartTransaction,
+      hasAutoStarted: false, // re-armed each connect; an in-progress tx is guarded by activeTransactionId
       // Rehydrate any in-progress transaction from SQLite: on an OSC restart or a bare WS
       // reconnect the charger does NOT re-send StartTransaction, so without this the in-memory id
       // is lost (remoteStop breaks, meter values get dropped). MeterValues below re-adopt the
@@ -436,6 +440,10 @@ export class OcppServer {
       // and findOpenTransaction won't keep re-surfacing the stale id on future reconnects. This is
       // the safe, unambiguous case (cable out); a stale id while Preparing/SuspendedEV is handled by
       // the SessionReconciler, which re-starts level-triggered rather than guessing here.
+      // A genuine unplug (Available) re-arms the once-per-plug-in auto-start for the NEXT car; the
+      // cable staying in (Preparing/Charging/SuspendedEV cycling) never resets it, so a full car can't
+      // re-churn.
+      if (p.status === 'Available') state.hasAutoStarted = false
       if (p.status === 'Available' && state.activeTransactionId !== undefined) {
         const staleId = state.activeTransactionId
         state.activeTransactionId = undefined
@@ -453,14 +461,18 @@ export class OcppServer {
         charging,
       })
 
-      // Auto-start: send RemoteStartTransaction when vehicle plugs in and no tx is active
+      // Auto-start: send RemoteStartTransaction when a vehicle plugs in and no tx is active — once per
+      // plug-in (see shouldAutoStartTransaction). Mark it fired so a full car cycling back to Preparing
+      // doesn't re-open an empty transaction; the reconciler owns any legitimate re-start.
       if (
         shouldAutoStartTransaction(
           p.status,
           !!state.activeTransactionId,
           state.autoStartTransaction,
+          state.hasAutoStarted,
         )
       ) {
+        state.hasAutoStarted = true
         this.log.info({ stationId }, 'auto-starting transaction')
         setImmediate(() => {
           void remoteStart(state.client, 'osc-auto', p.connectorId).catch((err) =>

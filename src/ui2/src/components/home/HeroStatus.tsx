@@ -1,5 +1,6 @@
 import { useOsc } from "@/lib/mock/store";
 import { statusLabel } from "@/lib/copy";
+import { fmtKWh } from "@/lib/format";
 import { resolveActivePlan } from "@/lib/plan";
 
 export function HeroStatus() {
@@ -31,7 +32,8 @@ export function HeroStatus() {
     sub = "Charging will start on the next low-price hour.";
   } else if (primary.status === "ready") {
     headline = "Ready to go";
-    sub = "Target reached.";
+    // Show what was delivered (works for a guest with no target too); fall back to the generic line.
+    sub = primary.sessionKwh > 0 ? `Charged ${fmtKWh(primary.sessionKwh)}.` : "Target reached.";
   } else if (primary.status === "plugged_paused") sub = "Plug detected — waiting for a mode.";
   else if (primary.status === "off") sub = "This charger is turned off.";
   else if (primary.status === "fast_charging") headline = "Charging fast";

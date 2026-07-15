@@ -17,15 +17,19 @@ export function computeConnectionState(status: string): { charging: boolean; con
 }
 
 /**
- * Auto-start-transaction fires once when a vehicle plugs in (`Preparing`) and no transaction is
- * already active, provided the charger has `autoStartTransaction` enabled.
+ * Auto-start-transaction fires ONCE per plug-in when a vehicle plugs in (`Preparing`) and no
+ * transaction is already active, provided the charger has `autoStartTransaction` enabled and it
+ * hasn't already auto-started this plug-in (`alreadyAutoStarted` resets on a genuine unplug). The
+ * once-per-plug-in guard stops a full car — which cycles Preparing↔Charging with the cable still in —
+ * from churning empty transactions; any legitimate re-start after the first is the reconciler's job.
  */
 export function shouldAutoStartTransaction(
   status: string,
   hasActiveTransaction: boolean,
   enabled: boolean,
+  alreadyAutoStarted: boolean,
 ): boolean {
-  return status === 'Preparing' && !hasActiveTransaction && enabled
+  return status === 'Preparing' && !hasActiveTransaction && enabled && !alreadyAutoStarted
 }
 
 /**

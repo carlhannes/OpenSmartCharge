@@ -54,6 +54,8 @@ import { resolveCurrentBudget } from './smart-charging/current.js'
 import { decideShouldCharge, forceMinSoc, forceClimate } from './smart-charging/decide.js'
 import { shouldPollVehicle } from './smart-charging/vehicle-poll.js'
 import { resolveActiveVehicle } from './smart-charging/guest.js'
+import { resolveSessionComplete, SESSION_COMPLETE } from './smart-charging/session-complete.js'
+import type { EnergyRung } from './smart-charging/types.js'
 import {
   buildCircuits,
   circuitForLoadpoint,
@@ -325,6 +327,10 @@ async function main() {
         currentA: state.currentA,
         powerW: state.powerW,
         sessionEnergyKWh: state.sessionEnergyKWh,
+        // Tick-derived (set by circuitTick); carried here so the frequent meter-frame path keeps the
+        // UI's "Ready" + session total fresh between the slower control ticks.
+        sessionComplete: state.sessionComplete ?? false,
+        deliveredKWh: state.deliveredKWh ?? state.sessionEnergyKWh,
       })
     })
     chargerUnsubs.set(lpCfg.name, unsub)
@@ -420,6 +426,10 @@ async function main() {
   // when the decision actually changes, not every ~30 s tick with an identical frame.
   const lastResolveByLoadpoint = new Map<string, string>()
   const lastActiveVehicleByLoadpoint = new Map<string, string | null>()
+  const lastSessionByLoadpoint = new Map<string, string>()
+  // Settle-timer anchor for session-complete: ms epoch the car first went ~0 A while we were offering
+  // current (per loadpoint), threaded across ticks; cleared when it draws, we stop offering, or unplug.
+  const zeroDrawSince = new Map<string, number>()
 
   // On a FAILED warranted poll, retry with capped exponential backoff (seconds→minutes) instead of
   // waiting the full 15 min idle cadence — so a transient car-API outage recovers fast when it
@@ -689,6 +699,10 @@ async function main() {
     activeVehicle: string | null
     pricesAvailable: boolean
     sources: { energy: string; price: string; current: string }
+    /** kWh still needed for the resolved target (0 = met) — for session-complete detection. */
+    requiredKWh: number
+    /** The car is preconditioning while plugged — never "complete" while true. */
+    climateActive: boolean
   }
 
   // Resolve a loadpoint's charge decision + current budget through the degradation ladders.
@@ -819,6 +833,8 @@ async function main() {
       activeVehicle: ectx.activeVehicle,
       pricesAvailable: !price.degraded,
       sources: { energy: energy.source, price: price.source, current: circuitBudget.source },
+      requiredKWh: energy.requiredKWh,
+      climateActive: ectx.climateActive ?? false,
     }
   }
 
@@ -935,11 +951,18 @@ async function main() {
         if (availableSince.get(lp.name) !== undefined) {
           vehicleAnchor.delete(lp.name)
           sessionFirstReading.delete(lp.name)
+          st.deliveredKWh = 0
+          st.sessionComplete = false
+          zeroDrawSince.delete(lp.name)
           if (st.guestOverride !== undefined) {
             st.guestOverride = undefined
             setLoadpointGuestOverride(db, lp.name, null)
           }
         }
+        // Peak-hold the energy delivered this plug-in: the live sessionEnergyKWh is zeroed on every
+        // OCPP StartTransaction/StopTransaction (the empty-session churn), so ratchet the max here.
+        // Reset to 0 above on a genuine unplug; within a plug-in it only climbs.
+        st.deliveredKWh = Math.max(st.deliveredKWh ?? 0, st.sessionEnergyKWh)
         // Fast is a boost until the car is unplugged: once the connector has been Available past the
         // grace, revert to smart (persist + emit). Brief unplugs / WS blips / restarts keep Fast.
         if (
@@ -1085,6 +1108,35 @@ async function main() {
         // "recover" a full car). Uses the car's OWN targetSoc — the real physical limit.
         const carAtTarget =
           carData?.soc != null && carData.targetSoc != null && carData.soc >= carData.targetSoc
+        // Session complete? — the guest-capable generalization of carAtTarget (needs no car telemetry).
+        // Threads its own settle timer across ticks; drives BOTH the reconciler guard below and the UI.
+        const scRes = resolveSessionComplete(
+          {
+            connected: r.state.connected,
+            climateActive: r.climateActive,
+            deliveredKWh: r.state.deliveredKWh ?? 0,
+            commandedA,
+            drawingA: r.state.currentA,
+            requiredKWh: r.requiredKWh,
+            energySource: r.sources.energy as EnergyRung,
+            zeroDrawSinceMs: zeroDrawSince.get(lpId),
+            now: sessionNowMs,
+          },
+          SESSION_COMPLETE,
+        )
+        r.state.sessionComplete = scRes.complete
+        if (scRes.zeroDrawSinceMs === undefined) zeroDrawSince.delete(lpId)
+        else zeroDrawSince.set(lpId, scRes.zeroDrawSinceMs)
+        // Change-guarded SSE (mirrors loadpoint.resolve/activeVehicle) — the UI's "Ready" + kWh total.
+        const sessionKey = `${scRes.complete}:${(r.state.deliveredKWh ?? 0).toFixed(1)}`
+        if (lastSessionByLoadpoint.get(lpId) !== sessionKey) {
+          lastSessionByLoadpoint.set(lpId, sessionKey)
+          events.emit('loadpoint.session', {
+            name: lpId,
+            complete: scRes.complete,
+            deliveredKWh: r.state.deliveredKWh ?? 0,
+          })
+        }
         const dec = decideSession(
           sessionStates.get(lpId) ?? { phaseAttempts: 0, totalActions: 0 },
           {
@@ -1094,6 +1146,7 @@ async function main() {
             carPluggedIn: carData?.pluggedIn,
             carCharging: carData?.isCharging,
             carAtTarget,
+            sessionComplete: scRes.complete,
             vehicleCanActuate: typeof vehicle?.startCharging === 'function',
             chargerCanRemoteStart: typeof charger.remoteStart === 'function',
             chargerCanClearProfile: typeof charger.clearChargingProfile === 'function',

@@ -98,6 +98,11 @@ export interface SessionInput {
    *  smart mode `wantsCharge` already goes false at target; this covers FAST mode, which commands
    *  current unconditionally. Prevents fighting (or resetting) a car that is simply full. */
   carAtTarget?: boolean
+  /** The plug-in session has completed — a real SoC target was met, or the car itself stopped taking
+   *  charge after delivering energy. The GUEST-CAPABLE generalization of `carAtTarget` (needs no car
+   *  telemetry): the lifecycle derives it from OCPP draw + the resolved target. When true there is
+   *  nothing to recover — do not resume/restart. See smart-charging/session-complete.ts. */
+  sessionComplete?: boolean
   /** Feature-detect: the vehicle exposes a car-side start (Vehicle.startCharging). */
   vehicleCanActuate: boolean
   /** Feature-detect: the charger exposes RemoteStart/Stop. */
@@ -185,12 +190,14 @@ export function decideSession(
   //  - actually drawing,
   //  - the car reports it IS charging (trust it — a near-full taper can sit below minDrawA),
   //  - the car has hit its own care ceiling (won't take more — the FAST-mode full-car case),
+  //  - the session is complete (target met, or the car stopped itself — the guest-capable case),
   //  - the connector is genuinely idle (Available + not plugged).
   if (
     !input.wantsCharge ||
     drawing ||
     input.carCharging === true ||
     input.carAtTarget === true ||
+    input.sessionComplete === true ||
     genuinelyIdle
   ) {
     return { action: { kind: 'none' }, next: { ...idleState } }

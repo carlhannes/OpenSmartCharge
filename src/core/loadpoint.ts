@@ -39,6 +39,15 @@ export interface LoadpointState {
   /** Resolved vehicle present this session: the bound car's name, or null (guest). Resolver-derived,
    * recomputed each tick, not persisted; undefined until the first tick. See smart-charging/guest.ts. */
   activeVehicle?: string | null
+  /** The current plug-in session has completed — a real SoC target was reached, or the car itself
+   * stopped accepting charge after delivering energy. Recomputed each tick, not persisted; reset on
+   * unplug. Silences the SessionReconciler and drives the UI "Ready" state. See
+   * smart-charging/session-complete.ts. */
+  sessionComplete?: boolean
+  /** kWh delivered this plug-in, peak-held across the OCPP transaction churn that zeroes the live
+   * `sessionEnergyKWh`. Tick-derived, not persisted; reset on unplug. The display total + the
+   * "delivered something" gate for `sessionComplete`. */
+  deliveredKWh?: number
 }
 
 /** The live, charger-driven subset of loadpoint state. */

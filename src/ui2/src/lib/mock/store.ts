@@ -33,6 +33,11 @@ export interface Charger {
   maxAmps: number;
   mode: Mode;
   status: ChargerRuntimeStatus;
+  finished: boolean; // backend-resolved session-complete → the "ready" status (live only)
+  // Raw status inputs kept so `status` recomputes from either SSE event (live only); demo sets status directly.
+  connected: boolean;
+  charging: boolean;
+  drawingA: number;
   activeVehicleId: string | null; // resolved active vehicle from the backend; null = Guest
   boundVehicleId?: string | null; // the loadpoint's configured vehicle binding (live only; static)
   currentPowerW: number;
@@ -174,6 +179,10 @@ function seed(): Pick<
     maxAmps: 16,
     mode: "smart",
     status: "waiting_cheap",
+    finished: false,
+    connected: true,
+    charging: false,
+    drawingA: 0,
     activeVehicleId: vehicle.id,
     currentPowerW: 0,
     sessionKwh: 0,
@@ -335,6 +344,10 @@ export const useOsc = create<OscState>()((set, get) => ({
       maxAmps,
       mode: "smart",
       status: "unplugged",
+      finished: false,
+      connected: false,
+      charging: false,
+      drawingA: 0,
       activeVehicleId: null,
       currentPowerW: 0,
       sessionKwh: 0,
