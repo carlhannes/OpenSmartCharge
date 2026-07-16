@@ -70,6 +70,13 @@ Each entry: **Symptom** (what was seen) · **Evidence** · **Where** · **Root c
   next-24h-from-now. Principle (owner's call, 2026-07-14): **everything is derived from the backend — no
   price/plan logic on the client.**
 - **Severity:** medium — display-only. The backend charges correctly; the chart just misleads.
+- **Resolved (2026-07-16, `feat/ocpp-zaptec-charging`):** the backend now exposes the planner's real
+  forward schedule via `GET /api/loadpoints/:name/plan` — the tick stores the schedule it already computes
+  (`state.plannedSlots`, from `decideShouldCharge`), and `buildPlanSeries` (`src/core/planner.ts`) merges it
+  with a 24 h price fetch. `Timeline24h.tsx` renders those backend slots on a true rolling now→now+24 h axis;
+  the client-side `cheapWindows` guess is deleted from the live path (demo mode synthesizes its own,
+  deadline-aware, slots). The shaded charge window is now the cheapest hours BEFORE the ready-by, matching
+  `resolve.shouldChargeNow`.
 
 ---
 

@@ -42,6 +42,7 @@ import {
   type PlanUnit,
   type DayKey,
 } from '../core/plans.js'
+import { buildPlanSeries } from '../core/planner.js'
 import {
   targetToSoc,
   availableUnits,
@@ -706,6 +707,32 @@ export function createApiRouter(deps: ApiDeps): Router {
     }
     const reading = await vehicleReadingForLoadpoint(name)
     res.json(listPlans(deps.db, name).map((p) => toPlanDto(p, reading)))
+  })
+
+  // GET /api/loadpoints/:name/plan — the smart-charging FORWARD SCHEDULE for the UI "price & plan" chart:
+  // the next-24h price series with each slot flagged `shouldCharge` per the live plan the tick computed
+  // (`state.plannedSlots`). Distinct from `/plans` (the recurring plan DEFINITIONS above) and from
+  // `/composite-schedule` (the charger's OCPP amp limit). Derived entirely on the backend — the client
+  // no longer guesses a "cheap window" from prices.
+  router.get('/loadpoints/:name/plan', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    const state = deps.loadpoints.get(name)
+    if (!state) {
+      res.status(404).json({ error: 'loadpoint not found' })
+      return
+    }
+    const now = new Date()
+    const to = new Date(now.getTime() + 24 * 3600_000)
+    const tariffName = deps.config.loadpoints.find((l) => l.name === name)?.tariff
+    const tariff = tariffName ? deps.tariffs.get(tariffName) : undefined
+    const prices = tariff ? await tariff.prices(now, to).catch(() => []) : []
+    res.json({
+      now,
+      readyBy: state.planReadyBy != null ? new Date(state.planReadyBy) : null,
+      window: { from: now, to },
+      mode: state.mode,
+      slots: buildPlanSeries(prices, state.plannedSlots ?? [], state.mode),
+    })
   })
 
   // POST /api/loadpoints/:name/plans — create a plan

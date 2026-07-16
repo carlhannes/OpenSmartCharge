@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { ChargeMode, Config } from './config.js'
 import type { ChargerStatus } from '../sdk/charger.js'
+import type { PlannedSlot } from './planner.js'
 
 export interface LoadpointState {
   name: string
@@ -49,6 +50,14 @@ export interface LoadpointState {
    * `sessionEnergyKWh`. Tick-derived, not persisted; reset on unplug. The display total + the
    * "delivered something" gate for `sessionComplete`. */
   deliveredKWh?: number
+  /** The smart-mode forward charge schedule (cheapest 15-min slots to the deadline) computed this tick —
+   * the SAME array `decideShouldCharge` reads `shouldChargeNow` from. Exposed via
+   * GET /api/loadpoints/:name/plan for the UI "price & plan" chart; empty in fast/disabled (mode decides)
+   * or when the target is already met. Tick-derived, not persisted; reset on unplug. */
+  plannedSlots?: PlannedSlot[]
+  /** The active plan's / ad-hoc target's real ready-by (ms epoch), or null when it defaulted to now+24h
+   * (no deadline set). Drives the chart's ready-by marker. Tick-derived, not persisted; reset on unplug. */
+  planReadyBy?: number | null
 }
 
 /** The live, charger-driven subset of loadpoint state. */

@@ -11,19 +11,3 @@ export function generatePrices(seed = 0): number[] {
   }
   return out;
 }
-
-export function cheapWindows(prices: number[], threshold?: number): [number, number][] {
-  const t = threshold ?? prices.slice().sort((a, b) => a - b)[Math.floor(prices.length * 0.35)];
-  const wins: [number, number][] = [];
-  let start: number | null = null;
-  for (let i = 0; i < prices.length; i++) {
-    if (prices[i] <= t) {
-      if (start === null) start = i;
-    } else if (start !== null) {
-      wins.push([start, i]);
-      start = null;
-    }
-  }
-  if (start !== null) wins.push([start, prices.length]);
-  return wins;
-}

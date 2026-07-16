@@ -9,6 +9,7 @@ import {
   mapHealth,
   mapMeterWatts,
   mapPrices,
+  mapLoadpointPlan,
   mapTransactions,
   deriveStatus,
   currencySymbol,
@@ -19,6 +20,18 @@ const next24h = () => {
   const now = new Date();
   return { now, to: new Date(now.getTime() + 24 * 3600000) };
 };
+
+/** Refetch one loadpoint's price+plan chart data (backend-derived). */
+async function refetchLoadpointPlan(name: string) {
+  try {
+    useOsc.getState().setLoadpointPlan(name, mapLoadpointPlan(await api.getLoadpointPlan(name)));
+  } catch {
+    /* plan optional */
+  }
+}
+function refetchAllLoadpointPlans() {
+  for (const c of useOsc.getState().chargers) void refetchLoadpointPlan(c.id);
+}
 
 /** Apply balancer allocations → per-charger `constraintAmps` (only when actually below max). */
 function applyAllocations(alloc: Record<string, number> | null) {
@@ -162,6 +175,16 @@ export function useLiveSync() {
           }
         }
 
+        // Per-loadpoint charge plan (price series + schedule) for the charger "price & plan" chart.
+        for (const lp of site.loadpoints) {
+          try {
+            const p = await api.getLoadpointPlan(lp.name);
+            if (!cancelled) store.setLoadpointPlan(lp.name, mapLoadpointPlan(p));
+          } catch {
+            /* plan optional */
+          }
+        }
+
         for (const b of site.balancers) {
           try {
             const bs = await api.getBalancer(b.name);
@@ -244,6 +267,7 @@ export function useLiveSync() {
             });
           else if (mode === "off") patch.status = "off";
           useOsc.getState().patchCharger(e.name, patch);
+          void refetchLoadpointPlan(e.name); // mode change reshapes the plan (smart vs fast/off)
         }),
         subscribe("loadpoint.target", (d) => {
           const e = d as { name: string; targetKWh?: number; minSoc?: number };
@@ -251,10 +275,12 @@ export function useLiveSync() {
             guestTargetKwh: e.targetKWh ?? null,
             minSoc: e.minSoc ?? null,
           });
+          void refetchLoadpointPlan(e.name); // target/deadline change reshapes the plan
         }),
         subscribe("loadpoint.activeVehicle", (d) => {
           const e = d as { name: string; activeVehicle: string | null };
           useOsc.getState().patchCharger(e.name, { activeVehicleId: e.activeVehicle });
+          void refetchLoadpointPlan(e.name); // a different car → different target/plan
         }),
         subscribe("loadpoint.session", (d) => {
           const e = d as { name: string; complete: boolean; deliveredKWh: number };
@@ -293,9 +319,11 @@ export function useLiveSync() {
             .getTariffPrices(e.name, now, to)
             .then((slots) => useOsc.getState().hydrate({ prices: mapPrices(slots) }))
             .catch(() => {});
+          refetchAllLoadpointPlans(); // prices changed → every loadpoint's plan reshapes
         }),
         subscribe("loadpoint.plans", () => {
           void refetchAllPlans();
+          refetchAllLoadpointPlans(); // plan definitions changed → schedules reshape
         }),
         subscribe("settings.changed", (d) => {
           const e = d as { timezone: string };

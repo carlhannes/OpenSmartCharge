@@ -54,6 +54,7 @@ import { resolveTarget, type Target } from './smart-charging/energy.js'
 import { resolvePriceCurve } from './smart-charging/price.js'
 import { resolveCurrentBudget } from './smart-charging/current.js'
 import { decideShouldCharge, forceMinSoc, forceClimate } from './smart-charging/decide.js'
+import type { PlannedSlot } from './planner.js'
 import { shouldPollVehicle } from './smart-charging/vehicle-poll.js'
 import { resolveActiveVehicle, positiveClaimant } from './smart-charging/guest.js'
 import { resolveSessionComplete, SESSION_COMPLETE } from './smart-charging/session-complete.js'
@@ -776,6 +777,9 @@ async function main() {
         ? parseTargetTime(state.targetTime, tz)
         : new Date(now.getTime() + 24 * 3600_000)
     const hoursUntilTarget = Math.max(0.25, (targetTime.getTime() - now.getTime()) / 3_600_000)
+    // A real deadline exists only when a plan or an ad-hoc target time is set; otherwise targetTime
+    // defaulted to now+24h and there's no ready-by to mark on the chart.
+    const hasRealDeadline = activePlan != null || state.targetTime != null
 
     const balancerCfg = lpCfg.balancer
       ? config.balancers.find((b) => b.name === lpCfg.balancer)
@@ -825,8 +829,10 @@ async function main() {
     const belowMinSoc = forceMinSoc(estimatedSocPct, state.minSoc)
     let shouldChargeNow: boolean | undefined
     let climateOnly = false
+    // The smart-mode forward schedule for the UI plan chart; stays [] in fast/disabled (mode decides).
+    let plannedSlots: PlannedSlot[] = []
     if (state.mode === 'smart') {
-      const priceDecision = decideShouldCharge({
+      const { shouldCharge: priceDecision, plannedSlots: planned } = decideShouldCharge({
         requiredKWh: energy.requiredKWh,
         now,
         targetTime,
@@ -834,6 +840,7 @@ async function main() {
         phases,
         priceSlots: price.value,
       })
+      plannedSlots = planned
       // Preconditioning: if the car is climatising while plugged in, force-charge to feed that load
       // from the grid rather than the battery — overrides both the price wait and a reached target.
       const climateForce = forceClimate(ectx.climateActive, state.connected)
@@ -863,6 +870,10 @@ async function main() {
     } else {
       minSocWarned.delete(lpCfg.name)
     }
+
+    // Surface the forward schedule + the real ready-by for the UI "price & plan" chart (GET .../plan).
+    state.plannedSlots = plannedSlots
+    state.planReadyBy = hasRealDeadline ? targetTime.getTime() : null
 
     return {
       state,
@@ -995,6 +1006,8 @@ async function main() {
           sessionFirstReading.delete(lp.name)
           st.deliveredKWh = 0
           st.sessionComplete = false
+          st.plannedSlots = []
+          st.planReadyBy = null
           zeroDrawSince.delete(lp.name)
         }
         // Peak-hold the energy delivered this plug-in: the live sessionEnergyKWh is zeroed on every

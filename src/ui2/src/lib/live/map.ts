@@ -10,6 +10,7 @@ import type {
 } from "@/lib/mock/store";
 import type {
   LoadpointStateDto,
+  LoadpointPlanDto,
   PlanDto,
   SiteDto,
   VehicleStateDto,
@@ -100,6 +101,29 @@ export function mapPlan(dto: PlanDto): Plan {
     vehicles: dto.vehicles ?? [],
     pauseOnTarget: dto.pauseOnTarget ?? true,
     resolvedSoc: dto.resolvedSoc,
+  };
+}
+
+// The charger "price & plan" chart data, in epoch-ms so the chart maps everything onto one time axis
+// (fixes the old clock-hour-bucket axis). `charge` slots are the backend planner's real selection.
+export interface MappedLoadpointPlan {
+  readyByMs: number | null;
+  fromMs: number;
+  toMs: number;
+  slots: { startMs: number; endMs: number; price: number; charge: boolean }[];
+}
+
+export function mapLoadpointPlan(dto: LoadpointPlanDto): MappedLoadpointPlan {
+  return {
+    readyByMs: dto.readyBy ? Date.parse(dto.readyBy) : null,
+    fromMs: Date.parse(dto.window.from),
+    toMs: Date.parse(dto.window.to),
+    slots: dto.slots.map((s) => ({
+      startMs: Date.parse(s.start),
+      endMs: Date.parse(s.end),
+      price: s.pricePerKWh,
+      charge: s.shouldCharge,
+    })),
   };
 }
 

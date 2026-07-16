@@ -1,4 +1,5 @@
 import type { TariffSlot } from '../sdk/tariff.js'
+import type { ChargeMode } from './config.js'
 import { chargeRateKW } from './electrical.js'
 
 export interface PlannerInput {
@@ -61,6 +62,41 @@ function cheapestSlotsPlan(
     start: slot.start,
     end: slot.end,
     shouldCharge: cheapestStarts.has(slot.start.toISOString()),
+  }))
+}
+
+export interface PlanSeriesSlot {
+  start: Date
+  end: Date
+  pricePerKWh: number
+  shouldCharge: boolean
+}
+
+/**
+ * Merge a price series with the planner's chosen slots into one time-aligned series for the UI
+ * "price & plan" chart. One entry per price slot; `shouldCharge` is:
+ *   - fast     → always (charges whenever it can),
+ *   - disabled → never,
+ *   - smart    → a chosen plan slot OVERLAPS this price slot.
+ * Plan slots are 15-min while prices are typically hourly, but equal-priced sub-slots are always
+ * selected together by `plan()`, so the roll-up onto the price grid is lossless.
+ */
+export function buildPlanSeries(
+  prices: TariffSlot[],
+  plannedSlots: PlannedSlot[],
+  mode: ChargeMode,
+): PlanSeriesSlot[] {
+  const charging = plannedSlots.filter((s) => s.shouldCharge)
+  return prices.map((p) => ({
+    start: p.start,
+    end: p.end,
+    pricePerKWh: p.pricePerKWh,
+    shouldCharge:
+      mode === 'fast'
+        ? true
+        : mode === 'disabled'
+          ? false
+          : charging.some((s) => s.start < p.end && s.end > p.start),
   }))
 }
 

@@ -1,4 +1,4 @@
-import { plan } from '../planner.js'
+import { plan, type PlannedSlot } from '../planner.js'
 import type { TariffSlot } from '../../sdk/tariff.js'
 
 export interface DecideInputs {
@@ -12,6 +12,15 @@ export interface DecideInputs {
   priceSlots: TariffSlot[]
 }
 
+export interface DecideResult {
+  /** Whether to charge in the current slot (drives `shouldChargeNow`). */
+  shouldCharge: boolean
+  /** The forward cheapest-slots schedule this decision was based on — the SAME array the current-slot
+   *  decision is read from, surfaced so the UI can render the real plan (GET /api/loadpoints/:name/plan).
+   *  Empty when there's nothing to add (already at/above target). */
+  plannedSlots: PlannedSlot[]
+}
+
 /**
  * Whether a smart-mode loadpoint should charge in the current slot. The extracted, testable
  * core of the old `computeShouldChargeNow`, but with no degradation branching — energy and
@@ -20,8 +29,8 @@ export interface DecideInputs {
  * Sized at `planRateA` (the amps we'll actually apply) so a conservative budget grabs MORE
  * cheap slots — meeting the target early rather than under-charging.
  */
-export function decideShouldCharge(i: DecideInputs): boolean {
-  if (i.requiredKWh <= 0) return false // already at/above target — nothing to add
+export function decideShouldCharge(i: DecideInputs): DecideResult {
+  if (i.requiredKWh <= 0) return { shouldCharge: false, plannedSlots: [] } // at/above target — nothing to add
   const planned = plan({
     requiredKWh: i.requiredKWh,
     targetTime: i.targetTime,
@@ -36,7 +45,10 @@ export function decideShouldCharge(i: DecideInputs): boolean {
   // blanket "charge": otherwise smart mode would charge regardless of price for ~14 of every 15
   // minutes. planned[0] is the earliest (chronological) slot, so it's the right proxy for "now".
   const currentSlot = planned.find((s) => s.start <= i.now && s.end > i.now)
-  return currentSlot?.shouldCharge ?? planned[0]?.shouldCharge ?? true
+  return {
+    shouldCharge: currentSlot?.shouldCharge ?? planned[0]?.shouldCharge ?? true,
+    plannedSlots: planned,
+  }
 }
 
 /**

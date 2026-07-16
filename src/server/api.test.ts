@@ -742,3 +742,47 @@ test('POST /loadpoints/:name/target: kwh null clears (threaded as null), a numbe
     expect(kwhArgs).toEqual([null, 40]) // the 0 never reached the handler
   })
 })
+
+test('GET /api/loadpoints/:name/plan merges the price curve with the tick-computed schedule', async () => {
+  const t = (h: number) => new Date(`2026-07-04T${String(h).padStart(2, '0')}:00:00Z`)
+  const priceSlots = [
+    { start: t(20), end: t(21), pricePerKWh: 2, currency: 'SEK' },
+    { start: t(21), end: t(22), pricePerKWh: 0.1, currency: 'SEK' },
+    { start: t(22), end: t(23), pricePerKWh: 0.5, currency: 'SEK' },
+  ]
+  const deps = {
+    config: { loadpoints: [{ name: 'garage', charger: 'zaptec', tariff: 'spot' }] },
+    loadpoints: new Map([
+      [
+        'garage',
+        {
+          name: 'garage',
+          mode: 'smart',
+          // a 15-min charging slot inside the middle (21:00) hour
+          plannedSlots: [{ start: t(21), end: new Date('2026-07-04T21:15:00Z'), shouldCharge: true }],
+          planReadyBy: t(21).getTime(),
+        },
+      ],
+    ]),
+    tariffs: new Map([['spot', { prices: async () => priceSlots, health: () => 'ok' }]]),
+  } as unknown as ApiDeps
+
+  await withApi(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/loadpoints/garage/plan`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      mode: string
+      readyBy: string
+      window: { from: string; to: string }
+      slots: { pricePerKWh: number; shouldCharge: boolean }[]
+    }
+    expect(body.mode).toBe('smart')
+    expect(body.readyBy).toBe(t(21).toISOString())
+    expect(body.window.from).toBeTruthy()
+    // only the middle hour (overlapping the plan slot) charges
+    expect(body.slots.map((s) => s.shouldCharge)).toEqual([false, true, false])
+    expect(body.slots[1].pricePerKWh).toBe(0.1) // price carried through
+    // unknown loadpoint → 404
+    expect((await fetch(`${baseUrl}/api/loadpoints/nope/plan`)).status).toBe(404)
+  })
+})

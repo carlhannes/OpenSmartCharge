@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { ChargerRuntimeStatus } from "@/lib/copy";
 import { generatePrices } from "./prices";
+import type { MappedLoadpointPlan } from "@/lib/live/map";
 import type { DayKey } from "@/lib/format";
 
 export type Mode = "off" | "smart" | "fast";
@@ -101,6 +102,9 @@ interface OscState {
   sessions: Session[];
   moduleHealth: ModuleHealth[];
   prices: number[];
+  /** Per-charger "price & plan" chart data (keyed by charger id): backend-derived in live mode
+   *  (GET /api/loadpoints/:name/plan), synthesized in demo. */
+  loadpointPlans: Record<string, MappedLoadpointPlan>;
   pendingChargers: PendingCharger[];
   config: Config;
   tickMs: number;
@@ -150,6 +154,8 @@ interface OscState {
   ) => void;
   patchCharger: (id: string, patch: Partial<Charger>) => void;
   patchVehicle: (id: string, patch: Partial<Vehicle>) => void;
+  /** Replace a charger's chart plan (from GET .../plan when live, or the demo synthesizer). */
+  setLoadpointPlan: (chargerId: string, plan: MappedLoadpointPlan) => void;
   /** Patch a single module's health from a `health.changed` SSE event (id + backend status),
    *  remapping to the store's status vocabulary. Inserts the entry if it's new. */
   patchHealth: (id: string, health: "ok" | "degraded" | "unavailable") => void;
@@ -159,6 +165,34 @@ interface OscState {
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+// Demo-only: synthesize a backend-style plan for the mock chart — the cheapest hours BEFORE the ready-by,
+// on a true rolling next-24h window. Live mode replaces this via GET /api/loadpoints/:name/plan.
+function demoLoadpointPlan(prices: number[], readyByHour: number): MappedLoadpointPlan {
+  const now = new Date();
+  const nowH = now.getHours();
+  const hourMs = 3_600_000;
+  const fromMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), nowH).getTime();
+  const toMs = fromMs + 24 * hourMs;
+  const readyByMs = fromMs + ((readyByHour - nowH + 24) % 24 || 24) * hourMs;
+  const slots = Array.from({ length: 24 }, (_, i) => {
+    const startMs = fromMs + i * hourMs;
+    return {
+      startMs,
+      endMs: startMs + hourMs,
+      price: prices[(nowH + i) % 24] ?? 0.15,
+      charge: false,
+    };
+  });
+  // cheapest ~40% of the pre-deadline slots → charge (deadline-aware, unlike the old client guess)
+  const eligible = slots
+    .filter((s) => s.startMs < readyByMs)
+    .map((s) => s.price)
+    .sort((a, b) => a - b);
+  const threshold = eligible[Math.floor(eligible.length * 0.4)] ?? Infinity;
+  for (const s of slots) if (s.startMs < readyByMs && s.price <= threshold) s.charge = true;
+  return { readyByMs, fromMs, toMs, slots };
+}
+
 function seed(): Pick<
   OscState,
   | "chargers"
@@ -167,6 +201,7 @@ function seed(): Pick<
   | "sessions"
   | "moduleHealth"
   | "prices"
+  | "loadpointPlans"
   | "pendingChargers"
   | "config"
   | "tickMs"
@@ -215,6 +250,7 @@ function seed(): Pick<
     resolvedSoc: 80, // pct passthrough; demo-only (live replaces plans from the backend)
   };
 
+  const demoPrices = generatePrices(1);
   const sessions: Session[] = [];
   for (let i = 1; i <= 7; i++) {
     const kwh = 8 + Math.random() * 22;
@@ -243,7 +279,10 @@ function seed(): Pick<
       { id: "vehicle", name: "Vehicle data", status: "ok", message: "Škoda Enyaq linked." },
       { id: "mqtt", name: "MQTT / Home Assistant", status: "ok", message: "Broker connected." },
     ],
-    prices: generatePrices(1),
+    prices: demoPrices,
+    loadpointPlans: {
+      [charger.id]: demoLoadpointPlan(demoPrices, parseInt(plan.readyBy.split(":")[0], 10)),
+    },
     pendingChargers: [],
     config: {
       isConfigured: true,
@@ -419,6 +458,8 @@ export const useOsc = create<OscState>()((set, get) => ({
   hydrate: (patch) => set(patch),
   patchCharger: (id, patch) =>
     set((s) => ({ chargers: s.chargers.map((c) => (c.id === id ? { ...c, ...patch } : c)) })),
+  setLoadpointPlan: (chargerId, plan) =>
+    set((s) => ({ loadpointPlans: { ...s.loadpointPlans, [chargerId]: plan } })),
   patchVehicle: (id, patch) =>
     set((s) => ({ vehicles: s.vehicles.map((v) => (v.id === id ? { ...v, ...patch } : v)) })),
   patchHealth: (id, health) =>

@@ -71,6 +71,17 @@ export interface TariffSlotDto {
   currency: string;
 }
 
+// The smart-charging forward schedule for the "price & plan" chart: the next-24h price series, each slot
+// flagged `shouldCharge` per the live plan the backend tick computed. Backend-derived
+// (GET /api/loadpoints/:name/plan) — the client no longer guesses a cheap window from prices. ISO dates.
+export interface LoadpointPlanDto {
+  now: string;
+  readyBy: string | null; // the active plan's / target's deadline; null when none set (defaulted to 24h)
+  window: { from: string; to: string };
+  mode: ChargeMode;
+  slots: { start: string; end: string; pricePerKWh: number; shouldCharge: boolean }[];
+}
+
 export interface BalancerStateDto {
   name: string;
   health: ModuleHealth;
@@ -291,6 +302,8 @@ export const getTariffPrices = (name: string, from: Date, to: Date) =>
   apiFetch<TariffSlotDto[]>(
     `/api/tariffs/${name}/prices?from=${from.toISOString()}&to=${to.toISOString()}`,
   );
+export const getLoadpointPlan = (name: string) =>
+  apiFetch<LoadpointPlanDto>(`/api/loadpoints/${name}/plan`);
 export const getBalancer = (name: string) => apiFetch<BalancerStateDto>(`/api/balancers/${name}`);
 export const getVehicle = (name: string) => apiFetch<VehicleStateDto>(`/api/vehicles/${name}`);
 export const getMeter = (name: string) => apiFetch<MeterStateDto>(`/api/meters/${name}`);

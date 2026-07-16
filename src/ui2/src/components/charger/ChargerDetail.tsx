@@ -16,7 +16,7 @@ import { Timeline24h } from "./Timeline24h";
 import { StatusPill } from "@/components/StatusPill";
 import { modeLabel } from "@/lib/copy";
 import { fmtKW, fmtPct, fmtKm, DAYS, DAY_KEYS, type DayKey } from "@/lib/format";
-import { resolveActivePlan, planApplies } from "@/lib/plan";
+import { planApplies } from "@/lib/plan";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { ActionButton } from "@/components/ui/action-button";
@@ -40,7 +40,6 @@ export function ChargerDetail({ charger, onClose }: Props) {
     [allPlans, charger],
   );
   const oneShotAmps = useOsc((s) => s.oneShotAmps);
-  const timezone = useOsc((s) => s.timezone);
   const [advOpen, setAdvOpen] = useState(false);
   const [amps, setAmps] = useState(charger?.constraintAmps ?? charger?.maxAmps ?? 16);
   const [minSocVal, setMinSocVal] = useState(charger?.minSoc ?? 20);
@@ -66,8 +65,6 @@ export function ChargerDetail({ charger, onClose }: Props) {
 
   // The resolved active vehicle (for the telemetry block); null = Guest.
   const vehicle = vehicles.find((v) => v.id === charger.activeVehicleId) ?? null;
-  const nextReady = resolveActivePlan(plans, timezone, charger.activeVehicleId)?.readyBy;
-  const readyByHour = nextReady ? parseInt(nextReady.split(":")[0], 10) : undefined;
   const pickTab = (active: boolean) =>
     `rounded-full px-3 py-1.5 text-xs font-medium transition ${
       active ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"
@@ -114,7 +111,7 @@ export function ChargerDetail({ charger, onClose }: Props) {
             })}
           </div>
 
-          <Timeline24h readyByHour={readyByHour} />
+          <Timeline24h chargerId={charger.id} />
 
           {/* Vehicle — Auto (identify) · Guest · each configured car. Highlights the sticky pick. */}
           <div className="mt-5 rounded-2xl border border-border/60 bg-card p-4">
