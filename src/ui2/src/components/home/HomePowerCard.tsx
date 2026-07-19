@@ -71,16 +71,6 @@ export function HomePowerCard() {
         <div className="mt-0.5 text-xs text-muted-foreground">incl. {fmtKW(evW)} to your car</div>
       )}
 
-      {/* legend */}
-      <div className="mt-3 flex items-center gap-4 text-[11px] text-muted-foreground">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-muted-foreground" /> Home
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-primary" /> Car
-        </span>
-      </div>
-
       {hasData ? (
         <div className="mt-2 flex gap-2">
           {/* Y axis (kW) */}
@@ -160,6 +150,16 @@ export function HomePowerCard() {
           Gathering readings…
         </div>
       )}
+
+      {/* colour key */}
+      <div className="mt-3 flex items-center gap-4 text-[11px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2 w-2 rounded-full bg-muted-foreground" /> Home
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2 w-2 rounded-full bg-primary" /> Car
+        </span>
+      </div>
     </div>
   );
 }
