@@ -1,6 +1,6 @@
 import { useOsc, type Charger } from "@/lib/mock/store";
 import { StatusPill } from "@/components/StatusPill";
-import { fmtKW, fmtPct, fmtKWh } from "@/lib/format";
+import { fmtKW, fmtPct, fmtKWh, fmtKm } from "@/lib/format";
 import { resolveActivePlan } from "@/lib/plan";
 
 interface Props {
@@ -84,6 +84,11 @@ export function ChargerCard({ charger, onOpen }: Props) {
             <span className="font-display text-xl font-semibold tabular-nums">
               {vehicle ? fmtPct(vehicle.soc) : charger.sessionKwh.toFixed(1)}
             </span>
+            {vehicle && vehicle.rangeKm > 0 && (
+              <span className="text-[10px] tabular-nums text-muted-foreground">
+                {fmtKm(vehicle.rangeKm)}
+              </span>
+            )}
             <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
               {vehicle ? (targetPct != null ? `of ${targetPct}%` : " ") : "kWh charged"}
             </span>
