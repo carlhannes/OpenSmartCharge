@@ -3,12 +3,10 @@ import { fmtKW } from "@/lib/format";
 import { useMemo } from "react";
 
 const CHART_H = 128; // px
-const BINS = 30; // 30 bars over the window → 30 s each
 const WINDOW_MS = 15 * 60_000;
 const VOLTAGE = 230;
-const GAP_V = 1.2; // surface gap (0-100 units) between the base + car segments so they stay distinct
 
-// Live "Home now" card: a stacked bar chart of the last 15 min of whole-house power, split into the home
+// Live "Home now" card: a stacked AREA chart of the last 15 min of whole-house power, split into the home
 // base load (gray) and the car's charging (green), on a fixed 0→breaker-capacity kW axis. Fed by the
 // store's `powerHistory` buffer (the meter.snapshot SSE in live; the mock tick in demo).
 export function HomePowerCard() {
@@ -22,35 +20,27 @@ export function HomePowerCard() {
   const maxKW = Math.max(1, (breakerAmps * phases * VOLTAGE) / 1000);
   const maxW = maxKW * 1000;
 
-  // Bucket the rolling history into fixed time bins over [now−15min, now]; each bar = mean power in its
-  // bin, split base (total−car) + car. Empty bins render as gaps. Recomputes each sample (history change).
-  const bars = useMemo(() => {
+  // Build stacked-area geometry directly from the raw samples over [now−15min, now] (no bucketing — an
+  // area renders the dense ~10 s samples smoothly). Recomputes on each new sample / capacity change.
+  const area = useMemo(() => {
     const now = Date.now();
     const start = now - WINDOW_MS;
-    const binMs = WINDOW_MS / BINS;
-    const acc = Array.from({ length: BINS }, () => ({ total: 0, ev: 0, n: 0 }));
-    for (const s of history) {
-      if (s.t < start) continue;
-      const idx = Math.min(BINS - 1, Math.floor((s.t - start) / binMs));
-      acc[idx].total += s.total;
-      acc[idx].ev += s.ev;
-      acc[idx].n += 1;
-    }
-    return acc.map((b) => {
-      if (b.n === 0) return null;
-      const total = b.total / b.n;
-      const ev = Math.min(total, b.ev / b.n); // car can't exceed the whole-house total
-      return { base: Math.max(0, total - ev), ev };
-    });
-  }, [history]);
+    const pts = history.filter((s) => s.t >= start);
+    if (pts.length < 2) return null;
+    const xOf = (t: number) => Math.max(0, Math.min(100, ((t - start) / WINDOW_MS) * 100));
+    const yOf = (w: number) => 100 - Math.max(0, Math.min(100, (w / maxW) * 100));
+    const baseTop = pts.map((s) => `${xOf(s.t)},${yOf(Math.max(0, s.total - s.ev))}`);
+    const stackTop = pts.map((s) => `${xOf(s.t)},${yOf(s.total)}`); // total = base + car
+    const x0 = xOf(pts[0].t);
+    const xN = xOf(pts[pts.length - 1].t);
+    return {
+      base: `${x0},100 ${baseTop.join(" ")} ${xN},100`, // baseline → base curve → baseline
+      car: `${baseTop.join(" ")} ${[...stackTop].reverse().join(" ")}`, // band between base + total
+      top: stackTop.join(" "),
+    };
+  }, [history, maxW]);
 
   if (housePowerW == null) return null;
-
-  const binW = 100 / BINS;
-  const barW = binW * 0.82; // ~18% inter-bar surface gap
-  const barX = (i: number) => i * binW + binW * 0.09;
-  const hPct = (w: number) => Math.min(100, (w / maxW) * 100);
-  const hasData = bars.some((b) => b !== null);
 
   return (
     <div className="mx-5 mb-4 rounded-3xl border border-border/60 bg-card p-5 shadow-sm">
@@ -71,7 +61,7 @@ export function HomePowerCard() {
         <div className="mt-0.5 text-xs text-muted-foreground">incl. {fmtKW(evW)} to your car</div>
       )}
 
-      {hasData ? (
+      {area ? (
         <div className="mt-2 flex gap-2">
           {/* Y axis (kW) */}
           <div
@@ -102,35 +92,16 @@ export function HomePowerCard() {
                     vectorEffect="non-scaling-stroke"
                   />
                 ))}
-                {bars.map((b, i) => {
-                  if (!b) return null;
-                  const baseH = hPct(b.base);
-                  const gap = baseH > 0 && b.ev > 0 ? GAP_V : 0;
-                  const evH = Math.max(0, Math.min(100 - baseH - gap, hPct(b.ev)));
-                  const x = barX(i);
-                  return (
-                    <g key={i}>
-                      {baseH > 0 && (
-                        <rect
-                          x={x}
-                          y={100 - baseH}
-                          width={barW}
-                          height={baseH}
-                          className="fill-muted-foreground"
-                        />
-                      )}
-                      {evH > 0 && (
-                        <rect
-                          x={x}
-                          y={100 - baseH - gap - evH}
-                          width={barW}
-                          height={evH}
-                          className="fill-primary"
-                        />
-                      )}
-                    </g>
-                  );
-                })}
+                {/* stacked areas: base load (gray) + car (green) on top, with a crisp top edge */}
+                <polygon points={area.base} className="fill-muted-foreground/40" />
+                <polygon points={area.car} className="fill-primary/75" />
+                <polyline
+                  points={area.top}
+                  fill="none"
+                  className="stroke-primary"
+                  strokeWidth={1.2}
+                  vectorEffect="non-scaling-stroke"
+                />
               </svg>
             </div>
             {/* X axis (time) */}
