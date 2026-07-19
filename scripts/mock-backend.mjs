@@ -47,6 +47,35 @@ let tariffZone = 'SE3' // primary tariff zone — PUT /api/tariffs/:name
 let chargerLabel = 'garage' // charger display label — PUT /api/chargers/:name { label }
 let houseBaseW = 700 // wandering non-EV house draw (W); meter power = base + EV charging draw
 
+// Vehicles: the type descriptors that drive the create/edit form (GET /api/vehicle-types) + a mutable
+// topology list (add/edit/remove via /api/vehicles). Mirrors src/modules/vehicle-*/index.ts so ui2's
+// live write path can be exercised here (never on the real backend).
+const VEHICLE_TYPES = [
+  {
+    type: 'skoda',
+    label: 'Škoda / VW group (app login)',
+    fields: [
+      { key: 'username', label: 'App email', required: true },
+      { key: 'password', label: 'App password', type: 'password', required: true, secret: true },
+      {
+        key: 'vin',
+        label: 'VIN',
+        required: true,
+        pattern: '^[A-Za-z0-9]{17}$',
+        help: '17 characters, as shown in the MySkoda app.',
+      },
+    ],
+    capabilities: { soc: true, range: true, capacity: true, presence: true, climate: true, targetSoc: true },
+  },
+  {
+    type: 'manual',
+    label: 'Manual (no app / other car)',
+    fields: [],
+    capabilities: { soc: false, range: false, capacity: false, presence: false, climate: false, targetSoc: false },
+  },
+]
+let siteVehicles = [{ name: 'enyaq', type: 'skoda', vin: 'MOCKVIN0000000001' }]
+
 // Whole-house meter reading — base house load + whatever the car is drawing (charger is downstream).
 const meterSnapshot = () => {
   const evW = lp.charging ? Math.round(lp.currentA * 230) : 0
@@ -373,6 +402,65 @@ const server = http.createServer((req, res) => {
     return
   }
 
+  // Vehicles: type descriptors (GET) + generic add/edit/remove. Mirrors the real generic CRUD, incl.
+  // the "blank field = keep" edit semantics. add/edit/remove emit config.changed → ui2 rehydrates.
+  if (p === '/api/vehicle-types' && req.method === 'GET') return send(res, VEHICLE_TYPES)
+  const vehItem = p.match(/^\/api\/vehicles\/([^/]+)$/)
+  if (
+    (p === '/api/vehicles' && req.method === 'POST') ||
+    (vehItem && (req.method === 'PUT' || req.method === 'DELETE'))
+  ) {
+    if (req.method === 'DELETE') {
+      const name = vehItem[1]
+      siteVehicles = siteVehicles.filter((v) => v.name !== name)
+      emit('config.changed', { kind: 'vehicle', name })
+      res.writeHead(204, { 'access-control-allow-origin': '*' })
+      return res.end()
+    }
+    let body = ''
+    req.on('data', (c) => (body += c))
+    req.on('end', () => {
+      let b = {}
+      try {
+        b = body ? JSON.parse(body) : {}
+      } catch {
+        /* ignore */
+      }
+      if (req.method === 'POST') {
+        const name = String(b.name ?? '').trim()
+        const type = String(b.type ?? 'skoda').trim()
+        if (!name) return send(res, { error: 'name is required' }, 400)
+        if (siteVehicles.some((v) => v.name === name))
+          return send(res, { error: `name "${name}" already in use` }, 409)
+        const desc = VEHICLE_TYPES.find((t) => t.type === type)
+        if (!desc) return send(res, { error: `unknown vehicle type "${type}"` }, 400)
+        for (const f of desc.fields) {
+          const val = String(b[f.key] ?? '').trim()
+          if (!val && f.required) return send(res, { error: `${f.label} is required` }, 400)
+          if (val && f.pattern && !new RegExp(f.pattern).test(val))
+            return send(res, { error: `${f.label} is invalid` }, 400)
+        }
+        siteVehicles.push({ name, type, vin: b.vin ? String(b.vin).trim() : undefined })
+        emit('config.changed', { kind: 'vehicle', name })
+        return send(res, { name, type }, 201)
+      }
+      // PUT edit — name/type immutable; a blank field keeps the stored value (only vin is visible here).
+      const name = vehItem[1]
+      const v = siteVehicles.find((x) => x.name === name)
+      if (!v) return send(res, { error: 'vehicle not found' }, 404)
+      const desc = VEHICLE_TYPES.find((t) => t.type === v.type)
+      for (const f of desc?.fields ?? []) {
+        const val = String(b[f.key] ?? '').trim()
+        if (val && f.pattern && !new RegExp(f.pattern).test(val))
+          return send(res, { error: `${f.label} is invalid` }, 400)
+        if (val && f.key === 'vin') v.vin = val
+      }
+      emit('config.changed', { kind: 'vehicle', name })
+      return send(res, { name, type: v.type })
+    })
+    return
+  }
+
   // Writes: mutate state, then push the matching SSE event.
   if (req.method === 'POST' && p.startsWith('/api/loadpoints/')) {
     let body = ''
@@ -476,23 +564,32 @@ const server = http.createServer((req, res) => {
       ],
       balancers: [{ name: 'house', type: 'mqtt-circuit', mainBreakerA: siteBreaker, phases: 3 }],
       tariffs: [{ name: 'home', type: 'nordpool', zone: tariffZone }],
-      vehicles: [{ name: 'enyaq', type: 'skoda', vin: 'MOCKVIN' }],
+      vehicles: siteVehicles,
       meterReaders: [{ name: 'pulse', type: 'tibber-pulse' }],
     })
-  if (p === '/api/vehicles/enyaq')
-    return send(res, {
-      name: 'enyaq',
-      health: 'ok',
-      data: {
-        soc: Math.round(veh.soc),
-        range: veh.range,
-        batteryCapacity: veh.batteryCapacity,
-        isCharging: lp.charging,
-        pluggedIn: lp.connected,
-        fetchedAt: new Date().toISOString(),
-      },
-      capacityKWh: veh.batteryCapacity,
-    })
+  if (vehItem && req.method === 'GET') {
+    const name = vehItem[1]
+    const v = siteVehicles.find((x) => x.name === name)
+    if (!v) return send(res, { error: 'not found' }, 404)
+    const caps = VEHICLE_TYPES.find((t) => t.type === v.type)?.capabilities
+    // enyaq has the live sim; a just-added or manual car has no telemetry yet (data: null).
+    if (name === 'enyaq')
+      return send(res, {
+        name,
+        health: 'ok',
+        data: {
+          soc: Math.round(veh.soc),
+          range: veh.range,
+          batteryCapacity: veh.batteryCapacity,
+          isCharging: lp.charging,
+          pluggedIn: lp.connected,
+          fetchedAt: new Date().toISOString(),
+        },
+        capacityKWh: veh.batteryCapacity,
+        capabilities: caps,
+      })
+    return send(res, { name, health: 'ok', data: null, capacityKWh: null, capabilities: caps })
+  }
   if (p.startsWith('/api/tariffs/') && p.endsWith('/prices'))
     return send(
       res,

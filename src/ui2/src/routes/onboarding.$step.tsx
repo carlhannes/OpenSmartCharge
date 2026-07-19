@@ -13,6 +13,7 @@ import {
 } from "@/lib/live/commands";
 import { REGIONS } from "@/lib/copy";
 import { ConfigLockNote } from "@/components/settings/ConfigLockNote";
+import { VehicleForm } from "@/components/VehicleForm";
 import { useEffect, useState } from "react";
 import { Copy, Check } from "lucide-react";
 
@@ -349,48 +350,13 @@ function HouseStep() {
 }
 
 function CarStep() {
-  const [email, setEmail] = useState("");
-  const [pw, setPw] = useState("");
-  const [added, setAdded] = useState(false);
-  const add = useOsc((s) => s.addVehicle);
   return (
     <StepShell eyebrow="Step 4 · optional" title="Add your car">
       <p className="text-sm text-muted-foreground">
-        Sign in to Škoda / VW for live SoC, or skip and use a Guest profile.
+        Sign in to your car's app for live SoC, add a manual car, or skip and use a Guest profile.
       </p>
       <div className="mt-4 rounded-2xl border border-border/60 bg-card p-4">
-        <input
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="email"
-          className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-        />
-        <input
-          value={pw}
-          onChange={(e) => setPw(e.target.value)}
-          placeholder="password"
-          type="password"
-          className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-        />
-        <button
-          onClick={() => {
-            add({
-              name: "Enyaq",
-              brand: "Škoda",
-              soc: 55,
-              rangeKm: 280,
-              batteryKwh: 77,
-              connected: true,
-              targetUnits: ["pct", "km", "kwh"],
-              hasTelemetry: true,
-            });
-            setAdded(true);
-          }}
-          disabled={added}
-          className="mt-3 w-full rounded-full bg-primary py-2.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
-        >
-          {added ? "✓ Connected" : "Connect"}
-        </button>
+        <VehicleForm mode="create" />
       </div>
     </StepShell>
   );

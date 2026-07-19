@@ -770,6 +770,14 @@ test('PUT /vehicles/:name: blank secret kept, changed field reloads live, name/t
       // Edit: a non-blank password overwrites.
       await putJson(`${baseUrl}/api/vehicles/ev`, { username: 'u2', password: 'secret2', vin })
       expect((getOverride(db, 'vehicle', 'ev') as { password: string }).password).toBe('secret2')
+      // Edit: only a new password (username + vin blank) → password updated, the rest kept (merge).
+      await putJson(`${baseUrl}/api/vehicles/ev`, { password: 'secret3' })
+      expect(getOverride(db, 'vehicle', 'ev')).toMatchObject({
+        type: 'skoda',
+        username: 'u2',
+        password: 'secret3',
+        vin,
+      })
       // Bad patch (invalid VIN) → 400.
       expect(
         (await putJson(`${baseUrl}/api/vehicles/ev`, { username: 'u2', vin: 'short' })).status,

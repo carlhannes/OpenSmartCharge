@@ -13,6 +13,7 @@ import type {
   LoadpointPlanDto,
   PlanDto,
   SiteDto,
+  SiteVehicleDto,
   VehicleStateDto,
   TariffSlotDto,
   TransactionDto,
@@ -127,12 +128,16 @@ export function mapLoadpointPlan(dto: LoadpointPlanDto): MappedLoadpointPlan {
   };
 }
 
-export function mapVehicle(name: string, dto: VehicleStateDto): Vehicle {
+export function mapVehicle(name: string, dto: VehicleStateDto, site?: SiteVehicleDto): Vehicle {
   const d = dto.data;
   return {
     id: name,
     name,
     brand: "", // no brand field on the API
+    // Module type + vin from the site topology (for the edit form); type falls back to 'manual'
+    // (no config fields) if the site DTO is unavailable.
+    type: site?.type ?? "manual",
+    vin: site?.vin,
     soc: d?.soc ?? 0,
     rangeKm: Math.round(d?.range ?? 0),
     batteryKwh: dto.capacityKWh ?? d?.batteryCapacity ?? 0,

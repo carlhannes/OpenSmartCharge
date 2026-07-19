@@ -68,9 +68,11 @@ function collectVehicleFields(
     const raw = body[f.key]
     const val = typeof raw === 'string' ? raw.trim() : ''
     if (!val) {
-      // Blank secret on edit = "leave unchanged"; a blank required field is an error; a blank
-      // optional field is simply omitted.
-      if (opts.edit && f.secret) continue
+      // On EDIT a blank field means "leave unchanged": it's omitted from the patch and setOverride
+      // merges, so the stored value is kept — required isn't re-checked (the existing config already
+      // has it, and creds like `password` are write-only so the form can't pre-fill them). On CREATE
+      // a blank required field is an error; a blank optional field is simply omitted.
+      if (opts.edit) continue
       if (f.required) return { ok: false, error: `${f.label} is required` }
       continue
     }
@@ -683,9 +685,10 @@ export function createApiRouter(deps: ApiDeps): Router {
   })
 
   // PUT /api/vehicles/:name — edit an existing vehicle's config/credentials. Name + type are the
-  // entity key and are IMMUTABLE (rename = delete + re-add). A blank `secret` field is left unchanged
-  // (setOverride merges, so the stored credential is kept); a non-blank value overwrites it. The
-  // vehicle is rebuilt live via reloadVehicle (a fresh auth client picks up changed creds). Never
+  // entity key and are IMMUTABLE (rename = delete + re-add). Any blank field is left unchanged
+  // (setOverride merges, so the stored value is kept); a non-blank value overwrites it — so the form
+  // can pre-fill what it knows (e.g. vin) and leave write-only creds (password) blank to keep them.
+  // The vehicle is rebuilt live via reloadVehicle (a fresh auth client picks up changed creds). Never
   // echoes credentials.
   router.put('/vehicles/:name', async (req: Request, res: Response) => {
     const name = String(req.params.name)

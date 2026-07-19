@@ -113,6 +113,26 @@ export interface VehicleCapabilitiesDto {
   targetSoc: boolean;
 }
 
+// One config field a vehicle type needs beyond the universal `name` — mirrors sdk VehicleConfigField.
+// Drives the create/edit/onboarding form + its validation (a module self-describes its own form).
+export interface VehicleConfigFieldDto {
+  key: string;
+  label: string;
+  type?: "text" | "password";
+  required?: boolean;
+  secret?: boolean; // masked in the form; on edit, left blank = keep existing
+  help?: string;
+  pattern?: string; // anchored regex the value must match
+}
+
+// A selectable vehicle type + its self-described form (GET /api/vehicle-types).
+export interface VehicleTypeDto {
+  type: string;
+  label: string;
+  fields: VehicleConfigFieldDto[];
+  capabilities: VehicleCapabilitiesDto;
+}
+
 export interface VehicleStateDto {
   name: string;
   health: ModuleHealth;
@@ -270,16 +290,18 @@ export const updatePlanApi = (loadpointName: string, id: string, patch: Partial<
 export const deletePlan = (loadpointName: string, id: string) =>
   apiVoid(`/api/loadpoints/${loadpointName}/plans/${id}`, { method: "DELETE" });
 
-// Vehicle management (backend CRUD; creds never echoed). type 'skoda' needs username/password/vin;
-// 'manual' needs only a name (no API, kWh-only).
-export const addVehicle = (body: {
-  name: string;
-  type: "skoda" | "manual";
-  username?: string;
-  password?: string;
-  vin?: string;
-}) =>
-  apiFetch<{ name: string; type: string; vin?: string }>("/api/vehicles", jsonBody("POST", body));
+// Vehicle management (backend CRUD; creds never echoed). Generic over the type's descriptor: `fields`
+// are the type's configFields (username/password/vin for skoda, none for manual), sent flat in the body.
+export const getVehicleTypes = () => apiFetch<VehicleTypeDto[]>("/api/vehicle-types");
+export const addVehicle = (v: { name: string; type: string; fields: Record<string, string> }) =>
+  apiFetch<{ name: string; type: string }>(
+    "/api/vehicles",
+    jsonBody("POST", { name: v.name, type: v.type, ...v.fields }),
+  );
+// Edit: name + type are immutable; a blank `secret` field is omitted → the backend keeps the stored
+// value. Sends only the config fields flat in the body.
+export const updateVehicle = (name: string, fields: Record<string, string>) =>
+  apiFetch<{ name: string; type: string }>(`/api/vehicles/${name}`, jsonBody("PUT", fields));
 export const deleteVehicle = (name: string) =>
   apiVoid(`/api/vehicles/${name}`, { method: "DELETE" });
 

@@ -99,7 +99,7 @@ async function rehydrateSite(
         site.vehicles.map((v) =>
           api
             .getVehicle(v.name)
-            .then((dto) => mapVehicle(v.name, dto))
+            .then((dto) => mapVehicle(v.name, dto, v))
             .catch(() => null),
         ),
       )
@@ -154,6 +154,15 @@ export function useLiveSync() {
         if (!cancelled) store.setTimezone(settings.timezone);
       } catch {
         /* settings optional */
+      }
+
+      // Selectable vehicle types + their self-described forms (drives <VehicleForm>). Optional — on
+      // failure (older backend) the seeded demo descriptors remain, so add/edit still renders.
+      try {
+        const types = await api.getVehicleTypes();
+        if (!cancelled) store.setVehicleTypes(types);
+      } catch {
+        /* vehicle types optional */
       }
 
       try {

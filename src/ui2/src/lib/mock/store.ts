@@ -2,14 +2,62 @@ import { create } from "zustand";
 import type { ChargerRuntimeStatus } from "@/lib/copy";
 import { generatePrices } from "./prices";
 import type { MappedLoadpointPlan } from "@/lib/live/map";
+import type { VehicleTypeDto } from "@/lib/api/rest";
 import type { DayKey } from "@/lib/format";
 
 export type Mode = "off" | "smart" | "fast";
+
+// Demo mirror of the backend's GET /api/vehicle-types (which the demo can't fetch — no backend). Live
+// mode replaces this via setVehicleTypes on startup. Kept in step with the skoda/manual descriptors in
+// src/modules/vehicle-*/index.ts — same shape the real endpoint returns, so <VehicleForm> is identical.
+export const DEMO_VEHICLE_TYPES: VehicleTypeDto[] = [
+  {
+    type: "skoda",
+    label: "Škoda / VW group (app login)",
+    fields: [
+      { key: "username", label: "App email", required: true },
+      { key: "password", label: "App password", type: "password", required: true, secret: true },
+      {
+        key: "vin",
+        label: "VIN",
+        required: true,
+        pattern: "^[A-Za-z0-9]{17}$",
+        help: "17 characters, as shown in the MySkoda app.",
+      },
+    ],
+    capabilities: {
+      soc: true,
+      range: true,
+      capacity: true,
+      presence: true,
+      climate: true,
+      targetSoc: true,
+    },
+  },
+  {
+    type: "manual",
+    label: "Manual (no app / other car)",
+    fields: [],
+    capabilities: {
+      soc: false,
+      range: false,
+      capacity: false,
+      presence: false,
+      climate: false,
+      targetSoc: false,
+    },
+  },
+];
 
 export interface Vehicle {
   id: string;
   name: string; // "Enyaq"
   brand: string; // "Škoda"
+  // Backend vehicle-module type ('skoda' | 'manual' | …) — picks the right edit form + capabilities.
+  type: string;
+  // VIN for skoda-style types — the one non-secret field the backend exposes, so the edit form can
+  // pre-fill it (creds like username/password are write-only). Absent for manual.
+  vin?: string;
   soc: number; // %
   rangeKm: number;
   batteryKwh: number;
@@ -99,6 +147,9 @@ export interface Config {
 interface OscState {
   chargers: Charger[];
   vehicles: Vehicle[];
+  /** Selectable vehicle types + their self-described forms (demo seed; live = GET /api/vehicle-types).
+   *  Drives the shared <VehicleForm> for create/edit/onboarding. */
+  vehicleTypes: VehicleTypeDto[];
   plans: Plan[];
   sessions: Session[];
   moduleHealth: ModuleHealth[];
@@ -132,8 +183,11 @@ interface OscState {
   removePlan: (id: string) => void;
 
   addVehicle: (v: Omit<Vehicle, "id">) => Vehicle;
+  updateVehicle: (id: string, patch: Partial<Omit<Vehicle, "id">>) => void;
   removeVehicle: (id: string) => void;
   restoreVehicle: (vehicle: Vehicle, activeOnChargerIds: string[]) => void;
+  /** Replace the selectable vehicle types (live: fetched on startup). */
+  setVehicleTypes: (types: VehicleTypeDto[]) => void;
 
   claimPending: (pendingId: string, name: string, maxAmps: number) => void;
   emitPending: () => void;
@@ -239,6 +293,8 @@ function seed(): Pick<
     id: "v_enyaq",
     name: "Enyaq",
     brand: "Škoda",
+    type: "skoda",
+    vin: "TMBJJ7NX5N0000001",
     soc: 62,
     rangeKm: 310,
     batteryKwh: 77,
@@ -329,6 +385,7 @@ function seed(): Pick<
 
 export const useOsc = create<OscState>()((set, get) => ({
   ...seed(),
+  vehicleTypes: DEMO_VEHICLE_TYPES,
   source: "probing",
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   housePowerW: null, // set by the meter (live) or the demo tick; card hides until a real value arrives
@@ -400,6 +457,11 @@ export const useOsc = create<OscState>()((set, get) => ({
     set((s) => ({ vehicles: [...s.vehicles, nv] }));
     return nv;
   },
+
+  updateVehicle: (id, patch) =>
+    set((s) => ({ vehicles: s.vehicles.map((v) => (v.id === id ? { ...v, ...patch } : v)) })),
+
+  setVehicleTypes: (types) => set({ vehicleTypes: types }),
 
   removeVehicle: (id) =>
     set((s) => ({

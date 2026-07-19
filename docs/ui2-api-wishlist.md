@@ -47,9 +47,19 @@ remove + re-add; not wired as a single call.
   field now — the dead `loadpoints[].autoStart` duplicate was removed, so drop it from the loadpoint DTO.)
 
 ## 4. Vehicle management ✅
-- `POST /api/vehicles { name, type:"skoda", username, password, vin }` — returns 201 immediately; auth +
-  first fetch run in the background (poll `GET /api/vehicles/:name`). Credentials are stored server-side
-  and **never returned or logged**; `GET /api/site` stays whitelisted to `{ name, type, vin }`.
+- `GET /api/vehicle-types` — the registered vehicle modules + their **self-described** config forms:
+  `[{ type, label, fields: [{ key, label, type?, required?, secret?, help?, pattern? }], capabilities }]`.
+  Drives the unified create/edit/onboarding form generically — a new car module appears here with no UI
+  change. (Modules self-describe their form the way they self-report capabilities; see `docs/modules.md`.)
+- `POST /api/vehicles { name, type, ...fields }` — `fields` are the chosen type's `configFields`
+  (skoda: `username, password, vin`; manual: none), validated generically from the descriptor. Returns
+  `{ name, type }` (201) immediately; a telemetry vehicle's auth + first fetch run in the background
+  (poll `GET /api/vehicles/:name`). Credentials are stored server-side and **never returned or logged**;
+  `GET /api/site` stays whitelisted to `{ name, type, vin, capabilities, targetUnits }`.
+- `PUT /api/vehicles/:name { ...fields }` — edit credentials/config. Name + type are the entity key and
+  are **immutable** (rename = delete + re-add). A **blank field keeps** the stored value (setOverride
+  merges), so the form pre-fills what it knows (e.g. `vin`) and leaves write-only creds blank to keep
+  them. Rebuilt live via reconcile (`reloadVehicle`); returns `{ name, type }`. Never echoes creds.
 - `DELETE /api/vehicles/:name` — teardown + drops `vehicle_cache`; a bound loadpoint degrades to no-SoC.
 - `POST /api/vehicles/:name/refresh` — forces a live poll now → `{name, health, data, capacityKWh}` (same
   shape as the GET). Hits the real vehicle API — wire it to an explicit "refresh" affordance, not a

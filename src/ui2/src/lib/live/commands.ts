@@ -1,7 +1,18 @@
 // Live/demo command router. In live mode these hit the backend (with an optimistic local
 // store update where it helps); in demo mode they fall back to local/simulated behavior.
-import { useOsc, type Mode, type Plan } from "@/lib/mock/store";
+import { useOsc, type Mode, type Plan, type Vehicle } from "@/lib/mock/store";
+import type { VehicleCapabilitiesDto } from "@/lib/api/rest";
 import * as api from "@/lib/api/rest";
+
+// Demo mirror of the backend targetUnitsFor(caps) (smart-charging/energy.ts): kWh always; pct needs
+// SoC+capacity; km additionally needs range. Live mode gets targetUnits straight from the backend DTO.
+function demoTargetUnits(caps?: VehicleCapabilitiesDto): Vehicle["targetUnits"] {
+  const units: Vehicle["targetUnits"] = [];
+  if (caps?.soc && caps.capacity) units.push("pct");
+  if (caps?.soc && caps.capacity && caps.range) units.push("km");
+  units.push("kwh");
+  return units;
+}
 
 const isLive = () => useOsc.getState().source === "live";
 const toApiMode = (m: Mode): api.ChargeMode => (m === "off" ? "disabled" : m);
@@ -107,29 +118,44 @@ export async function setActiveVehicle(chargerId: string, override: string | nul
   if (isLive()) await api.setLoadpointVehicle(chargerId, override);
 }
 
-/** Add a vehicle. Live: POST /api/vehicles (the `config.changed` SSE → rehydrateSite adds it to the
- *  store). Demo: insert a store Vehicle directly. `manual` = no API (kWh-only, no telemetry). */
-export async function addVehicle(body: {
+/** Add a vehicle. Generic over the type's descriptor — `fields` are the type's config values (from
+ *  <VehicleForm>). Live: POST /api/vehicles (the `config.changed` SSE → rehydrateSite adds it). Demo:
+ *  build a store Vehicle, deriving telemetry/units from the type's declared capabilities. */
+export async function addVehicle(v: {
   name: string;
-  type: "skoda" | "manual";
-  username?: string;
-  password?: string;
-  vin?: string;
+  type: string;
+  fields: Record<string, string>;
 }): Promise<void> {
   if (isLive()) {
-    await api.addVehicle(body);
+    await api.addVehicle(v);
     return;
   }
+  const t = useOsc.getState().vehicleTypes.find((x) => x.type === v.type);
   useOsc.getState().addVehicle({
-    name: body.name,
-    brand: body.type === "skoda" ? "Škoda" : "",
+    name: v.name,
+    brand: (t?.label ?? "").split(/[/(]/)[0].trim(),
+    type: v.type,
+    vin: v.fields.vin,
     soc: 0,
     rangeKm: 0,
     batteryKwh: 0,
     connected: false,
-    targetUnits: body.type === "manual" ? ["kwh"] : ["pct", "km", "kwh"],
-    hasTelemetry: body.type !== "manual",
+    targetUnits: demoTargetUnits(t?.capabilities),
+    hasTelemetry: !!t?.capabilities?.soc,
   });
+}
+
+/** Edit a vehicle's config/credentials. `id` is the vehicle name in live (immutable key). Live: PUT
+ *  /api/vehicles/:name (a blank field keeps the stored value). Demo: reflect the one client-visible
+ *  field (vin) on the store Vehicle — creds aren't stored client-side. */
+export async function updateVehicle(id: string, fields: Record<string, string>): Promise<void> {
+  if (isLive()) {
+    await api.updateVehicle(id, fields);
+    return;
+  }
+  const patch: Partial<Vehicle> = {};
+  if (fields.vin) patch.vin = fields.vin;
+  useOsc.getState().updateVehicle(id, patch);
 }
 
 /** Remove a vehicle. Live: DELETE (config.changed → rehydrateSite drops it); demo: store remove. */
