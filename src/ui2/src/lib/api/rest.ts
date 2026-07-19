@@ -298,6 +298,9 @@ export const updateChargerApi = (name: string, patch: { maxA?: number; label?: s
 
 export const getHealth = () => apiFetch<Record<string, ModuleHealth>>("/api/health");
 export const getSite = () => apiFetch<SiteDto>("/api/site");
+// Rolling ~15-min whole-house + car power series for the Home chart (seeds it on load; SSE keeps it live).
+export const getPowerHistory = () =>
+  apiFetch<{ t: number; total: number; ev: number }[]>("/api/power-history");
 export const getTariffPrices = (name: string, from: Date, to: Date) =>
   apiFetch<TariffSlotDto[]>(
     `/api/tariffs/${name}/prices?from=${from.toISOString()}&to=${to.toISOString()}`,

@@ -149,6 +149,8 @@ interface OscState {
   setSource: (source: "probing" | "live" | "demo") => void;
   setTimezone: (tz: string) => void;
   setHousePower: (w: number | null) => void;
+  /** Replace the power-history buffer (seeded from GET /api/power-history on load). */
+  setPowerHistory: (samples: PowerSample[]) => void;
   setMeterName: (n: string | null) => void;
   hydrate: (
     patch: Partial<
@@ -173,14 +175,18 @@ export interface PowerSample {
 }
 
 const POWER_HISTORY_MS = 15 * 60_000;
+const POWER_MIN_INTERVAL_MS = 10_000; // match the server buffer's ~10s cadence — skip sub-10s appends
 
-// Append a power sample and drop anything older than the 15-min window. Pure — returns a new array.
+// Append a power sample (throttled to ~10s + pruned to the 15-min window). Pure — returns a new array,
+// or the SAME array when throttled (so the chart's memo doesn't churn between the ~10s samples).
 function appendPowerSample(
   prev: PowerSample[],
   total: number,
   ev: number,
   now: number,
 ): PowerSample[] {
+  const last = prev[prev.length - 1];
+  if (last && now - last.t < POWER_MIN_INTERVAL_MS) return prev;
   const cutoff = now - POWER_HISTORY_MS;
   return [...prev.filter((s) => s.t >= cutoff), { t: now, total, ev }];
 }
@@ -489,6 +495,7 @@ export const useOsc = create<OscState>()((set, get) => ({
               Date.now(),
             ),
     })),
+  setPowerHistory: (samples) => set({ powerHistory: samples }),
   setMeterName: (n) => set({ meterName: n }),
   hydrate: (patch) => set(patch),
   patchCharger: (id, patch) =>

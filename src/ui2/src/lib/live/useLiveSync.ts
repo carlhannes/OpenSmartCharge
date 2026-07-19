@@ -208,6 +208,15 @@ export function useLiveSync() {
         } else if (!cancelled) {
           store.setHousePower(null);
         }
+
+        // Seed the Home chart's rolling 15-min history so it's populated on refresh (kept live via the
+        // meter.snapshot SSE thereafter).
+        try {
+          const hist = await api.getPowerHistory();
+          if (!cancelled) store.setPowerHistory(hist);
+        } catch {
+          /* power history optional */
+        }
       }
 
       try {

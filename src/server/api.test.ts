@@ -786,3 +786,16 @@ test('GET /api/loadpoints/:name/plan merges the price curve with the tick-comput
     expect((await fetch(`${baseUrl}/api/loadpoints/nope/plan`)).status).toBe(404)
   })
 })
+
+test('GET /api/power-history returns the rolling power buffer', async () => {
+  const samples = [
+    { t: 1000, total: 3000, ev: 1000 },
+    { t: 11000, total: 3400, ev: 1200 },
+  ]
+  const deps = { powerHistory: samples } as unknown as ApiDeps
+  await withApi(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/power-history`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual(samples)
+  })
+})

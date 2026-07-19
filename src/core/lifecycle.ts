@@ -39,6 +39,8 @@ import type { Charger } from '../sdk/charger.js'
 import type { Tariff, TariffSlot } from '../sdk/tariff.js'
 import type { MeterReader, MeterSnapshot } from '../sdk/meter-reader.js'
 import { recordHouseholdLoad, pruneHouseholdLoad, worstCaseLoadA } from './smart-charging/rollup.js'
+import { pushPowerSample, type PowerSample } from './power-history.js'
+import { GRID_VOLTAGE_V } from './electrical.js'
 import { localDateKey, localHour, msUntilLocalTime } from '../sdk/local-time.js'
 import { getTimezone, seedSettings, getLogRetentionDays } from './settings.js'
 import { getEffectiveConfig } from './config-overrides.js'
@@ -203,6 +205,12 @@ async function main() {
     log.info({ meter: meterCfg.name, type: meterCfg.type }, 'meter reader module created')
   }
 
+  // Rolling 15-min whole-house + car power buffer for the ui2 "Home now" chart — served on refresh via
+  // GET /api/power-history (thereafter the client keeps it live via the meter.snapshot SSE). Only the
+  // primary/house meter (matching the client's meterReaders[0]) feeds it.
+  const powerHistory: PowerSample[] = []
+  const houseMeter = [...meterReaders.keys()][0]
+
   // Track the last Stockholm day we pruned the load rollup, so pruning runs once per day
   // (on rollover) rather than on the ~1 Hz meter-event path.
   let lastRollupPruneDay: string | undefined
@@ -223,6 +231,14 @@ async function main() {
         // Keep a few days beyond the look-back window so the query range is always covered.
         pruneHouseholdLoad(db, s.timestamp, config.smartCharging.historicalDays + 4, tz)
       }
+    }
+
+    // Whole-house + car power sample for the Home chart (outside the maxPhaseA guard so a powerW-only
+    // meter still records). total = meter watts (powerW, else Σ phase amps × 230); ev = Σ loadpoint draw.
+    if (p.name === houseMeter) {
+      const totalW = s.powerW ?? ((s.i1A ?? 0) + (s.i2A ?? 0) + (s.i3A ?? 0)) * GRID_VOLTAGE_V
+      const evW = [...loadpointStates.values()].reduce((a, st) => a + Math.max(0, st.powerW), 0)
+      pushPowerSample(powerHistory, Math.round(totalW), Math.round(evW), s.timestamp.getTime())
     }
   })
 
@@ -1284,6 +1300,7 @@ async function main() {
     balancers,
     vehicles,
     lastTickByBalancer,
+    powerHistory,
     reconcile,
     onModeChange: handleModeChange,
     onTargetChange: handleTargetChange,

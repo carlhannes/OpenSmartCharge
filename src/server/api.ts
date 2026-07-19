@@ -2,6 +2,7 @@ import type { Request, Response, Router } from 'express'
 import { Router as createRouter } from 'express'
 import type { DatabaseSync } from 'node:sqlite'
 import type { LoadpointState } from '../core/loadpoint.js'
+import type { PowerSample } from '../core/power-history.js'
 import type { EventBus } from '../core/events.js'
 import { getHealthSummary } from '../core/health.js'
 import type { HealthMap } from '../core/health.js'
@@ -62,6 +63,8 @@ export interface ApiDeps {
   balancers: Map<string, Balancer>
   vehicles: Map<string, Vehicle>
   lastTickByBalancer: Map<string, { allocations: Record<string, number>; freeAmps: number }>
+  /** Rolling ~15-min whole-house + car power buffer for GET /api/power-history (the "Home now" chart). */
+  powerHistory: PowerSample[]
   /** Declarative reconcile seam — soft-reload a module after a config override write. */
   reconcile: Reconciler
   onModeChange(name: string, mode: ChargeMode): Promise<void>
@@ -1014,6 +1017,12 @@ export function createApiRouter(deps: ApiDeps): Router {
       return
     }
     res.json({ latest: reader.latest(), health: reader.health() })
+  })
+
+  // GET /api/power-history — the rolling ~15-min whole-house + car power series for the "Home now" chart,
+  // so it renders the last 15 min immediately on load (client keeps it live via the meter.snapshot SSE).
+  router.get('/power-history', (_req: Request, res: Response) => {
+    res.json(deps.powerHistory)
   })
 
   // GET /api/balancers/:name
