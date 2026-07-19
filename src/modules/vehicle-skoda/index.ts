@@ -1,5 +1,5 @@
 import { registerVehicle } from '../../sdk/registry-api.js'
-import type { VehicleData } from '../../sdk/vehicle.js'
+import type { VehicleCapabilities, VehicleData } from '../../sdk/vehicle.js'
 import { sourceHealth } from '../../core/source-reconciler.js'
 import { parseConfig } from './types.js'
 import { upsertVehicleCache, loadVehicleCache } from './persistence.js'
@@ -15,8 +15,33 @@ import { createAuthClient } from './auth.js'
 // Climate/preconditioning states that count as "active" (the car is heating/cooling).
 const CLIMATE_ACTIVE = new Set(['HEATING', 'HEATING_AUXILIARY', 'COOLING', 'VENTILATION', 'ON'])
 
+// Full telemetry via the MySkoda cloud API → all target units + auto-identify. Declared once and
+// reused for BOTH the module descriptor (the types list / form preview) and the created instance's
+// `capabilities`, so there's a single source of truth (config-independent for this module).
+const SKODA_CAPS: VehicleCapabilities = {
+  soc: true,
+  range: true,
+  capacity: true,
+  presence: true,
+  climate: true,
+  targetSoc: true,
+}
+
 registerVehicle({
   type: 'skoda',
+  label: 'Škoda / VW group (app login)',
+  capabilities: SKODA_CAPS,
+  configFields: [
+    { key: 'username', label: 'App email', required: true },
+    { key: 'password', label: 'App password', type: 'password', required: true, secret: true },
+    {
+      key: 'vin',
+      label: 'VIN',
+      required: true,
+      pattern: '^[A-Za-z0-9]{17}$',
+      help: '17 characters, as shown in the MySkoda app.',
+    },
+  ],
 
   create(rawCfg, ctx) {
     const cfg = parseConfig(rawCfg)
@@ -101,15 +126,7 @@ registerVehicle({
     return {
       id: cfg.name,
 
-      // Full telemetry via the MySkoda cloud API → all target units + auto-identify.
-      capabilities: {
-        soc: true,
-        range: true,
-        capacity: true,
-        presence: true,
-        climate: true,
-        targetSoc: true,
-      },
+      capabilities: SKODA_CAPS,
 
       refresh,
 

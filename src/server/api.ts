@@ -10,8 +10,9 @@ import type { ChargeMode, Config } from '../core/config.js'
 import type { Tariff } from '../sdk/tariff.js'
 import type { MeterReader } from '../sdk/meter-reader.js'
 import type { Balancer } from '../sdk/balancer.js'
-import type { Vehicle } from '../sdk/vehicle.js'
+import type { Vehicle, VehicleModule } from '../sdk/vehicle.js'
 import type { Charger } from '../sdk/charger.js'
+import { getVehicleModule, listVehicleModules } from '../sdk/registry-api.js'
 import {
   getTimezone,
   setTimezone,
@@ -50,6 +51,35 @@ import {
   targetUnitsFor,
   type EnergyReading,
 } from '../core/smart-charging/energy.js'
+
+/**
+ * Validate + collect a vehicle's config fields from a request body against its module descriptor —
+ * the generic replacement for the old per-type (skoda/manual) hand-validation. `edit` mode lets a
+ * blank `secret` field pass (it's omitted from the returned map so setOverride keeps the existing
+ * credential). Returns the trimmed field map, or an error message for a 400.
+ */
+function collectVehicleFields(
+  module: VehicleModule,
+  body: Record<string, unknown>,
+  opts: { edit?: boolean } = {},
+): { ok: true; fields: Record<string, string> } | { ok: false; error: string } {
+  const fields: Record<string, string> = {}
+  for (const f of module.configFields) {
+    const raw = body[f.key]
+    const val = typeof raw === 'string' ? raw.trim() : ''
+    if (!val) {
+      // Blank secret on edit = "leave unchanged"; a blank required field is an error; a blank
+      // optional field is simply omitted.
+      if (opts.edit && f.secret) continue
+      if (f.required) return { ok: false, error: `${f.label} is required` }
+      continue
+    }
+    if (f.pattern && !new RegExp(f.pattern).test(val))
+      return { ok: false, error: `${f.label} is invalid` }
+    fields[f.key] = val
+  }
+  return { ok: true, fields }
+}
 
 export interface ApiDeps {
   db: DatabaseSync
@@ -599,24 +629,30 @@ export function createApiRouter(deps: ApiDeps): Router {
     res.status(204).end()
   })
 
-  // ── Vehicle management: add (with provider credentials), remove, bind to a loadpoint ────────
+  // ── Vehicle management: add / edit (provider credentials), remove, bind to a loadpoint ─────────
 
-  // POST /api/vehicles — add a vehicle with provider credentials. Creds are stored in the DB
-  // (config_overrides) and NEVER returned or logged. Auth + first fetch run in the background so the
-  // slow provider login doesn't block the response — poll GET /api/vehicles/:name for status.
+  // GET /api/vehicle-types — the registered vehicle modules + their self-described config forms, so
+  // the onboarding/settings form renders + validates generically. A new car module appears here with
+  // no core or UI change (modules self-describe their form the way they self-report capabilities).
+  router.get('/vehicle-types', (_req: Request, res: Response) => {
+    res.json(
+      listVehicleModules().map((m) => ({
+        type: m.type,
+        label: m.label,
+        fields: m.configFields,
+        capabilities: m.capabilities,
+      })),
+    )
+  })
+
+  // POST /api/vehicles — add a vehicle. Config fields are validated generically from the chosen
+  // module's descriptor; credentials are stored in the DB (config_overrides) and NEVER returned or
+  // logged. For a telemetry vehicle, auth + first fetch run in the background so the slow provider
+  // login doesn't block the response — poll GET /api/vehicles/:name for status.
   router.post('/vehicles', async (req: Request, res: Response) => {
-    const b = req.body as {
-      name?: unknown
-      type?: unknown
-      username?: unknown
-      password?: unknown
-      vin?: unknown
-    }
+    const b = req.body as Record<string, unknown>
     const name = typeof b.name === 'string' ? b.name.trim() : ''
     const type = typeof b.type === 'string' && b.type.trim() ? b.type.trim() : 'skoda'
-    const username = typeof b.username === 'string' ? b.username : ''
-    const password = typeof b.password === 'string' ? b.password : ''
-    const vin = typeof b.vin === 'string' ? b.vin.trim().toUpperCase() : ''
     if (!name) {
       res.status(400).json({ error: 'name is required' })
       return
@@ -625,31 +661,60 @@ export function createApiRouter(deps: ApiDeps): Router {
       res.status(409).json({ error: `name "${name}" already in use` })
       return
     }
-    if (type !== 'skoda' && type !== 'manual') {
-      res.status(400).json({ error: 'vehicle type must be "skoda" or "manual"' })
+    const module = getVehicleModule(type)
+    if (!module) {
+      res.status(400).json({ error: `unknown vehicle type "${type}"` })
       return
     }
-    if (type === 'skoda') {
-      if (!username || !password) {
-        res.status(400).json({ error: 'username and password are required' })
-        return
-      }
-      if (vin.length !== 17) {
-        res.status(400).json({ error: 'vin must be 17 characters' })
-        return
-      }
-      setOverride(deps.db, 'vehicle', name, { type, username, password, vin })
-    } else {
-      // manual: a named, API-less car — no credentials, no telemetry (kWh-only, manual selection).
-      setOverride(deps.db, 'vehicle', name, { type })
+    const parsed = collectVehicleFields(module, b)
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error })
+      return
     }
+    setOverride(deps.db, 'vehicle', name, { type, ...parsed.fields })
     await deps.reconcile.addVehicle(name)
-    if (type === 'skoda')
+    // A telemetry vehicle kicks a background auth + first fetch; a no-telemetry (manual) one skips it.
+    if (module.capabilities.soc)
       void deps.vehicles
         .get(name)
         ?.refresh()
-        .catch(() => {}) // background auth + fetch (a manual vehicle has nothing to fetch)
-    res.status(201).json({ name, type, ...(type === 'skoda' ? { vin } : {}) }) // never echo credentials
+        .catch(() => {})
+    res.status(201).json({ name, type }) // never echo config/credentials — the client re-syncs via SSE
+  })
+
+  // PUT /api/vehicles/:name — edit an existing vehicle's config/credentials. Name + type are the
+  // entity key and are IMMUTABLE (rename = delete + re-add). A blank `secret` field is left unchanged
+  // (setOverride merges, so the stored credential is kept); a non-blank value overwrites it. The
+  // vehicle is rebuilt live via reloadVehicle (a fresh auth client picks up changed creds). Never
+  // echoes credentials.
+  router.put('/vehicles/:name', async (req: Request, res: Response) => {
+    const name = String(req.params.name)
+    const cfg = deps.config.vehicles.find((v) => v.name === name) as
+      | { name: string; type?: string }
+      | undefined
+    if (!cfg) {
+      res.status(404).json({ error: 'vehicle not found' })
+      return
+    }
+    const type = String(cfg.type ?? '')
+    const module = getVehicleModule(type)
+    if (!module) {
+      res.status(400).json({ error: `unknown vehicle type "${type}"` })
+      return
+    }
+    const parsed = collectVehicleFields(module, req.body as Record<string, unknown>, { edit: true })
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error })
+      return
+    }
+    setOverride(deps.db, 'vehicle', name, { type, ...parsed.fields })
+    await deps.reconcile.reloadVehicle(name)
+    if (module.capabilities.soc)
+      void deps.vehicles
+        .get(name)
+        ?.refresh()
+        .catch(() => {})
+    res.status(200).json({ name, type })
   })
 
   // DELETE /api/vehicles/:name — remove a vehicle + drop its cached data. A loadpoint bound to it

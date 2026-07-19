@@ -9,6 +9,7 @@ import {
   type OverrideRow,
 } from './config-overrides.js'
 import { applyConfigToLoadpoints } from './loadpoint.js'
+import { getVehicleModule } from '../sdk/registry-api.js'
 import {
   setTimezone,
   setLogRetentionDays,
@@ -72,7 +73,8 @@ function clean<T extends Record<string, unknown>>(obj: T): Partial<T> {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>
 }
 
-/** Recursively replace any `password` field with the redaction placeholder. */
+/** Recursively replace any `password` field with the redaction placeholder. Covers the module
+ *  sections without a form descriptor (mqttBridge / meterReader broker creds). */
 function redactPasswords<T>(v: T): T {
   if (Array.isArray(v)) return v.map(redactPasswords) as T
   if (v && typeof v === 'object') {
@@ -83,6 +85,34 @@ function redactPasswords<T>(v: T): T {
     return out as T
   }
   return v
+}
+
+/**
+ * The secret config keys for a vehicle `type`, from its module descriptor (a module self-describes
+ * which fields are credentials). Falls back to the legacy `['password']` when the module isn't
+ * registered (e.g. a CLI export that hasn't loaded the modules) — so redaction is never weaker than
+ * before, and every current module (skoda's only secret is `password`) is handled identically.
+ */
+function secretVehicleKeys(type: unknown): string[] {
+  const m = typeof type === 'string' ? getVehicleModule(type) : undefined
+  const keys = m?.configFields.filter((f) => f.secret).map((f) => f.key)
+  return keys && keys.length ? keys : ['password']
+}
+
+/**
+ * Redact every secret in an export document: the generic `password` recursion (broker creds) PLUS,
+ * for each vehicle, the descriptor-declared secret fields (so a future module whose credential isn't
+ * literally named `password` is still protected — the modular seam must not leak creds on export).
+ */
+function redactSecrets(doc: Record<string, unknown>): Record<string, unknown> {
+  const out = redactPasswords(doc)
+  const vs = out.vehicles
+  if (Array.isArray(vs)) {
+    for (const v of vs as Array<Record<string, unknown>>) {
+      for (const k of secretVehicleKeys(v.type)) if (v[k] !== undefined) v[k] = REDACTED
+    }
+  }
+  return out
 }
 
 /**
@@ -136,7 +166,7 @@ export function buildConfigExport(inp: ConfigExportInput): Record<string, unknow
   if (logRetentionDays !== DEFAULT_LOG_RETENTION_DAYS)
     doc.logs = { retentionDays: logRetentionDays }
 
-  return secrets ? doc : redactPasswords(doc)
+  return secrets ? doc : redactSecrets(doc)
 }
 
 /** Serialize an export document to YAML (the osc.yaml format). */
@@ -214,16 +244,21 @@ function deRedact(doc: Record<string, unknown>, cur: Config): Record<string, unk
       else mb.broker!.password = v
     })
   }
-  const vs = doc.vehicles as Array<{ name: string; password?: string }> | undefined
+  const vs = doc.vehicles as Array<Record<string, unknown>> | undefined
   if (Array.isArray(vs)) {
     for (const v of vs) {
-      const real = (
-        cur.vehicles.find((x) => x.name === v.name) as { password?: string } | undefined
-      )?.password
-      keep(v.password === REDACTED, real, (nv) => {
-        if (nv === undefined) delete v.password
-        else v.password = nv
-      })
+      const curV = cur.vehicles.find((x) => x.name === v.name) as
+        | Record<string, unknown>
+        | undefined
+      // Descriptor-driven: restore each secret field the module declares (type from the doc, or the
+      // current config as a fallback), matching the redaction side. Skoda → just `password`.
+      for (const k of secretVehicleKeys(v.type ?? curV?.type)) {
+        const real = curV?.[k] as string | undefined
+        keep(v[k] === REDACTED, real, (nv) => {
+          if (nv === undefined) delete v[k]
+          else v[k] = nv
+        })
+      }
     }
   }
   const ms = doc.meterReaders as Array<{ name: string; broker?: { password?: string } }> | undefined

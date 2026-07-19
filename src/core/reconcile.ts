@@ -59,6 +59,7 @@ export interface Reconciler {
   addLoadpoint(name: string): void
   removeLoadpoint(name: string): void
   addVehicle(name: string): Promise<void>
+  reloadVehicle(name: string): Promise<void>
   removeVehicle(name: string): Promise<void>
   reloadLoadpoint(name: string): void
 }
@@ -234,6 +235,23 @@ export function createReconciler(d: ReconcileDeps): Reconciler {
       syncEntity('vehicles', cfg)
       d.vehicles.set(name, v)
       updateHealth(d.health, name, v.health())
+      d.events.emit('config.changed', { kind: 'vehicle', name })
+    },
+
+    // Rebuild a vehicle after a credential/config edit (PUT /api/vehicles/:name). Mirrors
+    // reloadCharger: build the NEW handle first (a fresh auth client picks up changed creds), swap it
+    // in, then stop the OLD (disposes its auth) — so a bad config throws before mutating and the old
+    // handle keeps running. Vehicles own no timer, so there's no start(); a loadpoint binding is by
+    // name and resolves the new handle live, so no re-wiring is needed.
+    async reloadVehicle(name) {
+      const cfg = desired<{ name: string; type: string }>('vehicles', name)
+      if (!cfg) return
+      const old = d.vehicles.get(name)
+      const v = createVehicle(cfg.type, cfg, d.ctx)
+      syncEntity('vehicles', cfg)
+      d.vehicles.set(name, v)
+      updateHealth(d.health, name, v.health())
+      if (old) await old.stop()
       d.events.emit('config.changed', { kind: 'vehicle', name })
     },
 

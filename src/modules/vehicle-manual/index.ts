@@ -9,6 +9,9 @@ import { VEHICLE_CAPS_NONE, type Vehicle, type VehicleData } from '../../sdk/veh
 // resolver to the kWh/duty-cycle rung exactly as for a Guest.
 registerVehicle({
   type: 'manual',
+  label: 'Manual (no app / other car)',
+  capabilities: VEHICLE_CAPS_NONE,
+  configFields: [],
   create(rawCfg): Vehicle {
     const cfg = rawCfg as { name: string }
     const noTelemetry = (): Promise<VehicleData> =>

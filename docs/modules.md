@@ -273,6 +273,22 @@ Lifecycle calls `vehicle.start()` once at boot; the module owns its own poll tim
 
 **Cache battery capacity aggressively.** Once you've read it, return it forever from `getCachedCapacity()`. `getData()` should return cached data when the API is down — set `health()` to `'degraded'` in that case. Never throw when the API is temporarily unavailable.
 
+**The vehicle module self-describes its onboarding form.** Beyond `type` and `create()`, a `VehicleModule` declares `label`, `capabilities` (what it can report — see `VehicleCapabilities` / `VEHICLE_CAPS_NONE`), and `configFields` — the credentials/config it needs beyond the universal `name`. That descriptor drives `GET /api/vehicle-types`, the app's create/edit/onboarding form, and the generic `POST`/`PUT /api/vehicles` validation — so a new car API is a drop-in module with **no core or UI change**. Mark credential fields `secret: true` (masked in the form, redacted on export, and kept on edit when left blank).
+
+```ts
+registerVehicle({
+  type: 'skoda',
+  label: 'Škoda / VW group (app login)',
+  capabilities: { soc: true, range: true, capacity: true, presence: true, climate: true, targetSoc: true },
+  configFields: [
+    { key: 'username', label: 'App email', required: true },
+    { key: 'password', label: 'App password', type: 'password', required: true, secret: true },
+    { key: 'vin', label: 'VIN', required: true, pattern: '^[A-Za-z0-9]{17}$', help: '17 characters.' },
+  ],
+  create(cfg, ctx) { … },
+})
+```
+
 ### `MeterReader` (`src/sdk/meter-reader.ts`)
 
 ```ts

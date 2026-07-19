@@ -8,6 +8,10 @@ import { openDb } from '../core/db.js'
 import { configSchema } from '../core/config.js'
 import { getEffectiveConfig, getOverride } from '../core/config-overrides.js'
 import { createApiRouter, type ApiDeps } from './api.js'
+// Register the real vehicle modules so the generic /vehicles endpoints resolve their descriptors
+// (getVehicleModule / listVehicleModules) — normally done by lifecycle's side-effect imports.
+import '../modules/vehicle-skoda/index.js'
+import '../modules/vehicle-manual/index.js'
 
 const putJson = (url: string, body: unknown) =>
   fetch(url, {
@@ -613,7 +617,7 @@ test('vehicle management: add (creds hidden + persisted), bind to loadpoint, rem
         vin,
       })
       expect(r.status).toBe(201)
-      expect(await r.json()).toEqual({ name: 'enyaq2', type: 'skoda', vin }) // NO credentials echoed
+      expect(await r.json()).toEqual({ name: 'enyaq2', type: 'skoda' }) // NO config/creds echoed
       expect(getOverride(db, 'vehicle', 'enyaq2')).toMatchObject({
         username: 'u',
         password: 'p',
@@ -655,6 +659,123 @@ test('vehicle management: add (creds hidden + persisted), bind to loadpoint, rem
 
       expect((await fetch(`${baseUrl}/api/vehicles/enyaq2`, { method: 'DELETE' })).status).toBe(204)
       expect(getOverride(db, 'vehicle', 'enyaq2')).toBeUndefined()
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('GET /vehicle-types lists registered modules with their self-described form + capabilities', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-vtypes-'))
+  const db = openDb(dir)
+  try {
+    const config = configSchema.parse({})
+    const deps = { db, config, vehicles: new Map(), events: { emit() {} } } as unknown as ApiDeps
+    await withApi(deps, async (baseUrl) => {
+      const r = await fetch(`${baseUrl}/api/vehicle-types`)
+      expect(r.status).toBe(200)
+      const types = (await r.json()) as Array<{
+        type: string
+        label: string
+        fields: Array<{ key: string; secret?: boolean; required?: boolean; pattern?: string }>
+        capabilities: { soc: boolean }
+      }>
+      const skoda = types.find((t) => t.type === 'skoda')
+      const manual = types.find((t) => t.type === 'manual')
+      expect(skoda).toBeDefined()
+      expect(manual).toBeDefined()
+      expect(skoda!.label).toMatch(/koda/)
+      expect(skoda!.fields.map((f) => f.key)).toEqual(['username', 'password', 'vin'])
+      expect(skoda!.fields.find((f) => f.key === 'password')?.secret).toBe(true)
+      expect(skoda!.capabilities.soc).toBe(true)
+      expect(manual!.fields).toEqual([]) // no-config type
+      expect(manual!.capabilities.soc).toBe(false)
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('POST /vehicles: generic descriptor validation — manual (no creds) ok, unknown type 400', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-vgeneric-'))
+  const db = openDb(dir)
+  try {
+    const config = configSchema.parse({ vehicles: [] })
+    const vehicles = new Map<string, unknown>()
+    const reconcile = {
+      addVehicle: async (name: string) => {
+        config.vehicles.push({ name, ...getOverride(db, 'vehicle', name) } as never)
+        vehicles.set(name, { refresh: async () => ({}), health: () => 'ok', stop: async () => {} })
+      },
+    }
+    const deps = { db, config, vehicles, events: { emit() {} }, reconcile } as unknown as ApiDeps
+    await withApi(deps, async (baseUrl) => {
+      // manual: no config fields → 201, stores just the type (no telemetry → no background refresh)
+      const r = await postJson(`${baseUrl}/api/vehicles`, { name: 'opel', type: 'manual' })
+      expect(r.status).toBe(201)
+      expect(await r.json()).toEqual({ name: 'opel', type: 'manual' })
+      expect(getOverride(db, 'vehicle', 'opel')).toEqual({ type: 'manual' })
+      // unknown type → 400 (no module descriptor to validate against)
+      expect((await postJson(`${baseUrl}/api/vehicles`, { name: 'z', type: 'tesla' })).status).toBe(
+        400,
+      )
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('PUT /vehicles/:name: blank secret kept, changed field reloads live, name/type immutable, guards', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-vedit-'))
+  const db = openDb(dir)
+  try {
+    const config = configSchema.parse({ vehicles: [] })
+    const vehicles = new Map<string, unknown>()
+    const reloads: string[] = []
+    const reconcile = {
+      addVehicle: async (name: string) => {
+        config.vehicles.push({ name, ...getOverride(db, 'vehicle', name) } as never)
+        vehicles.set(name, { refresh: async () => ({}), health: () => 'ok', stop: async () => {} })
+      },
+      reloadVehicle: async (name: string) => {
+        reloads.push(name)
+        const i = config.vehicles.findIndex((v) => v.name === name)
+        if (i >= 0) config.vehicles[i] = { name, ...getOverride(db, 'vehicle', name) } as never
+      },
+    }
+    const deps = { db, config, vehicles, events: { emit() {} }, reconcile } as unknown as ApiDeps
+    await withApi(deps, async (baseUrl) => {
+      const vin = 'A'.repeat(17)
+      await postJson(`${baseUrl}/api/vehicles`, {
+        name: 'ev',
+        type: 'skoda',
+        username: 'u',
+        password: 'secret1',
+        vin,
+      })
+      // Edit: change the username, leave the password blank → the stored password is KEPT (merge).
+      const r = await putJson(`${baseUrl}/api/vehicles/ev`, { username: 'u2', password: '', vin })
+      expect(r.status).toBe(200)
+      expect(await r.json()).toEqual({ name: 'ev', type: 'skoda' }) // never echoes creds
+      expect(reloads).toContain('ev') // rebuilt live
+      expect(getOverride(db, 'vehicle', 'ev')).toMatchObject({
+        type: 'skoda',
+        username: 'u2',
+        password: 'secret1',
+        vin,
+      })
+      // Edit: a non-blank password overwrites.
+      await putJson(`${baseUrl}/api/vehicles/ev`, { username: 'u2', password: 'secret2', vin })
+      expect((getOverride(db, 'vehicle', 'ev') as { password: string }).password).toBe('secret2')
+      // Bad patch (invalid VIN) → 400.
+      expect(
+        (await putJson(`${baseUrl}/api/vehicles/ev`, { username: 'u2', vin: 'short' })).status,
+      ).toBe(400)
+      // Unknown vehicle → 404.
+      expect((await putJson(`${baseUrl}/api/vehicles/ghost`, { username: 'x' })).status).toBe(404)
     })
   } finally {
     db.close()

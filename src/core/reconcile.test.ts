@@ -29,8 +29,19 @@ registerTariff({
 })
 registerVehicle({
   type: 'fake-vehicle',
+  label: 'Fake',
+  configFields: [],
+  capabilities: {
+    soc: false,
+    range: false,
+    capacity: false,
+    presence: false,
+    climate: false,
+    targetSoc: false,
+  },
   create: (cfg) => {
     const id = (cfg as { name: string }).name
+    calls.push(`vehicle:${id}.create`)
     return {
       stop: async () => void calls.push(`vehicle:${id}.stop`),
       health: () => 'ok',
@@ -128,16 +139,36 @@ test('addVehicle registers without start(); removeVehicle stops it, drops bindin
   await reconciler.addVehicle('ev')
   expect(deps.vehicles.has('ev')).toBe(true)
   expect(deps.health.has('ev')).toBe(true)
-  expect(calls).toEqual([]) // vehicles own no timer — add must NOT start()
+  expect(calls).toEqual(['vehicle:ev.create']) // built, but vehicles own no timer — no start()
   expect(changed).toContainEqual({ kind: 'vehicle', name: 'ev' })
 
   await reconciler.removeVehicle('ev')
   expect(deps.vehicles.has('ev')).toBe(false)
   expect(deps.health.has('ev')).toBe(false)
-  expect(calls).toEqual(['vehicle:ev.stop']) // stopped on remove
+  expect(calls).toEqual(['vehicle:ev.create', 'vehicle:ev.stop']) // stopped on remove
   // The loadpoint's binding to the removed vehicle is dropped in place (degrades to no-SoC).
   expect(config.loadpoints.find((l) => l.name === 'g')?.vehicle).toBeUndefined()
   expect(changed.filter((c) => c.kind === 'vehicle')).toHaveLength(2)
+})
+
+test('reloadVehicle rebuilds the handle (build-new → stop-old) and emits config.changed', async () => {
+  const base = configSchema.parse({
+    vehicles: [
+      { name: 'ev', type: 'fake-vehicle', vin: 'A'.repeat(17), username: 'u', password: 'p' },
+    ],
+  }) as Config
+  const { deps, changed } = setup(base)
+  const reconciler = createReconciler(deps)
+
+  await reconciler.addVehicle('ev')
+  const first = deps.vehicles.get('ev')
+  calls.length = 0
+
+  await reconciler.reloadVehicle('ev')
+  // A fresh handle is built BEFORE the old one is stopped (so a bad config never strands the vehicle).
+  expect(calls).toEqual(['vehicle:ev.create', 'vehicle:ev.stop'])
+  expect(deps.vehicles.get('ev')).not.toBe(first) // swapped to the new handle
+  expect(changed.filter((c) => c.kind === 'vehicle')).toHaveLength(2) // add + reload
 })
 
 test('add/removeLoadpoint: seeds then drops runtime state, rebuilds circuits, emits config.changed', () => {
