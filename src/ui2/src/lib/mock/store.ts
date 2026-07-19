@@ -88,6 +88,7 @@ export interface Config {
   onboardingStep: number;
   region: string;
   breakerAmps: number;
+  phases: number; // supply phases — sets the max-kW axis on the Home power chart; default 3
   balancerMode: "tibber" | "mqtt" | "static";
   staticLimitA: number;
   houseUsageKw: number;
@@ -111,7 +112,9 @@ interface OscState {
   source: "probing" | "live" | "demo"; // probing→ decide; live = backend via REST/SSE; demo = mock tick
   timezone: string; // site timezone (IANA); from GET /api/settings when live
   housePowerW: number | null; // live whole-house draw (W) from the meter; null = no live reading
-  housePowerSeq: number; // bumps on every meter reading (even unchanged) so the sparkline samples each tick
+  /** Rolling ~15-min history of whole-house + car power for the Home stacked-bar chart. Appended on
+   *  every meter reading (live) / tick (demo); samples older than 15 min are dropped. */
+  powerHistory: PowerSample[];
   meterName: string | null; // main meter reader name (from /api/site) — matches meter.snapshot
   _houseBaseW: number; // demo-only: wandering non-EV base for the mock house-power sim
 
@@ -161,6 +164,25 @@ interface OscState {
   patchHealth: (id: string, health: "ok" | "degraded" | "unavailable") => void;
 
   _tick: () => void;
+}
+
+export interface PowerSample {
+  t: number; // epoch ms
+  total: number; // whole-house draw (W)
+  ev: number; // car charging (W) — a subset of total
+}
+
+const POWER_HISTORY_MS = 15 * 60_000;
+
+// Append a power sample and drop anything older than the 15-min window. Pure — returns a new array.
+function appendPowerSample(
+  prev: PowerSample[],
+  total: number,
+  ev: number,
+  now: number,
+): PowerSample[] {
+  const cutoff = now - POWER_HISTORY_MS;
+  return [...prev.filter((s) => s.t >= cutoff), { t: now, total, ev }];
 }
 
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -289,6 +311,7 @@ function seed(): Pick<
       onboardingStep: 0,
       region: "SE3",
       breakerAmps: 25,
+      phases: 3,
       balancerMode: "tibber",
       staticLimitA: 16,
       houseUsageKw: 1.8,
@@ -303,7 +326,7 @@ export const useOsc = create<OscState>()((set, get) => ({
   source: "probing",
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   housePowerW: null, // set by the meter (live) or the demo tick; card hides until a real value arrives
-  housePowerSeq: 0,
+  powerHistory: [],
   meterName: null,
   _houseBaseW: 700,
 
@@ -453,7 +476,19 @@ export const useOsc = create<OscState>()((set, get) => ({
 
   setSource: (source) => set({ source }),
   setTimezone: (tz) => set({ timezone: tz }),
-  setHousePower: (w) => set((s) => ({ housePowerW: w, housePowerSeq: s.housePowerSeq + 1 })),
+  setHousePower: (w) =>
+    set((s) => ({
+      housePowerW: w,
+      powerHistory:
+        w == null
+          ? s.powerHistory
+          : appendPowerSample(
+              s.powerHistory,
+              w,
+              s.chargers.reduce((a, c) => a + (c.currentPowerW > 0 ? c.currentPowerW : 0), 0),
+              Date.now(),
+            ),
+    })),
   setMeterName: (n) => set({ meterName: n }),
   hydrate: (patch) => set(patch),
   patchCharger: (id, patch) =>
@@ -529,11 +564,13 @@ export const useOsc = create<OscState>()((set, get) => ({
     const houseBase = Math.round(
       Math.min(1800, Math.max(250, s._houseBaseW + (Math.random() - 0.5) * 350)),
     );
+    const total = houseBase + Math.round(evW);
     set({
       chargers: nextChargers,
       vehicles: nextVehicles,
       _houseBaseW: houseBase,
-      housePowerW: houseBase + Math.round(evW),
+      housePowerW: total,
+      powerHistory: appendPowerSample(s.powerHistory, total, Math.round(evW), Date.now()),
     });
   },
 }));

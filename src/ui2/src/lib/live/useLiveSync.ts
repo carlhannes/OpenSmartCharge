@@ -80,10 +80,12 @@ async function rehydrateSite(
     const zone = site.tariffs[0]?.zone;
     const tariffName = site.tariffs[0]?.name;
     const siteBreaker = site.site.mainBreakerA ?? site.balancers[0]?.mainBreakerA;
+    const sitePhases = site.balancers[0]?.phases; // only a balancer exposes phases; else default 3
     useOsc.getState().setConfig({
       ...(zone ? { region: zone } : {}),
       ...(tariffName ? { tariffName } : {}),
       ...(siteBreaker != null ? { breakerAmps: siteBreaker } : {}),
+      ...(sitePhases != null ? { phases: sitePhases } : {}),
       // No dynamic balancer configured → the main breaker is a static safe limit.
       ...(site.balancers.length === 0 && siteBreaker != null
         ? { balancerMode: "static" as const, staticLimitA: siteBreaker }
