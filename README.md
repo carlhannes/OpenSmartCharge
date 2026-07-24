@@ -21,6 +21,22 @@ If you want something that handles solar, batteries, heat pumps, and 300 EV mode
 
 **Requirements:** Docker, an OCPP 1.6J charger on your LAN, a Mosquitto-compatible MQTT broker. Running on a Raspberry Pi? See [docs/raspberry-pi.md](docs/raspberry-pi.md) for NTP clock-sync setup — clock accuracy matters for tariff slot bucketing.
 
+### One-line install (dedicated Linux box)
+
+On a fresh Debian/Ubuntu box, install and run OSC as a systemd service in one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/carlhannes/OpenSmartCharge/main/setup.sh | bash
+```
+
+It installs Node 24, a Mosquitto broker, and NTP time-sync; clones + builds the repo; and registers a
+systemd service (`osc`) that starts on boot. It is **idempotent** — re-run it any time to upgrade to the
+latest `main`; your configuration (`osc.yaml`) and data (`data/osc.db`) are never touched. Then open
+`http://<box>:8080` and complete the onboarding. `--dry-run` previews changes and `--ref <tag>` pins a
+version. (Piping to `bash` runs code as it downloads — read the script first if you prefer.)
+
+### From source (Docker / development)
+
 ```bash
 # Clone and configure
 git clone https://github.com/yourusername/opensmartcharge
@@ -33,21 +49,21 @@ docker compose up mosquitto -d
 
 # Run OSC (development)
 npm install
-npm run dev:all   # starts backend (port 8080) + Vite HMR (port 5173) with prefixed logs
+npm run dev:all   # backend (port 8080) + ui2 dev server (Vite HMR, port 5174), prefixed logs
 
-# Or run backend and UI dev server separately:
+# Or run backend and the UI dev server separately:
 # npm run dev      # backend only (tsx watch, auto-restarts on .ts changes)
-# npm run dev:ui   # Vite HMR only, proxies /api + /events to :8080
+# npm run dev:ui2  # ui2 dev server (Vite HMR on :5174), proxies /api + /events to :8080
 
 # Production build + run:
-npm run build     # tsc + vite build → dist/
-npm start         # serves backend + bundled UI on port 8080
+npm run build     # tsc (backend) + ui2 static SPA → dist/
+npm start         # serves backend + ui2 on port 8080
 
 # Docker (full stack with MQTT broker):
 # docker compose up
 ```
 
-Point your OCPP charger at `ws://<your-host>:8080/ocpp/<stationId>` — the OCPP identity is the **trailing path segment** and must match a charger's `stationId` in `osc.yaml` (for Zaptec this is the charger's serial, which the charger appends automatically). The UI is at `http://localhost:5173` in dev or `http://localhost:8080` in production.
+Point your OCPP charger at `ws://<your-host>:8080/ocpp/<stationId>` — the OCPP identity is the **trailing path segment** and must match a charger's `stationId` in `osc.yaml` (for Zaptec this is the charger's serial, which the charger appends automatically). The UI is at `http://localhost:5174` in dev or `http://localhost:8080` in production.
 
 > Charger accepts commands but won't deliver power (`SuspendedEVSE` / `Current.Offered: 0`)? See **[docs/ocpp-smart-charging.md](docs/ocpp-smart-charging.md)** — OCPP charging-profile quirks and a debugging playbook.
 

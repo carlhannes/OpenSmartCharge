@@ -72,6 +72,8 @@ Then restart: `sudo systemctl restart systemd-timesyncd`.
 
 ## Running OSC as a systemd service
 
+> **Quickest path — the installer:** `curl -fsSL https://raw.githubusercontent.com/carlhannes/OpenSmartCharge/main/setup.sh | bash` does everything in this section (installs Node + mosquitto + NTP, builds, and writes this exact systemd unit) idempotently, and re-running it upgrades in place without touching `osc.yaml` or `data/`. The manual steps below are the under-the-hood reference.
+
 The Pi is a good fit for a LAN deployment. Build once, then run the **compiled** entry point as a single
 process — `node` receives `SIGTERM` directly, so the graceful shutdown handler runs on every
 `systemctl stop`/`restart`: it stops the control loop, closes the OCPP/HTTP/MQTT connections, and
