@@ -1,7 +1,6 @@
 // SSE client — one shared EventSource('/events') fanned out to many subscribers.
-// Ported from src/ui/client/sse.ts, with one difference: the connection is opened
-// lazily via ensureConnected() (called only in live mode) so demo/offline mode
-// doesn't spam reconnect attempts against an absent backend.
+// The connection is opened lazily via ensureConnected() (called only in live mode)
+// so demo/offline mode doesn't spam reconnect attempts against an absent backend.
 
 type SseListener = (data: unknown) => void;
 const listeners = new Map<string, Set<SseListener>>();

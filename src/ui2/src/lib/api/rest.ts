@@ -1,4 +1,4 @@
-// REST client for the OpenSmartCharge backend — mirrors src/ui/client/rest.ts.
+// REST client for the OpenSmartCharge backend.
 // Relative `/api` paths; works via the Vite dev proxy (dev) or same-origin (prod).
 // Over-the-wire shapes: Dates are serialized as ISO strings; omitted optionals are absent.
 import type { DayKey } from "@/lib/format";

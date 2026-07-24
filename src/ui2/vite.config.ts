@@ -50,6 +50,11 @@ export default defineConfig({
         client: { files: ["**/server/**"], specifiers: ["server-only"] },
       },
       server: { entry: "server" },
+      // Build a static SPA (client shell + hydrate) instead of a runtime SSR server, so the
+      // existing Express backend serves ui2 from dist/ui on :8080 — no second Node process.
+      // `server.entry` above is now only used at build time to prerender the shell; dist/server
+      // is not deployed. See docs/raspberry-pi.md + the root `build` script.
+      spa: { enabled: true },
     }),
     viteReact(),
   ],
