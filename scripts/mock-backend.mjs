@@ -77,6 +77,60 @@ const VEHICLE_TYPES = [
 ]
 let siteVehicles = [{ name: 'enyaq', type: 'skoda', vin: 'MOCKVIN0000000001' }]
 
+// Pending OCPP stations (connected, unclaimed) + chargers claimed at runtime (onboarding "claim" /
+// Settings "add charger"). Claimed chargers are reflected in GET /api/site so rehydrateSite shows them.
+let pendingStations = [
+  {
+    stationId: 'MOCK-PENDING-1',
+    vendor: 'Zaptec',
+    model: 'Go',
+    status: 'Available',
+    connectedAt: new Date().toISOString(),
+  },
+]
+const claimedChargers = [] // { name, stationId, maxA, phases, tariff, balancer, vehicle }
+
+// A representative osc.yaml document for GET /api/config/export (round-trips through import). Creds are
+// redacted unless secrets=1 (a full backup with plaintext passwords).
+const configYaml = (secrets) =>
+  [
+    'site:',
+    '  name: Mock Home',
+    `  timezone: ${settings.timezone}`,
+    'tariffs:',
+    '  - name: home',
+    '    type: nordpool',
+    `    zone: ${tariffZone}`,
+    'balancers:',
+    '  - name: house',
+    '    type: mqtt-circuit',
+    `    mainBreakerA: ${siteBreaker}`,
+    '    phases: 3',
+    'vehicles:',
+    ...siteVehicles.flatMap((v) => [
+      `  - name: ${v.name}`,
+      `    type: ${v.type}`,
+      ...(v.vin ? [`    vin: ${v.vin}`] : []),
+      ...(v.type === 'skoda'
+        ? ['    username: you@example.com', `    password: ${secrets ? 'hunter2' : '••••••'}`]
+        : []),
+    ]),
+    'chargers:',
+    '  - name: garage',
+    '    type: ocpp16',
+    '    stationId: MOCK-1',
+    `    maxA: ${lp.maxCurrentA}`,
+    'loadpoints:',
+    '  - name: garage',
+    '    charger: garage',
+    '    tariff: home',
+    '    balancer: house',
+    '    vehicle: enyaq',
+    `    defaultMode: ${lp.mode}`,
+    `    targetSoc: ${lp.targetSoc}`,
+    '',
+  ].join('\n')
+
 // Whole-house meter reading — base house load + whatever the car is drawing (charger is downstream).
 const meterSnapshot = () => {
   const evW = lp.charging ? Math.round(lp.currentA * 230) : 0
@@ -351,6 +405,57 @@ const server = http.createServer((req, res) => {
     return
   }
 
+  // Charger claim (onboarding / add-charger): list pending OCPP stations; claim one → charger + loadpoint.
+  if (p === '/api/chargers/pending' && req.method === 'GET') return send(res, pendingStations)
+  if (p === '/api/chargers' && req.method === 'POST') {
+    readBody((b) => {
+      if (!b.stationId || !b.name) return send(res, { error: 'stationId and name required' }, 400)
+      pendingStations = pendingStations.filter((s) => s.stationId !== b.stationId)
+      claimedChargers.push({
+        name: b.name,
+        stationId: b.stationId,
+        maxA: b.maxA,
+        phases: b.phases,
+        tariff: b.tariff,
+        balancer: b.balancer,
+        vehicle: b.vehicle,
+      })
+      emit('config.changed', { kind: 'charger', name: b.name })
+      send(res, { name: b.name, type: 'ocpp16', stationId: b.stationId }, 201)
+    })
+    return
+  }
+
+  // Config backup: export (YAML download) + import (validates → applies on restart).
+  if (p === '/api/config/export' && req.method === 'GET') {
+    const full = /[?&]secrets=(1|true)\b/.test(req.url)
+    res.writeHead(200, {
+      'content-type': 'text/yaml; charset=utf-8',
+      'content-disposition': `attachment; filename="osc-config${full ? '-full' : ''}.yaml"`,
+      'access-control-allow-origin': '*',
+    })
+    return res.end(configYaml(full))
+  }
+  if (p === '/api/config/import' && req.method === 'POST') {
+    readBody((b) => {
+      const mode = b.mode === 'replace' ? 'replace' : b.mode === 'merge' ? 'merge' : null
+      if (!mode) return send(res, { error: "mode must be 'merge' or 'replace'" }, 400)
+      const dryRun = b.dryRun === true
+      if (!dryRun) emit('config.changed', { kind: 'import', name: mode })
+      send(res, {
+        dryRun,
+        mode,
+        sections: ['site', 'tariffs', 'balancers', 'vehicles', 'chargers', 'loadpoints'],
+        restartRequired: true,
+      })
+    })
+    return
+  }
+
+  // Graceful restart — the mock is unsupervised, so supervised:false (exercises the UI warning path).
+  if (p === '/api/system/restart' && req.method === 'POST')
+    return send(res, { ok: true, supervised: false })
+
   // Plans: /api/loadpoints/:name/plans[/:id]
   const planMatch = p.match(/^\/api\/loadpoints\/([^/]+)\/plans(?:\/([^/]+))?$/)
   if (planMatch) {
@@ -583,6 +688,15 @@ const server = http.createServer((req, res) => {
           maxCurrentA: lp.maxCurrentA,
           autoRevertToSmart: lp.autoRevertToSmart,
         },
+        ...claimedChargers.map((c) => ({
+          name: c.name,
+          charger: c.name,
+          tariff: c.tariff,
+          balancer: c.balancer,
+          vehicle: c.vehicle,
+          maxCurrentA: c.maxA ?? 16,
+          autoRevertToSmart: true,
+        })),
       ],
       chargers: [
         {
@@ -592,6 +706,13 @@ const server = http.createServer((req, res) => {
           stationId: 'MOCK-1',
           maxA: lp.maxCurrentA,
         },
+        ...claimedChargers.map((c) => ({
+          name: c.name,
+          label: c.name,
+          type: 'ocpp16',
+          stationId: c.stationId,
+          maxA: c.maxA ?? 16,
+        })),
       ],
       balancers: [{ name: 'house', type: 'mqtt-circuit', mainBreakerA: siteBreaker, phases: 3 }],
       tariffs: [{ name: 'home', type: 'nordpool', zone: tariffZone }],
