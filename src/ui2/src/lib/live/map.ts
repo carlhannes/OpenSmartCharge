@@ -163,10 +163,19 @@ export function mapMeterWatts(
   return phases.length ? Math.round(phases.reduce((a, b) => a + b, 0) * VOLTAGE) : null;
 }
 
-export function mapHealth(rec: Record<string, ModuleHealth>): StoreHealth[] {
+export function mapHealth(
+  rec: Record<string, ModuleHealth>,
+  categories?: Record<string, StoreHealth["type"]>,
+): StoreHealth[] {
   const toStatus = (h: ModuleHealth): StoreHealth["status"] =>
     h === "ok" ? "ok" : h === "degraded" ? "warn" : "bad";
-  return Object.entries(rec).map(([id, h]) => ({ id, name: id, status: toStatus(h), message: "" }));
+  return Object.entries(rec).map(([id, h]) => ({
+    id,
+    name: id,
+    status: toStatus(h),
+    message: "",
+    type: categories?.[id],
+  }));
 }
 
 /** Bucket tariff slots into the 24-hour-of-day number[] the Timeline consumes; fill gaps with the mean. */

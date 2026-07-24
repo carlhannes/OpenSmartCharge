@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useOsc, startTick, type Charger, type Vehicle } from "@/lib/mock/store";
+import { useOsc, startTick, type Charger, type Vehicle, type ModuleType } from "@/lib/mock/store";
 import * as api from "@/lib/api/rest";
 import { ensureConnected, subscribe } from "@/lib/api/sse";
 import {
@@ -92,6 +92,14 @@ async function rehydrateSite(
         : {}),
     });
     useOsc.getState().setMeterName(site.meterReaders[0]?.name ?? null);
+    // Health-key → category (from /api/site) so the System status page can label each module by type.
+    const categories: Record<string, ModuleType> = {};
+    for (const c of site.chargers) categories[c.name] = "charger";
+    for (const t of site.tariffs) categories[t.name] = "tariff";
+    for (const b of site.balancers) categories[b.name] = "balancer";
+    for (const v of site.vehicles) categories[v.name] = "vehicle";
+    for (const m of site.meterReaders) categories[m.name] = "meter";
+    useOsc.getState().setModuleCategories(categories);
     // Vehicles (name + capabilities + live reading) — mapped here so add/remove (config.changed)
     // reflects without a reload. getVehicle tolerates a manual car (data: null) → mapVehicle degrades.
     const vehicles = (
@@ -166,7 +174,9 @@ export function useLiveSync() {
       }
 
       try {
-        store.hydrate({ moduleHealth: mapHealth(await api.getHealth()) });
+        store.hydrate({
+          moduleHealth: mapHealth(await api.getHealth(), useOsc.getState().moduleCategories),
+        });
       } catch {
         /* health optional */
       }
@@ -376,7 +386,11 @@ export function useLiveSync() {
       healthTimer = setInterval(() => {
         api
           .getHealth()
-          .then((h) => useOsc.getState().hydrate({ moduleHealth: mapHealth(h) }))
+          .then((h) =>
+            useOsc
+              .getState()
+              .hydrate({ moduleHealth: mapHealth(h, useOsc.getState().moduleCategories) }),
+          )
           .catch(() => {});
       }, HEALTH_POLL_MS);
     })();

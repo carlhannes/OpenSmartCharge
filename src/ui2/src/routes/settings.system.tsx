@@ -152,8 +152,15 @@ function SystemSettings() {
           >
             <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${tone[m.status]}`} />
             <div className="min-w-0">
-              <div className="font-medium">{m.name}</div>
-              <div className="text-xs text-muted-foreground">{m.message}</div>
+              <div className="flex items-center gap-2">
+                <div className="font-medium">{m.name}</div>
+                {m.type && (
+                  <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    {m.type}
+                  </span>
+                )}
+              </div>
+              {m.message && <div className="text-xs text-muted-foreground">{m.message}</div>}
             </div>
           </div>
         ))}
