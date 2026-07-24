@@ -154,6 +154,12 @@ Vehicle credentials added at runtime via the API (the car onboarding flow) are s
 
 ### Backup & restore
 
+Two levels. The **UI** (Settings → System → Backup & restore) exports/imports just your
+**configuration** as an `osc.yaml` file — chargers, vehicles, tariffs, breaker, plans, timezone, with an
+optional *"include credentials"* — and applies it on a restart you can trigger from the same screen (or
+from the onboarding welcome screen's *"import a backup"*). For a **full** snapshot including charging
+history, back up the SQLite database from the CLI:
+
 OSC stores all state in a single SQLite file (`data/osc.db`). Back it up while OSC is running:
 
 ```bash
