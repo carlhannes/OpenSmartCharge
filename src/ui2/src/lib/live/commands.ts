@@ -232,7 +232,7 @@ export async function claimCharger(body: {
  *  success. In pure demo (no live backend) it's a benign no-op result. */
 export async function importBackup(
   config: string,
-  mode: "merge" | "replace" = "replace",
+  mode: "merge" | "replace" = "merge",
   dryRun = false,
 ): Promise<api.ImportResultDto> {
   if (!isLive()) return { dryRun, mode, sections: [], restartRequired: true };
