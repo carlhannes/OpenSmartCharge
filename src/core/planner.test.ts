@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { plan } from './planner.js'
+import { plan, buildPlanSeries, type PlannedSlot } from './planner.js'
 import type { TariffSlot } from '../sdk/tariff.js'
 
 const NOW = new Date()
@@ -108,4 +108,34 @@ test('undefined priceSlots falls back to latest-start plan', () => {
   expect(slots.length).toBeGreaterThan(0)
   const charging = slots.filter((s) => s.shouldCharge)
   expect(charging.length).toBeGreaterThan(0)
+})
+
+// buildPlanSeries: merge the price curve with the planner's chosen slots for the UI chart.
+const planSlot = (offsetH: number, offsetMin: number, shouldCharge: boolean): PlannedSlot => ({
+  start: new Date(NOW.getTime() + offsetH * 3_600_000 + offsetMin * 60_000),
+  end: new Date(NOW.getTime() + offsetH * 3_600_000 + (offsetMin + 15) * 60_000),
+  shouldCharge,
+})
+
+test('buildPlanSeries (smart): a charging plan slot marks the price slot it overlaps', () => {
+  const prices = priceSlots([2, 0.1, 0.5]) // hours 0,1,2 from NOW
+  const planned = [planSlot(0, 0, false), planSlot(1, 15, true)] // charging only in hour 1
+  const series = buildPlanSeries(prices, planned, 'smart')
+  expect(series.length).toBe(3)
+  expect(series.map((s) => s.shouldCharge)).toEqual([false, true, false])
+  expect(series[1].pricePerKWh).toBe(0.1) // price carried through onto the series
+})
+
+test('buildPlanSeries (fast): every slot charges regardless of plan', () => {
+  const series = buildPlanSeries(priceSlots([2, 0.1, 0.5]), [], 'fast')
+  expect(series.every((s) => s.shouldCharge)).toBe(true)
+})
+
+test('buildPlanSeries (disabled): no slot charges even with a charging plan slot', () => {
+  const series = buildPlanSeries(priceSlots([2, 0.1, 0.5]), [planSlot(1, 0, true)], 'disabled')
+  expect(series.every((s) => !s.shouldCharge)).toBe(true)
+})
+
+test('buildPlanSeries: empty prices → empty series', () => {
+  expect(buildPlanSeries([], [planSlot(1, 0, true)], 'smart')).toEqual([])
 })

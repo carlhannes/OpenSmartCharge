@@ -1,4 +1,4 @@
-import type { MeterValue } from './types.js'
+import type { MeterValue, MeterValuesReq } from './types.js'
 
 export interface ParsedMeterValue {
   energyKwh?: number
@@ -24,12 +24,49 @@ export function parseMeterValue(mv: MeterValue): ParsedMeterValue {
     return isNaN(n) ? undefined : n
   }
 
-  const energyWh = num(get('Energy.Active.Import.Register'))
+  // The energy register is Wh by default (OCPP), but some chargers report kWh and say so via
+  // `unit`. Respect the declared unit instead of always dividing by 1000 (a kWh reading divided
+  // by 1000 would be 1000× too small and corrupt the session-energy delta).
+  const energySample = mv.sampledValue.find((s) => s.measurand === 'Energy.Active.Import.Register')
+  const energyRaw = num(energySample?.value)
+  const energyKwh =
+    energyRaw === undefined
+      ? undefined
+      : energySample?.unit === 'kWh'
+        ? energyRaw
+        : energyRaw / 1000
   return {
-    energyKwh: energyWh === undefined ? undefined : energyWh / 1000,
+    energyKwh,
     powerW: num(get('Power.Active.Import')),
     currentA: num(get('Current.Import')),
     voltageV: num(get('Voltage')),
     socPct: num(get('SoC')),
   }
+}
+
+export interface LatestReadings {
+  currentA?: number
+  powerW?: number
+}
+
+/**
+ * Latest live current/power across a whole MeterValues payload (which may carry several
+ * MeterValue samples). Current is the max across phases (parseMeterValue only sees the first
+ * phase); power is the most recent value. Used to surface live current to the loadpoint/UI.
+ */
+export function latestReadings(params: MeterValuesReq): LatestReadings {
+  const out: LatestReadings = {}
+  for (const mv of params.meterValue) {
+    const currents = mv.sampledValue
+      .filter((s) => s.measurand === 'Current.Import')
+      .map((s) => parseFloat(s.value))
+      .filter((n) => !isNaN(n))
+    if (currents.length > 0) out.currentA = Math.max(...currents)
+    const powerRaw = mv.sampledValue.find((s) => s.measurand === 'Power.Active.Import')?.value
+    if (powerRaw !== undefined) {
+      const p = parseFloat(powerRaw)
+      if (!isNaN(p)) out.powerW = p
+    }
+  }
+  return out
 }

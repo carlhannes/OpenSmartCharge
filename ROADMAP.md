@@ -2,6 +2,8 @@
 
 Each milestone is independently shippable — M0 gives you docs and a typed skeleton; M1 gives you a working OCPP server; M2 adds pricing; and so on. You do not need all milestones for a useful system.
 
+> **Next up:** the [v0.2.0 UX vision & backend roadmap](docs/vision-0.2.0.md) — a mobile-first redesign (onboarding, recurring plans, km/% targets) and the backend work (config-as-data, charger pairing) it requires.
+
 ## Milestone 0 — Foundation (shipped)
 
 **Goal:** Document the architecture, establish module contracts, wire up the project skeleton so every future milestone drops cleanly into the right slot.
@@ -41,12 +43,13 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 ---
 
-## Milestone 2 — Tariff: Elering (SE1–SE4) (shipped)
+## Milestone 2 — Tariff: Nord Pool day-ahead (shipped)
 
-**Goal:** Fetch and cache day-ahead prices from the Elering API, expose them to the planner and UI.
+**Goal:** Fetch and cache day-ahead prices, expose them to the planner and UI.
 
-- [x] `src/modules/tariff-elering/` — smart daily fetch anchored to 13:15 Stockholm, exponential backoff on failure
-- [x] Hourly slot storage in SQLite keyed by `(zone, slot_start)` — survives restart and internet outages
+- [x] `src/modules/tariff-elering/` — **Baltics + Finland (EE/FI/LV/LT)**. Smart daily fetch anchored to 13:15 Stockholm, exponential backoff on failure
+- [x] `src/modules/tariff-elprisetjustnu/` — **Sweden (SE1–SE4)**, 15-minute resolution, SEK/kWh, no API key. (Elering does *not* publish Swedish zones.) Both providers share the Nord Pool schedule/persistence/health factory in `src/sdk/nordpool-tariff.ts`
+- [x] Slot storage in SQLite keyed by `(zone, slot_start)` (hourly or 15-min) — survives restart and internet outages
 - [x] Health: `ok` → `degraded` (past publish window, no tomorrow data) → `unavailable` (no future slots cached)
 - [x] `GET /api/tariffs/:name/prices?from=&to=` endpoint — returns `TariffSlot[]` in EUR/kWh
 - [x] `osc/tariffs/<name>/now` MQTT (retained) — re-published on new data and at the top of each hour
@@ -87,12 +90,14 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 **Goal:** Dynamic load balancing from live household meter data, with a well-defined degradation path for meter failures.
 
-- [x] `src/modules/balancer-mqtt-circuit/` — in-process MeterReader path (preferred); MQTT topic fallback (`{prefix}/i1_a`, `i2_a`, `i3_a`) when no `meterReader:` is set
-- [x] `meterReader: <name>` link path — balancer reads from in-process MeterReader by preference, falls back to `meterTopicPrefix` MQTT subscription when not set (backwards compatible)
-- [x] Control loop (default 15 s): `freeAmps = mainBreakerA − max(phaseCurrents) + chargerCurrents`
-- [x] Distributes `freeAmps` across active loadpoints — `fast` loadpoints get priority; `smart` get equal split of remaining headroom; `disabled` get 0
+> **Later refactored (SSoT unification).** The balancer became a **pure splitter**: the meter + its staleness moved onto a `MeterReader` (the raw-topic path is now `type: mqtt-phase`), and the current-degradation ladder runs **once per circuit** in the control loop. The capabilities below still hold; the mechanism lines are updated to match. See `docs/config.md` (balancers[]) and AGENTS.md.
+
+- [x] `src/modules/balancer-mqtt-circuit/` — pure allocation math; the meter lives on a `MeterReader` (`tibber-pulse`, or `mqtt-phase` for the raw `{prefix}/i{1,2,3}_a` feed)
+- [x] `meterReader: <name>` link path — the circuit reads live current from the named in-process MeterReader (no MQTT round-trip); unset → a blind circuit on the historical/static fallbacks
+- [x] Control loop (default 30 s): resolves the circuit budget `mainBreakerA − max(phaseCurrents) + circuit ownDraw`, then the balancer splits it
+- [x] Distributes the circuit budget across active loadpoints — `fast` loadpoints get priority; `smart` get equal split of remaining headroom; `disabled` get 0
 - [x] Smart mode: respects tariff windows (no charging in expensive hours); `shouldChargeNow` computed per loadpoint via `planner.plan()` in lifecycle
-- [x] Meter staleness: after `meterStaleAfterSec`, switch to `safeStaticCurrentA` per loadpoint; health → `degraded`
+- [x] Meter staleness: the reader's `health()` is the one authority — when it degrades, the circuit steps down the ladder (historical-worstcase → static-tod `nightMarginA`/`daytimeFraction`); health → `degraded`
 - [x] Publishes allocation state to `osc/balancer/<name>/...` (health, free_amps, allocations)
 - [x] `GET /api/balancers/:name` REST endpoint — live allocations + health + freeAmps
 
@@ -102,7 +107,7 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 |---|---|
 | Full healthy | Dynamic balancing at full optimization |
 | Internet down | Balancer uses cached prices; SoC estimated; charging continues |
-| Pulse feed stops | `safeStaticCurrentA` applied within `meterStaleAfterSec`; UI shows "meter feed lost" |
+| Pulse feed stops | Meter reader → `degraded` (its `staleAfterSec`); circuit falls to historical-worstcase, then static-tod (`nightMarginA`/`daytimeFraction`); UI shows "meter feed lost" |
 | Vehicle API down, never seen | Time-based planning; charging at scheduled start |
 | Vehicle API down, seen before | Estimated SoC from capacity + session kWh; departure planning works |
 | Everything restored | Auto-recovery, no restart |
@@ -162,3 +167,67 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 - Vehicle brands beyond Skoda / VW group (community modules welcome)
 - Embedded MQTT broker
 - HEMS / §14a EnWG grid-operator dimming
+
+---
+
+## Known issues / follow-ups (discovered during real-hardware testing, 2026-07-03)
+
+Bugs and doc discrepancies found bringing up a real charger. The set below was worked through and **resolved** in the 2026-07-03 → 07-04 hardening pass (test-first); a few nice-to-haves remain.
+
+### Resolved (real-charger hardening, 2026-07-03 → 07-04)
+
+- [x] **Charger stuck at `SuspendedEVSE` / `Current.Offered: 0`.** Root cause: Zaptec native OCPP **stacks charging profiles (highest stack level wins)** and **persists them across CS reconnects**; a leftover **0 A `TxDefaultProfile` at stack level 8** from evcc's "Off" outranked OSC's `stackLevel: 1`. Full write-up + debugging playbook in **`docs/ocpp-smart-charging.md`**.
+- [x] **Permanent stack-level fix:** OSC reads `ChargeProfileMaxStackLevel` via `GetConfiguration` on connect and installs its `TxDefaultProfile` at that top level (`stackLevel` threaded through `buildChargingProfilePayload`/`setCurrentLimit`/`setLimit`), so it always outranks leftover/default profiles — no auto-clear needed. Connector `0`→`1` + backdated `startSchedule` also applied.
+- [x] **`numberPhases` is now a per-charger `phases` config** (default 3), threaded through the profile builder.
+- [x] **Reconnect resilience (flaky-WiFi / host-sleep):** on every (re)connect OSC re-asserts the last commanded limit + `TriggerMessage(StatusNotification)`; status subscriptions persist across reconnects so the loadpoint keeps updating after a drop. Resolves the old "connection state stale after reconnect" bug.
+- [x] **Reconnect-bounce eviction:** disconnect handler guards `s.client === client` so a stale disconnect can't evict a live re-registered socket.
+- [x] **Live current/power:** `MeterValues` push `currentA`/`powerW` to `ChargerStatus` → `/api/loadpoints.currentA` (was stuck at 0 while charging). Also **cleared to 0 when not charging** — a bare `StatusNotification`/`StopTransaction` carries no `currentA`, so the last live reading was sticking after a stop (UI showed e.g. `9.7 A` with the car idle); `foldChargerStatus` (`loadpoint.ts`) forces 0 whenever `charging` is false.
+- [x] **Session energy = delta:** report `(latest register − meterStart)`; added `transactions.meter_start` + guarded additive migration.
+- [x] **Outbound OCPP commands + REST endpoints:** `Reset`, `ChangeAvailability`, `ClearChargingProfile`, `GetCompositeSchedule`, `GetConfiguration`, `TriggerMessage`.
+- [x] **Endpoint loadpoint→charger resolution:** `/start`,`/stop`,`/profile`,`/reset`,`/clear-profile`,`/composite-schedule` resolve the loadpoint's charger (no longer assume loadpoint name == charger name).
+- [x] **`defaultMode` honored** when seeding a new loadpoint (persisted mode still wins on restart).
+- [x] **Docs:** README/`docs/architecture.md` corrected "15-minute" tariff resolution → hourly (Elering/Nord Pool day-ahead).
+- [x] **UI dev-server blank page:** renamed `src/ui/api/` → `src/ui/client/` so it no longer collides with the `/api` dev proxy; removed the `vite.config.ts` `bypass`.
+- [x] Raw OCPP frame logging is now opt-in via `OCPP_TRACE=1`.
+
+Covered by tests: `src/modules/charger-ocpp16/server.integration.test.ts` (mock charger — 5 scenarios), `src/server/api.test.ts`, `src/core/loadpoint.test.ts`.
+
+### Smart charging: graceful degradation (shipped 2026-07-04)
+
+Smart mode now works with **any subset of dependencies degraded**, via pure resolver ladders (`src/core/smart-charging/`) driven by a single control loop — no combinatorial `if (X degraded)` branching. Each input resolver returns `{value, source, degraded}`; consumers read only `.value`.
+
+- [x] **Swedish prices** via `tariff-elprisetjustnu` (SE1–SE4, 15-min, SEK); shared Nord Pool factory + `sdk/stockholm-time.ts` (DST-safe local time).
+- [x] **Energy / price / current resolver ladders** — SoC→fixed-kWh→duty-cycle; live→3-day-avg→static-night; live-meter→worst-case→time-of-day-static. Unit-tested incl. the ASAP-price trap and the 6 A floor.
+- [x] **Control-loop inversion** (`control-loop.ts`): one damped 30 s tick (configurable, deadband-gated) drives every circuit; **smart mode works with no balancer** (the old no-balancer path applied max, price-blind). Balancer circuits still coordinate through the untouched, test-pinned `allocate()`.
+- [x] **New config:** `site.mainBreakerA`, a `smartCharging` block (interval/deadband/night-window/margins/historicalDays), loadpoint `targetKWh` (surfaced in API/MQTT/UI); config `targetSoc`/`targetTime`/`targetKWh` now seed the DB.
+- [x] **Household-load hourly rollup** (`smart-charging/rollup.ts`) feeds the worst-case-current fallback; `parseTargetTime` + night-window are now Stockholm-local (were server-local).
+- [x] Verified live on the real Zaptec (no balancer, no vehicle): resolved `{energy: duty-cycle, price: live-tariff, current: static-tod}`, gated on the SE4 price.
+
+### Resolved (correctness pass, 2026-07-04)
+
+- [x] **Smart mode ignored price when a control tick landed off a 15-min boundary.** `decideShouldCharge` found no planned slot covering "now" (plan slots start at the *next* boundary) and defaulted to charge — so smart mode charged ~14 of every 15 minutes regardless of price. Now falls back to the imminent slot's decision. (`f77674e`)
+- [x] **Live current/energy zeroed on OSC restart or a bare charger WS reconnect.** `activeTransactionId` was in-memory only; now rehydrated from the open transaction on connect (`findOpenTransaction`) + MeterValues trust the charger's own `transactionId`. Also repairs `remoteStop` after a reconnect.
+- [x] **Setting one target NULLed the others.** `POST /target {soc}` wiped `targetTime`/`targetKWh`; `setLoadpointTarget` + `handleTargetChange` now merge (undefined = leave unchanged).
+- [x] **Declarative `config:apply` CLI.** `npm run config:apply` overwrites persisted loadpoint mode/targets from `osc.yaml` (the DB remains the runtime source of truth; boot still persist-wins). See `docs/config.md`.
+- [x] **Latent hardening:** transactions insert with the OCPP id as PK directly (no fragile insert-then-UPDATE remap); `parseMeterValue` honours `sampledValue.unit` (kWh vs Wh); `/api/transactions/:id` per-sample energy is the session delta, not the lifetime register.
+
+### Resolved (0.2.0 flagship — plans, timezone, minSoc, 2026-07-04)
+
+- [x] **Multiple recurring charging plans** per loadpoint (W3): `charge_plans` table + `src/core/plans.ts`
+  resolution layer (weekday-recurring; earliest still-upcoming ready-by governs) feeding the *unchanged*
+  planner. CRUD at `/api/loadpoints/:name/plans` + `loadpoint.plans` SSE. The ad-hoc target is the fallback.
+- [x] **km / kWh targets** (W4): plan unit `pct|km|kwh`; km→% via the cached vehicle range/SoC ratio (degrades without a car).
+- [x] **Configurable site timezone**: `settings` table + `src/core/settings.ts`; `stockholm-time.ts` →
+  tz-parameterized `local-time.ts`; the site tz (auto-detected in setup via `PUT /api/settings`, or
+  `site.timezone`) drives planning, while tariff providers keep the Nord Pool market tz.
+- [x] **minSoc safety floor**: per-loadpoint minimum SoC; smart mode force-charges below it (respects Off + warns).
+
+Unblocks ui2's plan UI. Remaining ui2-side wiring (that agent): `mapPlan`, plan commands, hydrate `plans`
+in `useLiveSync`, subscribe `loadpoint.plans` + `settings.changed`, setup timezone auto-detect, a minSoc control.
+
+### Remaining / nice-to-have
+
+- [ ] Exclude `*.test.ts` + `mock-charger.ts` from the production build (they currently compile into `dist/` — harmless dead weight). Add to `tsconfig.json`/build config.
+- [ ] Unify the typed test **mock charger** (`src/modules/charger-ocpp16/mock-charger.ts`) with the `.mjs` sim (`scripts/lib/fake-charger.mjs`) to remove transport duplication.
+- [ ] `powerW` is on `ChargerStatus` but not surfaced on `LoadpointState`/UI — add a field + bridge if a power readout is wanted.
+- [ ] Surface each loadpoint's resolver `sources` (energy/price/current rung) on `/api/loadpoints/:name` for UI observability (currently debug-logged only).

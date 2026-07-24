@@ -26,7 +26,7 @@ test('buildChargingProfilePayload: TxDefaultProfile/Absolute, limit in Amps', ()
   expect(payload.csChargingProfiles.chargingProfileKind).toBe('Absolute')
   expect(payload.csChargingProfiles.chargingSchedule.chargingRateUnit).toBe('A')
   expect(payload.csChargingProfiles.chargingSchedule.chargingSchedulePeriod).toEqual([
-    { startPeriod: 0, limit: 16 },
+    { startPeriod: 0, limit: 16, numberPhases: 3 },
   ])
 })
 

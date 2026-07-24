@@ -1,6 +1,6 @@
 import { useHealth } from '../hooks/useHealth.js'
 import HealthBadge from '../components/HealthBadge.js'
-import type { ModuleHealth } from '../api/rest.js'
+import type { ModuleHealth } from '../client/rest.js'
 import styles from './Health.module.css'
 
 export default function Health() {

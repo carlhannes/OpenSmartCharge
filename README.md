@@ -9,7 +9,7 @@ If you want something that handles solar, batteries, heat pumps, and 300 EV mode
 ## Features
 
 - **OCPP 1.6J server** — any charger speaking OCPP 1.6J connects to it directly on your LAN
-- **Day-ahead pricing** — Elering API covers SE1–SE4 (Swedish Nordpool zones) with no API key required. 15-minute slot resolution.
+- **Day-ahead pricing** — Swedish zones (SE1–SE4) via elprisetjustnu.se at 15-minute resolution; the Baltics + Finland (EE/FI/LV/LT) via the Elering API. No API key required.
 - **Household load balancing** — reads live per-phase currents from your Tibber Pulse natively (no Python sidecar required) or any DSMR/OBIS meter bridged to MQTT, distributes the available headroom between chargers
 - **Vehicle SoC** — reads state-of-charge from Skoda/VW vehicles; plans charging to hit your target by departure time
 - **Charge modes per charger** — `disabled` / `smart` / `fast`, changeable via UI, REST, or MQTT
@@ -47,7 +47,9 @@ npm start         # serves backend + bundled UI on port 8080
 # docker compose up
 ```
 
-Point your OCPP charger at `ws://<your-host>:8080/ocpp`. The UI is at `http://localhost:5173` in dev or `http://localhost:8080` in production.
+Point your OCPP charger at `ws://<your-host>:8080/ocpp/<stationId>` — the OCPP identity is the **trailing path segment** and must match a charger's `stationId` in `osc.yaml` (for Zaptec this is the charger's serial, which the charger appends automatically). The UI is at `http://localhost:5173` in dev or `http://localhost:8080` in production.
+
+> Charger accepts commands but won't deliver power (`SuspendedEVSE` / `Current.Offered: 0`)? See **[docs/ocpp-smart-charging.md](docs/ocpp-smart-charging.md)** — OCPP charging-profile quirks and a debugging playbook.
 
 **Before opening a PR:** run `npm run build && npm start` and verify the production UI matches what you see in dev. With a Mosquitto broker running (`docker compose up -d mosquitto`), also run `npm run smoke` to verify the OCPP+REST+MQTT integration end-to-end.
 
@@ -60,11 +62,13 @@ OSC has four module types and one core concept:
 | Type | What it does | Built-in |
 |---|---|---|
 | **Charger** | Speaks to hardware — sends `SetChargingProfile`, reads meter values | OCPP 1.6J |
-| **Tariff** | Provides 15-min spot price slots | Elering (SE1–SE4) |
+| **Tariff** | Provides day-ahead spot price slots | elprisetjustnu (SE1–SE4), Elering (EE/FI/LV/LT) |
 | **Balancer** | Decides how many amps each charger gets per tick | MQTT circuit |
 | **Vehicle** | Reads state-of-charge | Skoda / VW |
 
 Each module type has a [TypeScript interface in `src/sdk/`](src/sdk/). Third-party modules drop into the `./plugins/` directory and are loaded at startup — no code changes needed in OSC itself. See [the module authoring guide](docs/modules.md).
+
+Modules stay **minimal mappers** to a single external service — they translate data on demand, actuate when told, and report their own health; they own no timers or scheduling. The **core lifecycle owns all orchestration**: the control loop, when to poll a vehicle, and how the pieces combine. (See [AGENTS.md](AGENTS.md) → "Modules vs. the lifecycle".)
 
 ### Loadpoints
 
@@ -80,7 +84,7 @@ The loadpoint is what you control — via the web UI, REST, or MQTT. The Charger
 [Skoda API]   → estimator → loadpoint    ─┘
 ```
 
-The balancer runs every 15 seconds. It reads live per-phase currents from MQTT, subtracts house load from the main breaker, and distributes the remaining headroom across active loadpoints — weighted by mode, tariff window, and SoC target.
+Each control tick, OSC resolves the circuit's available current — the main breaker minus live house load read from the meter reader, degrading to a last-few-days worst-case or a time-of-day static when the meter is stale — and the balancer splits that budget across the active loadpoints, weighted by mode, tariff window, and SoC target.
 
 ## When things break
 
@@ -90,14 +94,14 @@ OSC is designed around a two-tier model so that a bad internet day doesn't stop 
 OCPP server, MQTT broker, balancer circuit math, web UI, SQLite.
 
 **Tier 2 — internet-enhanced (optional):**
-Day-ahead tariffs (Elering), vehicle SoC (Skoda API).
+Day-ahead tariffs (elprisetjustnu / Elering), vehicle SoC (Skoda API).
 
 Every module reports a health status: `ok` / `degraded` / `unavailable`. The system keeps running under degradation:
 
 | What breaks | What happens |
 |---|---|
 | Internet down | Balancer uses cached prices (yesterday's curve). Vehicle SoC estimated from last known value + session kWh delivered. Charging continues. |
-| Tibber Pulse / MQTT meter feed stale | Balancer switches to a configured safe static current (`safeStaticCurrentA`) — conservative but meaningful. Fuses safe. |
+| Tibber Pulse / MQTT meter feed stale | The circuit steps down the current ladder — last-few-days worst-case household load, then a time-of-day static (night `mainBreakerA − nightMarginA`, day `mainBreakerA × daytimeFraction`). Conservative but meaningful. Fuses safe. |
 | Vehicle API unreachable (never seen vehicle) | Planner falls back to time-based: start charging at the latest time that completes by departure. |
 | Vehicle API unreachable (seen vehicle before) | Battery capacity is cached. Planner estimates current SoC from `lastKnownSoc + (sessionKWh / capacity)`. Full departure planning works. |
 | Everything restored | Modules recover automatically. No restart needed. |
@@ -108,6 +112,17 @@ All degraded states are surfaced on the UI and on MQTT (`osc/health/<module>`).
 
 Copy `osc.dist.yaml` to `osc.yaml` and edit. Full reference: [docs/config.md](docs/config.md).
 
+### Runtime configuration (declarative)
+
+`osc.yaml` is the **seed**, not the live source of truth. Structural config — tariff region, main
+breaker, balancer params, and even claiming a newly-connected charger or adding a vehicle — is editable
+at runtime through the API/UI; changes persist in the database (`config_overrides`) and **win over
+`osc.yaml` on restart**. The system applies them by **soft-reloading just the affected module** — no
+process restart. `npm run config:apply` re-asserts the file over runtime edits (clearing them for
+file-defined entities, preserving runtime-added ones; `-- --prune` clears everything). This declarative
+model — desired state in config/DB, the running system continuously reconciling toward it — is also what
+keeps charging resilient to flaky connectivity (see [AGENTS.md](AGENTS.md) → "Declarative config & soft-reload").
+
 ### Credentials
 
 `osc.yaml` is listed in `.gitignore` — **never commit it**. It may contain your MySkoda email and password in plain text.
@@ -117,6 +132,8 @@ chmod 600 osc.yaml   # restrict read access to your user only
 ```
 
 Credentials are never logged. OSC redacts tokens in all debug output. If you are deploying on a shared machine, consider using a secrets manager or environment-variable injection (see [docs/config.md](docs/config.md)).
+
+Vehicle credentials added at runtime via the API (the car onboarding flow) are stored in `data/osc.db` — the same plaintext-at-rest posture as `osc.yaml`, so `chmod 700 data/` and treat backups as secret. They are never returned by the API (`GET /api/site` exposes only `name`/`type`/`vin`) or written to logs. Encryption-at-rest is a planned improvement.
 
 ### Backup & restore
 
@@ -140,6 +157,12 @@ npm run restore -- --in backups/osc-2025-06-01T12-00-00.db
 | `GET` | `/api/loadpoints` | List all loadpoints with live state |
 | `POST` | `/api/loadpoints/:name/mode` | Set charge mode (`disabled`/`smart`/`fast`) |
 | `POST` | `/api/loadpoints/:name/target` | Set target SoC and/or departure time |
+| `POST` | `/api/loadpoints/:name/start` | RemoteStartTransaction |
+| `POST` | `/api/loadpoints/:name/stop` | RemoteStopTransaction |
+| `POST` | `/api/loadpoints/:name/profile` | One-shot current limit (`{"amps":N}`) |
+| `POST` | `/api/loadpoints/:name/reset` | Soft/Hard `Reset` (`{"type":"Soft"}`) |
+| `POST` | `/api/loadpoints/:name/clear-profile` | `ClearChargingProfile` (all) — see troubleshooting doc |
+| `GET` | `/api/loadpoints/:name/composite-schedule` | Charger's effective computed limit (`?duration=sec`) |
 | `GET` | `/api/tariffs/:name/prices` | Fetch price slots (`?from=&to=`) |
 | `GET` | `/api/meters/:name` | Meter reader latest snapshot + health |
 | `GET` | `/api/balancers/:name` | Balancer allocations + health |

@@ -1,11 +1,12 @@
 import mqtt, { type MqttClient } from 'mqtt'
 import type { Logger } from 'pino'
+import type { Broker } from '../../sdk/broker.js'
 import type { MeterSnapshot } from '../../sdk/meter-reader.js'
 import type { ModuleHealth } from '../../sdk/types.js'
 import { extractMetrics } from './dsmr.js'
 
 interface PulseClientOpts {
-  mqtt: { host: string; port: number; user?: string; password?: string }
+  broker: Broker
   subTopic: string
   ctrlTopics: string[]
   disablePayload: string
@@ -103,17 +104,17 @@ export function createPulseClient(opts: PulseClientOpts): PulseClientHandle {
   return {
     start(): Promise<void> {
       const c = mqtt.connect({
-        host: opts.mqtt.host,
-        port: opts.mqtt.port,
-        username: opts.mqtt.user,
-        password: opts.mqtt.password,
+        host: opts.broker.host,
+        port: opts.broker.port,
+        username: opts.broker.user,
+        password: opts.broker.password,
         clientId: `pulse-bridge-${Math.random().toString(16).slice(2, 8)}`,
         clean: true,
       })
       mqttClient = c
 
       c.on('connect', () => {
-        opts.log.info({ host: opts.mqtt.host, subTopic: opts.subTopic }, 'pulse bridge connected')
+        opts.log.info({ host: opts.broker.host, subTopic: opts.subTopic }, 'pulse bridge connected')
         c.subscribe(opts.subTopic, { qos: 0 }, (err) => {
           if (err) opts.log.warn({ err }, 'pulse subscribe failed')
         })

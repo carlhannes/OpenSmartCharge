@@ -1,4 +1,4 @@
-import type { ModuleCtx, ModuleHealth } from './types.js'
+import type { ModuleCtx, ModuleHealth, ModuleLifecycle } from './types.js'
 
 export type ChargeMode = 'disabled' | 'smart' | 'fast'
 
@@ -21,21 +21,26 @@ export interface LoadpointSnapshot {
   maxCurrentA: number
   /** Set by lifecycle for smart-mode loadpoints: false = expensive slot, skip charging. Undefined = charge. */
   shouldChargeNow?: boolean
+  /** The active plan's target is reached (requiredKWh <= 0). */
+  targetReached?: boolean
+  /** The active plan's pause-on-target toggle — when true + targetReached, the loadpoint pauses (all modes). */
+  pauseOnTarget?: boolean
 }
 
 export interface BalancerInput {
   loadpoints: LoadpointSnapshot[]
+  /** Amps available for the whole circuit this tick — already resolved through the degradation
+   *  ladder (live-meter headroom / historical worst-case / static time-of-day) by the lifecycle.
+   *  The balancer SPLITS this across loadpoints; it never reads the meter or computes headroom. */
+  circuitBudgetA: number
   timestamp: Date
 }
 
 export interface BalancerOutput {
   allocations: Map<string, number>
-  /** House headroom after charger credit-back, as computed from live phase currents. Populated
-   *  by the balancer module so the lifecycle doesn't have to recompute it from partial data. */
-  freeAmps?: number
 }
 
-export interface Balancer {
+export interface Balancer extends ModuleLifecycle {
   readonly id: string
   start(): Promise<void>
   stop(): Promise<void>

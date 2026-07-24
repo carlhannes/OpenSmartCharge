@@ -1,4 +1,4 @@
-import type { ModuleHealth } from './types.js'
+import type { ModuleHealth, ModuleLifecycle } from './types.js'
 
 export interface MeterSnapshot {
   /** Instantaneous total active power, watts. Positive = importing from grid. */
@@ -11,7 +11,7 @@ export interface MeterSnapshot {
   timestamp: Date
 }
 
-export interface MeterReader {
+export interface MeterReader extends ModuleLifecycle {
   readonly id: string
   start(): Promise<void>
   stop(): Promise<void>

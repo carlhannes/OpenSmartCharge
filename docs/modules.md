@@ -273,6 +273,22 @@ Lifecycle calls `vehicle.start()` once at boot; the module owns its own poll tim
 
 **Cache battery capacity aggressively.** Once you've read it, return it forever from `getCachedCapacity()`. `getData()` should return cached data when the API is down — set `health()` to `'degraded'` in that case. Never throw when the API is temporarily unavailable.
 
+**The vehicle module self-describes its onboarding form.** Beyond `type` and `create()`, a `VehicleModule` declares `label`, `capabilities` (what it can report — see `VehicleCapabilities` / `VEHICLE_CAPS_NONE`), and `configFields` — the credentials/config it needs beyond the universal `name`. That descriptor drives `GET /api/vehicle-types`, the app's create/edit/onboarding form, and the generic `POST`/`PUT /api/vehicles` validation — so a new car API is a drop-in module with **no core or UI change**. Mark credential fields `secret: true` (masked in the form, redacted on export, and kept on edit when left blank).
+
+```ts
+registerVehicle({
+  type: 'skoda',
+  label: 'Škoda / VW group (app login)',
+  capabilities: { soc: true, range: true, capacity: true, presence: true, climate: true, targetSoc: true },
+  configFields: [
+    { key: 'username', label: 'App email', required: true },
+    { key: 'password', label: 'App password', type: 'password', required: true, secret: true },
+    { key: 'vin', label: 'VIN', required: true, pattern: '^[A-Za-z0-9]{17}$', help: '17 characters.' },
+  ],
+  create(cfg, ctx) { … },
+})
+```
+
 ### `MeterReader` (`src/sdk/meter-reader.ts`)
 
 ```ts
@@ -308,19 +324,18 @@ Every `create(cfg, ctx)` factory receives a `ModuleCtx`:
 interface ModuleCtx {
   db: DatabaseSync     // node:sqlite (Node 22.5+ built-in) — persistence
   events: EventEmitter // internal pub/sub
-  log: Logger          // pino child, pre-scoped to your module name
+  log: Logger          // pino — the shared app logger; every line is captured to the Logs viewer
   fetch: typeof globalThis.fetch  // drop-in fetch() with 0–120 s anti-thundering-herd jitter
-  mqtt?: { host: string; port: number; user?: string; password?: string }
 }
 ```
 
 **`ctx.fetch` vs global `fetch`** — use `ctx.fetch` for all scheduled/periodic outbound HTTP calls (tariff fetches, vehicle polls). It adds a random 0–120 s jitter so multiple OSC instances on the same network don't slam upstream APIs at the same millisecond. For a fetch that must happen immediately at startup, use the global `fetch` directly. See `src/modules/tariff-elering/index.ts` for the pattern.
 
-**`ctx.mqtt`** — opt-in. The OSC bridge's own MQTT client (publishing `osc/…` topics) is private to the bridge; modules that need MQTT open their own connection with these params. Fail loudly in `create()` if you need MQTT and `ctx.mqtt` is `undefined` — that's a configuration error, not a degradation scenario. See `src/modules/meter-tibber-pulse/index.ts` for an example.
+**MQTT-speaking modules carry their own `broker:`** — there is no `ctx.mqtt`. A meter reader that listens on a broker declares its own `broker: {host, port, user?, password?}` in its `meterReaders[]` entry and opens its own listen-only connection (parse it with `parseBroker()` from `src/sdk/broker.ts`; see `src/modules/meter-mqtt-phase`). OSC's *own* outbound publishing (state topics + Home Assistant discovery) is a separate concern configured under `mqttBridge:` — consuming a meter never makes OSC publish. Fail loudly in `create()` if a required broker is missing (that's what `parseBroker` does).
 
 **`ctx.db`** — your tables, your `CREATE TABLE IF NOT EXISTS` in `start()`. Don't collide with OSC core table names: `loadpoint_state`, `transactions`, `meter_values`, `tariff_slots`, `vehicle_cache`.
 
-Use `ctx.log.info(...)`, `ctx.log.warn(...)`, etc. Don't use `console.log`.
+**`ctx.log`** — log through it (`ctx.log.info(...)`, `.warn(...)`, `.debug(...)`, …), **not `console.log`**. Everything logged this way is captured to the runtime `logs` store and shown in the app's **Logs viewer** (Settings → Logs) — at every level (there's no minimum; logs rotate out by age, default 3 days). To get a clean **module label** on your lines, include a module-type field the capturer recognizes (`charger`/`vehicle`/`tariff`/`balancer`/`meter`/`loadpoint` — e.g. `ctx.log.info({ tariff: name }, 'ready')`) or set your own with `ctx.log.child({ module: 'my-mod' })`. `console.*` is *also* captured as a safety net (so a stray `console.log` from a dependency isn't lost) but arrives unlabeled — and a logger you construct yourself that writes straight to stdout is **not** captured. Prefer `ctx.log`.
 
 ## Module health
 

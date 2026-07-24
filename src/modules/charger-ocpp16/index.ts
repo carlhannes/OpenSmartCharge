@@ -21,8 +21,9 @@ registerCharger({
       name?: string
       stationId: string
       maxA?: number
-      autoStart?: boolean
+      autoStartTransaction?: boolean
       minWriteIntervalSec?: number
+      phases?: number
     }
 
     const stationId = config.stationId
@@ -33,7 +34,8 @@ registerCharger({
       sharedServer = new OcppServer(ctx.db, ctx.log, 6)
     }
 
-    sharedServer.registerStation(stationId, config.autoStart ?? true)
+    sharedServer.registerStation(stationId, config.autoStartTransaction ?? true)
+    sharedServer.setStationPhases(stationId, config.phases ?? 3)
 
     const debouncedSet = createDebouncedSetter({
       minIntervalMs: (config.minWriteIntervalSec ?? 10) * 1000,
@@ -66,6 +68,18 @@ registerCharger({
 
       async remoteStop() {
         await sharedServer!.remoteStop(stationId)
+      },
+
+      async reset(type: 'Soft' | 'Hard' = 'Soft') {
+        await sharedServer!.reset(stationId, type)
+      },
+
+      async clearChargingProfile() {
+        return sharedServer!.clearChargingProfile(stationId)
+      },
+
+      async getCompositeSchedule(durationSec = 60) {
+        return sharedServer!.getCompositeSchedule(stationId, durationSec)
       },
 
       async setOneShotProfile(amps: number) {

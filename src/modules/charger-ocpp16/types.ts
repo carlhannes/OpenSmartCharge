@@ -70,7 +70,7 @@ export interface SetChargingProfileReq {
     chargingSchedule: {
       startSchedule?: string
       chargingRateUnit: 'A' | 'W'
-      chargingSchedulePeriod: Array<{ startPeriod: number; limit: number }>
+      chargingSchedulePeriod: Array<{ startPeriod: number; limit: number; numberPhases?: number }>
     }
   }
 }

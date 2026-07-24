@@ -4,7 +4,7 @@ import {
   getTransaction,
   type TransactionDto,
   type TransactionDetailDto,
-} from '../api/rest.js'
+} from '../client/rest.js'
 import SessionChart from '../components/SessionChart.js'
 import styles from './Transactions.module.css'
 

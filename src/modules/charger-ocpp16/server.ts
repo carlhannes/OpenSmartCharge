@@ -32,18 +32,44 @@ import {
   finishTransaction,
   insertMeterValues,
   latestEnergyKwh,
+  findOpenTransaction,
+  closeOpenTransaction,
 } from './persistence.js'
-import { setCurrentLimit, remoteStart, remoteStop as cmdRemoteStop } from './commands.js'
-import { computeConnectionState, shouldAutoStart, computeHealth } from './status.js'
+import {
+  setCurrentLimit,
+  remoteStart,
+  remoteStop as cmdRemoteStop,
+  reset as cmdReset,
+  changeAvailability,
+  clearChargingProfile as cmdClearChargingProfile,
+  getCompositeSchedule as cmdGetCompositeSchedule,
+  getConfiguration as cmdGetConfiguration,
+  triggerMessage as cmdTriggerMessage,
+  type CompositeScheduleResp,
+} from './commands.js'
+import { computeConnectionState, shouldAutoStartTransaction, computeHealth } from './status.js'
+import { latestReadings } from './meter-parser.js'
 
 type StatusCallback = (status: ChargerStatus) => void
+
+/** A charger that has connected over OCPP but isn't registered from config yet — awaiting a claim. */
+export interface PendingStation {
+  stationId: string
+  vendor?: string
+  model?: string
+  status?: string
+  connectedAt: string
+}
 
 interface StationState {
   client: OcppClient
   activeTransactionId?: number
   connectorId: number
   statusCallbacks: Set<StatusCallback>
-  autoStart: boolean
+  autoStartTransaction: boolean
+  /** Auto-start fires ONCE per plug-in; reset to false on a genuine Available (unplug). Keeps a full
+   *  car that cycles Preparing↔Charging (cable still in) from churning fresh empty transactions. */
+  hasAutoStarted: boolean
 }
 
 export class OcppServer {
@@ -51,7 +77,21 @@ export class OcppServer {
   readonly handleUpgrade: RPCServer['handleUpgrade']
   private readonly stations = new Map<string, StationState>()
   private readonly _pendingAutoStart = new Map<string, boolean>()
-  private readonly _pendingCallbacks = new Map<string, StatusCallback[]>()
+  // Status subscriptions persist across reconnects (keyed by stationId) so a charger that
+  // drops + reconnects keeps notifying the loadpoint.
+  private readonly statusSubs = new Map<string, Set<StatusCallback>>()
+  // Last commanded amps + discovered max stack level per station — survive reconnects so we
+  // re-assert the right limit at the right stack level when a dropped socket returns.
+  private readonly lastLimitByStation = new Map<string, number>()
+  private readonly maxStackByStation = new Map<string, number>()
+  // Per-charger phase count (from config), sent as numberPhases in the charging profile.
+  private readonly phasesByStation = new Map<string, number>()
+  // Connection info for any connected station (vendor/model/status), for the "pending unclaimed
+  // charger" flow. Populated on connect + BootNotification + StatusNotification.
+  private readonly pendingInfo = new Map<
+    string,
+    { vendor?: string; model?: string; lastStatus?: string; firstSeenAt: Date }
+  >()
 
   constructor(
     private readonly db: DatabaseSync,
@@ -81,44 +121,94 @@ export class OcppServer {
 
   private readonly _loadpointNames = new Map<string, string>()
 
-  registerStation(stationId: string, autoStart: boolean): void {
-    this._pendingAutoStart.set(stationId, autoStart)
-    this.log.debug({ stationId }, 'station registered (waiting for connection)')
+  registerStation(stationId: string, autoStartTransaction: boolean): void {
+    this._pendingAutoStart.set(stationId, autoStartTransaction)
+    // If the station is ALREADY connected (claiming an unclaimed charger), update its live flag too —
+    // otherwise the value captured at connect (false for unclaimed) sticks until the next reconnect.
+    const s = this.stations.get(stationId)
+    if (s) s.autoStartTransaction = autoStartTransaction
+    this.log.debug({ stationId }, 'station registered')
+  }
+
+  /** Undo registerStation (removing a claimed charger); the WS, if still open, reverts to pending. */
+  unregisterStation(stationId: string): void {
+    this._pendingAutoStart.delete(stationId)
+    this._loadpointNames.delete(stationId)
+    this.phasesByStation.delete(stationId)
+    const s = this.stations.get(stationId)
+    if (s) s.autoStartTransaction = false
   }
 
   setLoadpointName(stationId: string, loadpointName: string): void {
     this._loadpointNames.set(stationId, loadpointName)
   }
 
+  setStationPhases(stationId: string, phases: number): void {
+    this.phasesByStation.set(stationId, phases)
+  }
+
   onStatus(stationId: string, cb: StatusCallback): () => void {
-    const state = this.stations.get(stationId)
-    if (state) {
-      state.statusCallbacks.add(cb)
-      return () => state.statusCallbacks.delete(cb)
+    const set = this.subsFor(stationId)
+    set.add(cb)
+    return () => set.delete(cb)
+  }
+
+  /** Persistent per-station subscription set — reused across reconnects. */
+  private subsFor(stationId: string): Set<StatusCallback> {
+    let set = this.statusSubs.get(stationId)
+    if (!set) {
+      set = new Set()
+      this.statusSubs.set(stationId, set)
     }
-    // Station not connected yet — queue the callback
-    const list = this._pendingCallbacks.get(stationId) ?? []
-    list.push(cb)
-    this._pendingCallbacks.set(stationId, list)
-    return () => {
-      const current = this._pendingCallbacks.get(stationId) ?? []
-      this._pendingCallbacks.set(
-        stationId,
-        current.filter((c) => c !== cb),
-      )
-    }
+    return set
   }
 
   async setLimit(stationId: string, amps: number): Promise<void> {
+    // Remember the commanded limit even if disconnected, so onConnect() can re-assert it.
+    this.lastLimitByStation.set(stationId, amps)
     const state = this.stations.get(stationId)
-    if (!state) return // Not connected — limit will be applied on BootNotification
-    await setCurrentLimit(state.client, amps, 0)
+    if (!state) return // Not connected — re-asserted on reconnect via onConnect()
+    // Target the active connector, at the charger's max stack level so our profile outranks
+    // any leftover/default profile (Zaptec stacks profiles; highest stackLevel wins).
+    const stackLevel = this.maxStackByStation.get(stationId) ?? 1
+    const numberPhases = this.phasesByStation.get(stationId) ?? 3
+    const res = await setCurrentLimit(
+      state.client,
+      amps,
+      state.connectorId,
+      stackLevel,
+      numberPhases,
+    )
+    this.log.info(
+      { stationId, amps, connectorId: state.connectorId, stackLevel, status: res?.status },
+      'SetChargingProfile result',
+    )
   }
 
   getHealth(): ModuleHealth {
-    // Derived from live connection state — no stored field to keep in sync.
-    // `stations` mutates on connect/disconnect, so health recomputes for free.
-    return computeHealth(this._pendingAutoStart.size, this.stations.size)
+    // Health is about the REGISTERED (claimed) chargers only — an unclaimed connection awaiting a
+    // claim must not inflate the connected count and mask a degraded state.
+    const connectedRegistered = [...this.stations.keys()].filter((id) =>
+      this._pendingAutoStart.has(id),
+    ).length
+    return computeHealth(this._pendingAutoStart.size, connectedRegistered)
+  }
+
+  /** Stations connected over OCPP but not registered from config — awaiting a claim. */
+  listPending(): PendingStation[] {
+    const out: PendingStation[] = []
+    for (const stationId of this.stations.keys()) {
+      if (this._pendingAutoStart.has(stationId)) continue
+      const info = this.pendingInfo.get(stationId)
+      out.push({
+        stationId,
+        vendor: info?.vendor,
+        model: info?.model,
+        status: info?.lastStatus,
+        connectedAt: (info?.firstSeenAt ?? new Date()).toISOString(),
+      })
+    }
+    return out
   }
 
   async remoteStart(stationId: string, idTag = 'osc-manual'): Promise<void> {
@@ -134,14 +224,45 @@ export class OcppServer {
     await cmdRemoteStop(state.client, state.activeTransactionId)
   }
 
+  async reset(stationId: string, type: 'Soft' | 'Hard' = 'Soft'): Promise<void> {
+    const state = this.stations.get(stationId)
+    if (!state) throw new Error(`station ${stationId} not connected`)
+    const res = await cmdReset(state.client, type)
+    this.log.info({ stationId, type, status: res?.status }, 'Reset result')
+  }
+
+  async clearChargingProfile(stationId: string): Promise<{ status?: string }> {
+    const state = this.stations.get(stationId)
+    if (!state) throw new Error(`station ${stationId} not connected`)
+    const res = await cmdClearChargingProfile(state.client)
+    this.log.info({ stationId, status: res?.status }, 'ClearChargingProfile result')
+    return res
+  }
+
+  async getCompositeSchedule(stationId: string, durationSec = 60): Promise<CompositeScheduleResp> {
+    const state = this.stations.get(stationId)
+    if (!state) throw new Error(`station ${stationId} not connected`)
+    const res = await cmdGetCompositeSchedule(state.client, state.connectorId, durationSec)
+    const limit = res.chargingSchedule?.chargingSchedulePeriod?.[0]?.limit
+    this.log.info(
+      { stationId, connectorId: state.connectorId, status: res?.status, offeredLimitA: limit },
+      'GetCompositeSchedule result',
+    )
+    return res
+  }
+
   async close(): Promise<void> {
     await this.rpcServer.close({ awaitPending: false, force: true })
   }
 
   private pushStatus(stationId: string, status: ChargerStatus): void {
-    const state = this.stations.get(stationId)
-    if (!state) return
-    for (const cb of state.statusCallbacks) {
+    // Read the PERSISTENT subscription set, not the live station's. The disconnect handler
+    // evicts the station *before* pushing its final `connected: false`, and subscribers (the
+    // loadpoint state + the health map) must still receive it — otherwise a dropped charger
+    // is reported `connected: true` forever. While connected the two are the same Set object.
+    const subs = this.statusSubs.get(stationId)
+    if (!subs) return
+    for (const cb of subs) {
       try {
         cb(status)
       } catch {
@@ -150,26 +271,79 @@ export class OcppServer {
     }
   }
 
+  /**
+   * Runs on every socket (re)connect. All best-effort — a flaky reconnect must never throw:
+   * mark Operative, discover ChargeProfileMaxStackLevel, re-assert the last commanded limit at
+   * that stack level, and ask for a fresh StatusNotification (chargers don't re-send Boot/Status
+   * on a bare WS reconnect, so connection state would otherwise go stale).
+   */
+  private async onConnect(stationId: string, state: StationState): Promise<void> {
+    try {
+      const res = await changeAvailability(state.client, 0, 'Operative')
+      this.log.info({ stationId, status: res?.status }, 'ChangeAvailability(Operative) result')
+    } catch (err) {
+      this.log.warn({ err, stationId }, 'ChangeAvailability failed')
+    }
+    try {
+      const cfg = await cmdGetConfiguration(state.client, ['ChargeProfileMaxStackLevel'])
+      const raw = cfg.configurationKey?.find((k) => k.key === 'ChargeProfileMaxStackLevel')?.value
+      const max = raw != null ? parseInt(raw, 10) : NaN
+      if (!Number.isNaN(max)) this.maxStackByStation.set(stationId, max)
+    } catch (err) {
+      this.log.debug({ err, stationId }, 'GetConfiguration failed')
+    }
+    const last = this.lastLimitByStation.get(stationId)
+    if (last !== undefined) {
+      await this.setLimit(stationId, last).catch((err) =>
+        this.log.warn({ err, stationId }, 're-assert limit on connect failed'),
+      )
+    }
+    try {
+      await cmdTriggerMessage(state.client, 'StatusNotification', state.connectorId)
+    } catch {
+      // TriggerMessage unsupported — at least mark connected so the loadpoint isn't stale-offline.
+      this.pushStatus(stationId, {
+        connectorId: state.connectorId,
+        status: 'Available',
+        connected: true,
+        charging: false,
+      })
+    }
+  }
+
   private async attachClient(client: OcppClient): Promise<void> {
     const stationId = client.handshake.identity
 
     this.log.info({ stationId }, 'OCPP station connected')
 
-    const autoStart = this._pendingAutoStart.get(stationId) ?? true
+    // Unregistered (unclaimed) stations default to autoStartTransaction=false — never auto-start a
+    // transaction on a charger OSC doesn't manage yet. Registered stations use their configured value.
+    const autoStartTransaction = this._pendingAutoStart.get(stationId) ?? false
+    this.pendingInfo.set(stationId, { firstSeenAt: new Date() })
     const state: StationState = {
       client,
       connectorId: 1,
-      statusCallbacks: new Set(this._pendingCallbacks.get(stationId) ?? []),
-      autoStart,
+      statusCallbacks: this.subsFor(stationId), // persistent set — survives reconnects
+      autoStartTransaction,
+      hasAutoStarted: false, // re-armed each connect; an in-progress tx is guarded by activeTransactionId
+      // Rehydrate any in-progress transaction from SQLite: on an OSC restart or a bare WS
+      // reconnect the charger does NOT re-send StartTransaction, so without this the in-memory id
+      // is lost (remoteStop breaks, meter values get dropped). MeterValues below re-adopt the
+      // charger's own transactionId if it ever disagrees (e.g. a stale open row).
+      activeTransactionId: findOpenTransaction(this.db, stationId),
     }
-    this._pendingCallbacks.delete(stationId)
     this.stations.set(stationId, state)
 
     client.on('disconnect', () => {
       this.log.info({ stationId }, 'OCPP station disconnected')
       const s = this.stations.get(stationId)
-      if (s) {
+      // Only evict if THIS client is still the registered one. On a reconnect bounce the
+      // charger opens a new socket (which re-registers) before the old socket's disconnect
+      // fires; without this guard the stale disconnect would delete the live registration,
+      // leaving commands failing "not connected" while messages still flow on the new socket.
+      if (s && s.client === client) {
         this.stations.delete(stationId)
+        this.pendingInfo.delete(stationId)
         this.pushStatus(stationId, {
           connectorId: s.connectorId,
           status: 'Unavailable',
@@ -179,6 +353,19 @@ export class OcppServer {
       }
     })
 
+    // Opt-in raw OCPP frame logging (set OCPP_TRACE=1) — invaluable for charger bring-up/debug.
+    if (process.env.OCPP_TRACE) {
+      client.on('message', (ev: unknown) => {
+        const { message, outbound } = ev as { message: string; outbound: boolean }
+        this.log.debug({ stationId, dir: outbound ? 'OUT' : 'IN', frame: message }, 'ocpp-frame')
+      })
+    }
+
+    // On every (re)connect: mark Operative, discover the max stack level, re-assert the last
+    // commanded limit, and refresh status — so a charger that dropped (flaky WiFi / host sleep)
+    // returns with the correct limit and a fresh status without needing a power cycle.
+    setImmediate(() => void this.onConnect(stationId, state))
+
     // ── Inbound handlers ──────────────────────────────────────────────────
 
     client.handle('BootNotification', async ({ params }) => {
@@ -187,12 +374,33 @@ export class OcppServer {
         { stationId, vendor: p.chargePointVendor, model: p.chargePointModel },
         'BootNotification',
       )
+      const pinfo = this.pendingInfo.get(stationId)
+      if (pinfo) {
+        pinfo.vendor = p.chargePointVendor
+        pinfo.model = p.chargePointModel
+      }
 
       // Issue safe default current immediately so charger is never at an unknown limit
       setImmediate(() => {
-        void setCurrentLimit(state.client, this.defaultBootCurrentA, 0).catch((err) =>
-          this.log.warn({ err, stationId }, 'could not set boot default current'),
+        void setCurrentLimit(
+          state.client,
+          this.defaultBootCurrentA,
+          state.connectorId,
+          this.maxStackByStation.get(stationId) ?? 1,
+          this.phasesByStation.get(stationId) ?? 3,
         )
+          .then((res) =>
+            this.log.info(
+              {
+                stationId,
+                amps: this.defaultBootCurrentA,
+                connectorId: state.connectorId,
+                status: res?.status,
+              },
+              'boot default SetChargingProfile result',
+            ),
+          )
+          .catch((err) => this.log.warn({ err, stationId }, 'could not set boot default current'))
       })
 
       return { status: 'Accepted', interval: 60, currentTime: new Date().toISOString() }
@@ -220,7 +428,31 @@ export class OcppServer {
         'StatusNotification',
       )
 
+      const pinfo = this.pendingInfo.get(stationId)
+      if (pinfo) pinfo.lastStatus = p.status
+
       const { charging, connected } = computeConnectionState(p.status)
+
+      // Available = connector idle, no vehicle present — so any transaction id we still hold is
+      // definitively stale (a missed StopTransaction, or a row rehydrated from SQLite on reconnect
+      // after the car had already left). Clear it AND close the abandoned DB row, so the next
+      // plug-in (Preparing) isn't blocked by shouldAutoStartTransaction's hasActiveTransaction guard
+      // and findOpenTransaction won't keep re-surfacing the stale id on future reconnects. This is
+      // the safe, unambiguous case (cable out); a stale id while Preparing/SuspendedEV is handled by
+      // the SessionReconciler, which re-starts level-triggered rather than guessing here.
+      // A genuine unplug (Available) re-arms the once-per-plug-in auto-start for the NEXT car; the
+      // cable staying in (Preparing/Charging/SuspendedEV cycling) never resets it, so a full car can't
+      // re-churn.
+      if (p.status === 'Available') state.hasAutoStarted = false
+      if (p.status === 'Available' && state.activeTransactionId !== undefined) {
+        const staleId = state.activeTransactionId
+        state.activeTransactionId = undefined
+        closeOpenTransaction(this.db, staleId)
+        this.log.info(
+          { stationId, staleTransactionId: staleId },
+          'connector Available — cleared stale transaction id',
+        )
+      }
 
       this.pushStatus(stationId, {
         connectorId: p.connectorId,
@@ -229,8 +461,18 @@ export class OcppServer {
         charging,
       })
 
-      // Auto-start: send RemoteStartTransaction when vehicle plugs in and no tx is active
-      if (shouldAutoStart(p.status, !!state.activeTransactionId, state.autoStart)) {
+      // Auto-start: send RemoteStartTransaction when a vehicle plugs in and no tx is active — once per
+      // plug-in (see shouldAutoStartTransaction). Mark it fired so a full car cycling back to Preparing
+      // doesn't re-open an empty transaction; the reconciler owns any legitimate re-start.
+      if (
+        shouldAutoStartTransaction(
+          p.status,
+          !!state.activeTransactionId,
+          state.autoStartTransaction,
+          state.hasAutoStarted,
+        )
+      ) {
+        state.hasAutoStarted = true
         this.log.info({ stationId }, 'auto-starting transaction')
         setImmediate(() => {
           void remoteStart(state.client, 'osc-auto', p.connectorId).catch((err) =>
@@ -244,15 +486,22 @@ export class OcppServer {
 
     client.handle('MeterValues', async ({ params }) => {
       const p = params as MeterValuesReq
+      // The charger names the transaction these samples belong to — trust it as the authority.
+      // This keeps live current/energy attributed across an OSC restart or bare WS reconnect
+      // (when the in-memory id was lost, since StartTransaction isn't re-sent on reconnect).
+      if (p.transactionId != null) state.activeTransactionId = p.transactionId
       insertMeterValues(this.db, state.activeTransactionId, p)
 
       if (state.activeTransactionId) {
         const energyKwh = latestEnergyKwh(this.db, state.activeTransactionId)
+        const { currentA, powerW } = latestReadings(p)
         this.pushStatus(stationId, {
           connectorId: p.connectorId,
           status: 'Charging',
           connected: true,
           charging: true,
+          currentA,
+          powerW,
           sessionEnergyKWh: energyKwh,
         })
       }

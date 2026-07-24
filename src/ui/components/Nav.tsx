@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import { useHealth } from '../hooks/useHealth.js'
 import HealthBadge from './HealthBadge.js'
-import type { ModuleHealth } from '../api/rest.js'
+import type { ModuleHealth } from '../client/rest.js'
 import styles from './Nav.module.css'
 
 function worstHealth(health: Record<string, ModuleHealth>): ModuleHealth {

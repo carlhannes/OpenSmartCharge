@@ -9,20 +9,35 @@ export interface ModuleCtx {
   events: EventEmitter
   log: Logger
   /**
-   * Drop-in replacement for the global `fetch()`.
-   * Adds a random 0–120 s jitter before each request so that all running
-   * OSC instances don't hit the same external endpoint at the same millisecond
-   * when a scheduled task fires (thundering-herd prevention).
+   * Jittered `fetch()` — sleeps a random 0–120 s before each request. Its ONLY purpose is to
+   * spread load when many OSC instances would otherwise hit the same PUBLIC endpoint at the same
+   * wall-clock instant (thundering-herd prevention) — e.g. day-ahead tariff prices fetched right
+   * after their fixed publish time.
    *
-   * Use this for all scheduled/periodic outbound HTTP calls. For startup
-   * fetches where you need an immediate response, use the global `fetch`.
+   * Use it ONLY for public, non-time-sensitive, scheduled data (tariffs). Do NOT use it for
+   * anything that needs a prompt answer — vehicle reads (poll on connect / during charging),
+   * car↔charger detection, auth: those must use the plain global `fetch` so they return
+   * immediately. When in doubt, use the global `fetch`.
    */
   fetch: typeof globalThis.fetch
+}
+
+/**
+ * Optional lifecycle callbacks the LIFECYCLE invokes on a module. The module still owns no timers or
+ * scheduling — these are one-shot hooks the lifecycle drives, in the same category as `start()`/
+ * `stop()`. Every module interface extends this so the hook is uniform across module types.
+ */
+export interface ModuleLifecycle {
   /**
-   * MQTT broker connection parameters. Populated when `mqtt:` is configured
-   * in osc.yaml. Modules that need MQTT should open their own client using
-   * these params — the OSC bridge's client is reserved for OSC's own topics.
-   * Undefined when MQTT is not configured.
+   * Called ONCE by the lifecycle after the whole system is up (all modules started, HTTP server
+   * listening, control loop + health sweep running). Re-observe/reconcile this module's external
+   * world with reality after a (re)start — the in-memory view was just lost, and peers (the charger,
+   * the car) may not re-announce their state on a bare reconnect. E.g. a vehicle re-polls the car so
+   * an already-plugged car is detected even when the charger still reports the connector `Available`.
+   *
+   * ONE-SHOT: do NOT start a timer or ongoing loop here — ongoing cadence stays lifecycle-driven
+   * (the control loop / `shouldPollVehicle`). Idempotent + best-effort; MAY THROW — the lifecycle
+   * retries with capped backoff.
    */
-  mqtt?: { host: string; port: number; user?: string; password?: string }
+  postStartup?(): Promise<void>
 }

@@ -1,5 +1,5 @@
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts'
-import type { MeterSampleDto } from '../api/rest.js'
+import type { MeterSampleDto } from '../client/rest.js'
 
 interface Props {
   samples: MeterSampleDto[]

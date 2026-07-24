@@ -1,4 +1,5 @@
 import type { TariffSlot } from '../sdk/tariff.js'
+import type { ChargeMode } from './config.js'
 import { chargeRateKW } from './electrical.js'
 
 export interface PlannerInput {
@@ -7,6 +8,8 @@ export interface PlannerInput {
   maxCurrentA: number
   phases: number
   priceSlots?: TariffSlot[]
+  /** Current instant; defaults to `new Date()`. Injectable so callers/tests are deterministic. */
+  now?: Date
 }
 
 export interface PlannedSlot {
@@ -20,7 +23,7 @@ export interface PlannedSlot {
 // Without price data: charges as late as possible (latest start that still finishes on time).
 export function plan(input: PlannerInput): PlannedSlot[] {
   const { requiredKWh, targetTime, maxCurrentA, phases, priceSlots } = input
-  const now = new Date()
+  const now = input.now ?? new Date()
 
   const rateKW = chargeRateKW(maxCurrentA, phases)
   const requiredSlots = Math.ceil((requiredKWh / rateKW) * 4) // 4 slots per hour
@@ -59,6 +62,41 @@ function cheapestSlotsPlan(
     start: slot.start,
     end: slot.end,
     shouldCharge: cheapestStarts.has(slot.start.toISOString()),
+  }))
+}
+
+export interface PlanSeriesSlot {
+  start: Date
+  end: Date
+  pricePerKWh: number
+  shouldCharge: boolean
+}
+
+/**
+ * Merge a price series with the planner's chosen slots into one time-aligned series for the UI
+ * "price & plan" chart. One entry per price slot; `shouldCharge` is:
+ *   - fast     → always (charges whenever it can),
+ *   - disabled → never,
+ *   - smart    → a chosen plan slot OVERLAPS this price slot.
+ * Plan slots are 15-min while prices are typically hourly, but equal-priced sub-slots are always
+ * selected together by `plan()`, so the roll-up onto the price grid is lossless.
+ */
+export function buildPlanSeries(
+  prices: TariffSlot[],
+  plannedSlots: PlannedSlot[],
+  mode: ChargeMode,
+): PlanSeriesSlot[] {
+  const charging = plannedSlots.filter((s) => s.shouldCharge)
+  return prices.map((p) => ({
+    start: p.start,
+    end: p.end,
+    pricePerKWh: p.pricePerKWh,
+    shouldCharge:
+      mode === 'fast'
+        ? true
+        : mode === 'disabled'
+          ? false
+          : charging.some((s) => s.start < p.end && s.end > p.start),
   }))
 }
 

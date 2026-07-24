@@ -21,3 +21,6 @@ export const getTariffModule = (type: string) => tariffRegistry.get(type)
 export const getBalancerModule = (type: string) => balancerRegistry.get(type)
 export const getVehicleModule = (type: string) => vehicleRegistry.get(type)
 export const getMeterReaderModule = (type: string) => meterReaderRegistry.get(type)
+
+/** Every registered vehicle module (for the type picker / GET /api/vehicle-types). */
+export const listVehicleModules = (): VehicleModule[] => [...vehicleRegistry.values()]

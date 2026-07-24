@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { getTariffPrices, type TariffSlotDto } from '../api/rest.js'
-import { subscribe } from '../api/sse.js'
+import { getTariffPrices, type TariffSlotDto } from '../client/rest.js'
+import { subscribe } from '../client/sse.js'
 
 export function useTariffPrices(name: string, from: Date, to: Date) {
   const [slots, setSlots] = useState<TariffSlotDto[]>([])

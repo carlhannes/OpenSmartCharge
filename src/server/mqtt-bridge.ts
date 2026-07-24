@@ -8,12 +8,11 @@ import type { Tariff } from '../sdk/tariff.js'
 import type { Balancer } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import { publishHaDiscovery } from './ha-discovery.js'
+import type { Broker } from '../sdk/broker.js'
 
-interface MqttConfig {
-  host: string
-  port: number
-  user?: string
-  password?: string
+// OSC's OUTBOUND bridge config (config.mqttBridge) — carries its own broker, separate from meter readers.
+interface MqttBridgeConfig {
+  broker: Broker
   topicPrefix: string
   homeAssistantDiscovery: boolean
 }
@@ -26,39 +25,46 @@ export interface MqttBridgeDeps {
   vehicles: Map<string, Vehicle>
   health: HealthMap
   onModeChange(name: string, mode: ChargeMode): Promise<void>
-  onTargetChange(name: string, soc?: number, time?: string): Promise<void>
+  onTargetChange(name: string, soc?: number, time?: string, kwh?: number): Promise<void>
 }
 
-export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: Logger): void {
+export function startMqttBridge(
+  config: MqttBridgeConfig,
+  deps: MqttBridgeDeps,
+  log: Logger,
+): { stop: () => Promise<void> } {
   const client = mqtt.connect({
-    host: config.host,
-    port: config.port,
-    username: config.user,
-    password: config.password,
+    host: config.broker.host,
+    port: config.broker.port,
+    username: config.broker.user,
+    password: config.broker.password,
     clientId: `osc-bridge-${Math.random().toString(16).slice(2, 8)}`,
     clean: true,
   })
 
   const prefix = config.topicPrefix
 
+  // Latest hourly-tariff schedule; the connect handler re-creates it on every (re)connect, so we clear
+  // the prior one (avoids a timer leak across reconnects) and expose it to stop() for a clean teardown.
+  let tariffSchedule: { clear: () => void } | undefined
+
   client.on('connect', () => {
-    log.info({ host: config.host, port: config.port }, 'MQTT bridge connected')
+    log.info({ host: config.broker.host, port: config.broker.port }, 'MQTT bridge connected')
 
     // Publish initial state
     for (const state of deps.loadpoints.values()) {
       publishState(client, prefix, state)
     }
 
-    // Subscribe to command topics
-    const cmdTopics = [...deps.loadpoints.keys()].flatMap((name) => [
-      `${prefix}/loadpoints/${name}/cmd/mode`,
-      `${prefix}/loadpoints/${name}/cmd/target`,
-    ])
-    if (cmdTopics.length > 0) {
-      client.subscribe(cmdTopics, (err) => {
-        if (err) log.warn({ err }, 'MQTT subscribe failed')
-      })
-    }
+    // One wildcard covers every loadpoint's command topics — current AND runtime-added — so a
+    // loadpoint created after connect is controllable without re-subscribing (the handler parses the
+    // name from the topic path). This bridge is a fail-safe MIRROR + convenience command surface: the
+    // control loop never READS from MQTT, so a broker outage never affects charging, and a command
+    // here is exactly equivalent to the matching REST call (same onModeChange/onTargetChange — it goes
+    // through the identical path and bypasses no safety).
+    client.subscribe(`${prefix}/loadpoints/+/cmd/+`, (err) => {
+      if (err) log.warn({ err }, 'MQTT subscribe failed')
+    })
 
     // Publish health (all modules including balancers)
     for (const [module, entry] of deps.health) {
@@ -81,7 +87,8 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
 
     // Publish current slot prices for all configured tariffs
     void publishTariffNow(client, prefix, deps.tariffs)
-    scheduleHourlyTariffPublish(client, prefix, deps.tariffs)
+    tariffSchedule?.clear() // a reconnect re-runs this handler — drop the previous schedule first
+    tariffSchedule = scheduleHourlyTariffPublish(client, prefix, deps.tariffs)
   })
 
   client.on('error', (err) => {
@@ -107,9 +114,9 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
         .catch((err) => log.warn({ err }, 'MQTT mode change error'))
     } else if (command === 'target') {
       try {
-        const body = JSON.parse(str) as { soc?: number; time?: string }
+        const body = JSON.parse(str) as { soc?: number; time?: string; kwh?: number }
         deps
-          .onTargetChange(name, body.soc, body.time)
+          .onTargetChange(name, body.soc, body.time, body.kwh)
           .catch((err) => log.warn({ err }, 'MQTT target change error'))
       } catch {
         log.warn({ topic, str }, 'invalid target JSON')
@@ -167,6 +174,29 @@ export function startMqttBridge(config: MqttConfig, deps: MqttBridgeDeps, log: L
     const state = deps.loadpoints.get(p.name)
     if (state) publishState(client, prefix, state)
   })
+
+  // Keep the retained state mirror in sync as loadpoints are added/removed at runtime (reconcile).
+  // The wildcard command subscription already covers a new loadpoint; here we (re)publish its state
+  // on add/edit and CLEAR the retained topics on remove, so a deleted loadpoint doesn't linger on the
+  // broker. (HA autodiscovery stays boot-only — deferred; runtime entities appear on next restart.)
+  deps.events.on('config.changed', (payload) => {
+    const p = payload as { kind: string; name: string }
+    if (p.kind !== 'loadpoint') return
+    const state = deps.loadpoints.get(p.name)
+    if (state) publishState(client, prefix, state)
+    else clearState(client, prefix, p.name)
+  })
+
+  // Teardown for graceful shutdown: stop the hourly timers + close the MQTT connection cleanly (sends a
+  // DISCONNECT). Event listeners aren't removed — the process exits right after, and publishing on an
+  // ended client is a harmless no-op.
+  return {
+    stop: () =>
+      new Promise<void>((resolve) => {
+        tariffSchedule?.clear()
+        client.end(false, {}, () => resolve())
+      }),
+  }
 }
 
 function publishState(client: mqtt.MqttClient, prefix: string, state: LoadpointState): void {
@@ -175,6 +205,15 @@ function publishState(client: mqtt.MqttClient, prefix: string, state: LoadpointS
   client.publish(`${lpPrefix}/current_a`, String(state.currentA), { retain: true })
   client.publish(`${lpPrefix}/energy_kwh`, String(state.sessionEnergyKWh), { retain: true })
   client.publish(`${lpPrefix}/state`, JSON.stringify(state), { retain: true })
+}
+
+// Clear a removed loadpoint's retained topics — an empty retained payload deletes the retained
+// message on the broker, so subscribers (HA, dashboards) stop seeing a ghost loadpoint.
+function clearState(client: mqtt.MqttClient, prefix: string, name: string): void {
+  const lpPrefix = `${prefix}/loadpoints/${name}`
+  for (const leaf of ['mode', 'current_a', 'energy_kwh', 'state']) {
+    client.publish(`${lpPrefix}/${leaf}`, '', { retain: true })
+  }
 }
 
 async function publishOneTariffNow(
@@ -205,11 +244,18 @@ function scheduleHourlyTariffPublish(
   client: mqtt.MqttClient,
   prefix: string,
   tariffs: Map<string, Tariff>,
-): void {
+): { clear: () => void } {
   // Re-publish at the top of each hour as the "now" slot advances
   const msUntilNextHour = 3600_000 - (Date.now() % 3600_000)
-  setTimeout(() => {
+  let interval: ReturnType<typeof setInterval> | undefined
+  const timeout = setTimeout(() => {
     void publishTariffNow(client, prefix, tariffs)
-    setInterval(() => void publishTariffNow(client, prefix, tariffs), 3600_000)
+    interval = setInterval(() => void publishTariffNow(client, prefix, tariffs), 3600_000)
   }, msUntilNextHour)
+  return {
+    clear: () => {
+      clearTimeout(timeout)
+      if (interval) clearInterval(interval)
+    },
+  }
 }
