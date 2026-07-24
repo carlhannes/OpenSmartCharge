@@ -18,6 +18,7 @@ import {
 } from "@/lib/live/commands";
 import * as api from "@/lib/api/rest";
 import { waitForHealthy } from "@/lib/live/restart-flow";
+import { copyText } from "@/lib/clipboard";
 import { REGIONS } from "@/lib/copy";
 import { VehicleForm } from "@/components/VehicleForm";
 import { useEffect, useState } from "react";
@@ -376,11 +377,14 @@ function ChargerStep({ addMode }: { addMode?: boolean }) {
       <div className="mt-3 flex items-center gap-2 rounded-2xl border border-border/60 bg-card p-3">
         <code className="flex-1 truncate font-mono text-sm">{url}</code>
         <button
-          onClick={() => {
-            navigator.clipboard.writeText(url);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
-          }}
+          onClick={() =>
+            void copyText(url).then((ok) => {
+              if (ok) {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1200);
+              }
+            })
+          }
           className="inline-flex items-center gap-1 rounded-full bg-secondary px-3 py-1.5 text-xs font-medium"
         >
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}{" "}
