@@ -28,7 +28,7 @@ function AboutSettings() {
       <div className="rounded-2xl border border-border/60 bg-card p-5">
         <div className="font-display text-xl font-semibold">OpenSmartCharge</div>
         <div className="mt-1 text-sm text-muted-foreground">
-          v0.3.0 · self-hosted smart charging
+          v{__APP_VERSION__} · self-hosted smart charging
         </div>
         <p className="mt-3 text-sm">
           Lean, modular EV smart-charging. OCPP 1.6J on your LAN, day-ahead pricing, house load
