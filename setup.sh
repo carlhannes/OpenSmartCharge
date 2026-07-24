@@ -4,27 +4,28 @@
 #
 #   Fresh install (bootstrap):
 #     curl -fsSL https://raw.githubusercontent.com/carlhannes/OpenSmartCharge/main/setup.sh | bash
+#     # works run as root (e.g. piped to `sudo bash`) or as a user with sudo.
 #
-#   Upgrade / re-run (from anywhere, or inside the clone):
-#     ./setup.sh                     # pull latest main, rebuild, restart
+#   Upgrade / re-run:
+#     sudo /opt/opensmartcharge/setup.sh          # pull latest, rebuild, restart
 #
-# This script is CONVERGENT and IDEMPOTENT: every step checks the current state and only acts on
-# what is missing or out of date. Re-running it is how you UPGRADE — it fetches the latest code,
-# rebuilds, and restarts the service. It NEVER writes osc.yaml and NEVER touches data/ (your SQLite
-# DB), so your configuration and history survive every upgrade. A fresh box is configured entirely
-# through the web onboarding at http://<box>:8080 after this finishes.
+# CONVERGENT + IDEMPOTENT: each step checks the current state and only acts on what is missing or out of
+# date — re-running is the UPGRADE path. OSC runs as a dedicated, unprivileged `osc` system user (never
+# root); root is used only for apt, user creation, and systemd. It NEVER writes osc.yaml and NEVER
+# modifies the SQLite DB, so config + history survive every upgrade. A fresh box is configured through
+# the web onboarding at http://<box>:8080 once this finishes.
 #
 # Options / environment:
-#   --dry-run            Report what WOULD change, without changing anything.
-#   --ref <git-ref>      Branch/tag/SHA to deploy (default: main, or $OSC_REF).
-#   -h | --help          Show this help.
-#   OSC_HOME=<dir>       Where the repo lives (default: an existing OSC clone in $PWD, else
-#                        $HOME/OpenSmartCharge).
-#   OSC_USER=<user>      System user the service runs as (default: the invoking user).
+#   --dry-run          Report what WOULD change, without changing anything.
+#   --ref <git-ref>    Branch/tag/SHA to deploy (default: main, or $OSC_REF).
+#   -h | --help        Show this help.
+#   OSC_HOME=<dir>     Install location (default: /opt/opensmartcharge).
+#   OSC_USER=<user>    Service user, created if absent (default: osc).
 #
 set -euo pipefail
 
 REPO_URL="https://github.com/carlhannes/OpenSmartCharge.git"
+NODE_MAJOR=24
 
 # ---- args ------------------------------------------------------------------------------------
 DRY_RUN=0
@@ -33,76 +34,137 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --ref) OSC_REF="${2:?--ref needs a value}"; shift ;;
-    -h|--help) sed -n '2,26p' "$0" 2>/dev/null || true; exit 0 ;;
+    -h|--help) sed -n '2,30p' "$0" 2>/dev/null || true; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
   shift
 done
+OSC_HOME="${OSC_HOME:-/opt/opensmartcharge}"
+OSC_USER="${OSC_USER:-osc}"
 
-# ---- pretty logging --------------------------------------------------------------------------
-if [ -t 1 ]; then B=$'\033[1m'; G=$'\033[32m'; Y=$'\033[33m'; C=$'\033[36m'; R=$'\033[0m'; else B=""; G=""; Y=""; C=""; R=""; fi
+# ---- logging ---------------------------------------------------------------------------------
+if [ -t 1 ]; then B=$'\033[1m'; G=$'\033[32m'; Y=$'\033[33m'; C=$'\033[36m'; Rc=$'\033[31m'; R=$'\033[0m'
+else B=""; G=""; Y=""; C=""; Rc=""; R=""; fi
 info() { printf '%s\n' "${B}${C}==>${R} ${B}$*${R}"; }
 ok()   { printf '    %s%s%s\n' "$G" "✓ $*" "$R"; }
 todo() { printf '    %s%s%s\n' "$Y" "→ $*" "$R"; }
 warn() { printf '    %s%s%s\n' "$Y" "! $*" "$R"; }
-# run <shell-command-string> — executes it, or just prints it under --dry-run.
+die()  { printf '%s\n' "${Rc}✗ $*${R}" >&2; exit 1; }
+# run <shell-string> — privileged/plain command; executes it, or prints it under --dry-run.
 run()  { if [ "$DRY_RUN" -eq 1 ]; then printf '    [dry-run] %s\n' "$*"; else eval "$@"; fi; }
 
 # ---- preflight -------------------------------------------------------------------------------
 info "Preflight"
-if ! command -v apt-get >/dev/null 2>&1; then
-  echo "This installer supports Debian/Ubuntu (apt) only." >&2; exit 1
+command -v apt-get >/dev/null 2>&1 || die "This installer supports Debian/Ubuntu (apt) only."
+if [ "$(id -u)" -eq 0 ]; then
+  SUDO=""
+else
+  command -v sudo >/dev/null 2>&1 || die "Run as root, or install sudo first."
+  SUDO="sudo"
 fi
-if [ "$(id -u)" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
-  echo "Run as root, or install sudo first." >&2; exit 1
-fi
-SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
-OSC_USER="${OSC_USER:-$(id -un)}"
 
-# OSC_HOME: reuse an OSC clone we're standing in; otherwise a stable default under $HOME.
-if [ -z "${OSC_HOME:-}" ]; then
-  if git rev-parse --show-toplevel >/dev/null 2>&1 \
-     && grep -q '"opensmartcharge"' "$(git rev-parse --show-toplevel)/package.json" 2>/dev/null; then
-    OSC_HOME="$(git rev-parse --show-toplevel)"
-  else
-    OSC_HOME="$HOME/OpenSmartCharge"
-  fi
+# OS detection (informational; warn-but-continue on non-Debian-family).
+OS_PRETTY="unknown"; OS_ID=""; OS_LIKE=""
+if [ -r /etc/os-release ]; then
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  OS_PRETTY="${PRETTY_NAME:-${NAME:-unknown}}"; OS_ID="${ID:-}"; OS_LIKE="${ID_LIKE:-}"
 fi
-ok "target dir : $OSC_HOME"
-ok "git ref    : $OSC_REF"
-ok "run as     : $OSC_USER"
+ok "OS           : $OS_PRETTY"
+case " $OS_ID $OS_LIKE " in
+  *" debian "*|*" ubuntu "*) : ;;
+  *) warn "untested distro — proceeding (assuming apt + systemd)" ;;
+esac
+ok "install to   : $OSC_HOME"
+ok "service user : $OSC_USER"
+ok "git ref      : $OSC_REF"
 [ "$DRY_RUN" -eq 1 ] && warn "dry-run: no changes will be made"
+
+# run_as_osc <cmd...> — run a command as the unprivileged service user (dry-run aware). No eval:
+# arguments are passed through verbatim, so embedded quoting in a `bash -c "…"` payload is safe.
+run_as_osc() {
+  if [ "$DRY_RUN" -eq 1 ]; then printf '    [dry-run] (as %s) %s\n' "$OSC_USER" "$*"; return 0; fi
+  if [ "$(id -u)" -eq 0 ]; then
+    runuser -u "$OSC_USER" -- env PATH=/usr/local/bin:/usr/bin:/bin HOME="$OSC_HOME" "$@"
+  else
+    sudo -u "$OSC_USER" env PATH=/usr/local/bin:/usr/bin:/bin HOME="$OSC_HOME" "$@"
+  fi
+}
 
 APT_UPDATED=0
 apt_update_once() { if [ "$APT_UPDATED" -eq 0 ]; then run "$SUDO apt-get update -qq"; APT_UPDATED=1; fi; }
 ensure_pkg() {
-  if dpkg -s "$1" >/dev/null 2>&1; then ok "$1 present"; else todo "install $1"; apt_update_once; run "$SUDO apt-get install -y -qq $1"; fi
+  if dpkg -s "$1" >/dev/null 2>&1; then ok "$1 present"
+  else todo "install $1"; apt_update_once; run "$SUDO apt-get install -y -qq $1"; fi
 }
 
-# ---- Node.js 24 ------------------------------------------------------------------------------
-info "Node.js (>= 24)"
-node_major=0
-command -v node >/dev/null 2>&1 && node_major="$(node -v | sed 's/^v\([0-9]*\).*/\1/')"
-if [ "$node_major" -ge 24 ] 2>/dev/null; then
+current_node_major() {
+  local v=0
+  if command -v node >/dev/null 2>&1; then v="$(node -v 2>/dev/null | sed -n 's/^v\([0-9]\{1,\}\).*/\1/p')"; fi
+  printf '%s' "${v:-0}"
+}
+
+install_node_tarball() {
+  local arch base file ndir
+  case "$(uname -m)" in
+    x86_64|amd64) arch=x64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    armv7l) arch=armv7l ;;
+    *) die "unsupported CPU arch '$(uname -m)' for the Node tarball fallback" ;;
+  esac
+  base="https://nodejs.org/dist/latest-v${NODE_MAJOR}.x"
+  file="$(curl -fsSL "$base/SHASUMS256.txt" | sed -n "s/.*\(node-v${NODE_MAJOR}\.[0-9.]*-linux-${arch}\.tar\.xz\).*/\1/p" | head -1)"
+  [ -n "$file" ] || die "could not resolve a Node ${NODE_MAJOR} tarball for $arch"
+  ndir="/usr/local/lib/nodejs/${file%.tar.xz}"
+  todo "download $file → /usr/local (official Node ${NODE_MAJOR})"
+  run "curl -fsSL '$base/$file' -o /tmp/osc-node.tar.xz"
+  run "$SUDO mkdir -p /usr/local/lib/nodejs"
+  run "$SUDO tar -xJf /tmp/osc-node.tar.xz -C /usr/local/lib/nodejs"
+  local b
+  for b in node npm npx; do run "$SUDO ln -sf '$ndir/bin/$b' /usr/local/bin/$b"; done
+  run "rm -f /tmp/osc-node.tar.xz"
+}
+
+# ---- Node.js >= 24 (robust across LTS releases) ----------------------------------------------
+info "Node.js (>= $NODE_MAJOR)"
+if [ "$(current_node_major)" -ge "$NODE_MAJOR" ] 2>/dev/null; then
   ok "node $(node -v) present"
 else
-  todo "install Node.js 24.x (NodeSource)"
-  run "curl -fsSL https://deb.nodesource.com/setup_24.x | ${SUDO:+$SUDO -E }bash -"
-  run "$SUDO apt-get install -y nodejs"
+  todo "install Node.js ${NODE_MAJOR}.x via NodeSource"
+  run "curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | ${SUDO:+$SUDO -E }bash -" \
+    || warn "NodeSource repo setup failed — will try the official tarball"
+  run "$SUDO apt-get install -y nodejs" || warn "apt install nodejs failed — will try the official tarball"
+  if [ "$DRY_RUN" -eq 0 ] && ! [ "$(current_node_major)" -ge "$NODE_MAJOR" ] 2>/dev/null; then
+    warn "NodeSource gave Node major '$(current_node_major)' (< $NODE_MAJOR) — falling back to the official tarball"
+    install_node_tarball
+    [ "$(current_node_major)" -ge "$NODE_MAJOR" ] 2>/dev/null || die "Node >= $NODE_MAJOR still not available after fallback"
+  fi
 fi
 
 # ---- system packages -------------------------------------------------------------------------
 info "System packages"
+ensure_pkg ca-certificates
 ensure_pkg git
 ensure_pkg build-essential
+ensure_pkg xz-utils
 ensure_pkg mosquitto
 ensure_pkg mosquitto-clients
 
+# ---- service user + install dir --------------------------------------------------------------
+info "Service user ($OSC_USER)"
+if id "$OSC_USER" >/dev/null 2>&1; then
+  ok "user $OSC_USER exists"
+else
+  todo "create system user $OSC_USER (nologin)"
+  run "$SUDO useradd --system --user-group --home-dir '$OSC_HOME' --shell /usr/sbin/nologin '$OSC_USER'"
+fi
+todo "ensure $OSC_HOME owned by $OSC_USER"
+run "$SUDO mkdir -p '$OSC_HOME'"
+run "$SUDO chown '$OSC_USER:$OSC_USER' '$OSC_HOME'"
+
 # ---- system services: time sync + MQTT broker -----------------------------------------------
 info "System services"
-# Clock accuracy matters for 15-minute tariff-slot bucketing.
-run "$SUDO systemctl enable --now systemd-timesyncd" || warn "could not enable systemd-timesyncd (is it available?)"
-# Anonymous LAN listener on :1883 to match the repo's mosquitto.conf — written once, never clobbered.
+run "$SUDO systemctl enable --now systemd-timesyncd" || warn "could not enable systemd-timesyncd"
 if [ ! -f /etc/mosquitto/conf.d/osc.conf ]; then
   todo "write /etc/mosquitto/conf.d/osc.conf (listener 1883, allow_anonymous true)"
   if [ "$DRY_RUN" -eq 0 ]; then
@@ -114,35 +176,38 @@ else
 fi
 run "$SUDO systemctl enable --now mosquitto"
 
-# ---- repo: clone or fast-forward to the target ref -------------------------------------------
+# ---- repository (as $OSC_USER) ---------------------------------------------------------------
 info "Repository"
-if [ ! -d "$OSC_HOME/.git" ]; then
-  todo "clone $REPO_URL → $OSC_HOME"
-  run "git clone '$REPO_URL' '$OSC_HOME'"
-  run "git -C '$OSC_HOME' checkout -q '$OSC_REF'"
-else
-  todo "update $OSC_HOME to '$OSC_REF'"
-  run "git -C '$OSC_HOME' fetch --tags --prune origin"
-  run "git -C '$OSC_HOME' checkout -q '$OSC_REF'"
-  # If the ref is a branch, fast-forward it to the remote tip (a tag/SHA just stays checked out).
-  if [ "$DRY_RUN" -eq 0 ] && git -C "$OSC_HOME" show-ref --verify --quiet "refs/heads/$OSC_REF"; then
-    run "git -C '$OSC_HOME' merge --ff-only 'origin/$OSC_REF'"
+if [ -d "$OSC_HOME/.git" ]; then
+  todo "update $OSC_HOME → '$OSC_REF'"
+  run_as_osc git -C "$OSC_HOME" fetch --tags --prune origin
+  run_as_osc git -C "$OSC_HOME" checkout "$OSC_REF"
+  # If the ref is a local branch, fast-forward it to the remote tip (a tag/SHA just stays checked out).
+  if [ "$DRY_RUN" -eq 0 ] && run_as_osc git -C "$OSC_HOME" show-ref --verify --quiet "refs/heads/$OSC_REF"; then
+    run_as_osc git -C "$OSC_HOME" merge --ff-only "origin/$OSC_REF"
   fi
+else
+  todo "clone $REPO_URL → $OSC_HOME"
+  run_as_osc git clone "$REPO_URL" "$OSC_HOME"
+  run_as_osc git -C "$OSC_HOME" checkout "$OSC_REF"
 fi
 
-# ---- build: backend (dist/) + ui2 static SPA (dist/ui) ---------------------------------------
-info "Build"
+# ---- build (as $OSC_USER): backend dist/ + ui2 static SPA dist/ui ----------------------------
+info "Build (as $OSC_USER)"
 todo "npm ci && npm run build"
-run "( cd '$OSC_HOME' && npm ci && npm run build )"
+run_as_osc bash -c "cd $OSC_HOME && npm ci && npm run build"
+# Pre-create the data dir (osc-owned) so the strict-sandbox ReadWritePaths target exists on first boot.
+todo "ensure data dir ($OSC_HOME/data)"
+run_as_osc mkdir -p "$OSC_HOME/data"
 
 # ---- config & data: never touched ------------------------------------------------------------
 info "Config & data (left untouched)"
-ok "osc.yaml is never written by this script — configure via the web UI on first boot"
-ok "data/ (SQLite DB) is never touched — your config + history survive upgrades"
+ok "osc.yaml is never written — configure via the web UI on first boot"
+ok "the SQLite DB in data/ is never modified — config + history survive upgrades"
 
-# ---- systemd service -------------------------------------------------------------------------
+# ---- hardened systemd unit -------------------------------------------------------------------
 info "systemd service (osc)"
-NODE_BIN="$(command -v node || echo /usr/bin/node)"
+NODE_BIN="$(command -v node || echo /usr/local/bin/node)"
 read -r -d '' UNIT <<EOF || true
 [Unit]
 Description=OpenSmartCharge
@@ -152,11 +217,19 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$OSC_USER
+Group=$OSC_USER
 WorkingDirectory=$OSC_HOME
 ExecStart=$NODE_BIN dist/core/lifecycle.js
 Restart=on-failure
+# Give the graceful handler room to drain + checkpoint the WAL (its own watchdog exits at ~8s).
 TimeoutStopSec=20
 Environment=NODE_ENV=production
+# --- sandbox (OSC only writes its SQLite data dir at runtime; networking is unaffected) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=$OSC_HOME/data
+ProtectHome=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
@@ -171,7 +244,7 @@ else
   ok "/etc/systemd/system/osc.service up to date"
 fi
 
-# ---- start / restart -------------------------------------------------------------------------
+# ---- start / restart + health check ----------------------------------------------------------
 info "Service state"
 if systemctl is-enabled --quiet osc 2>/dev/null; then
   todo "restart osc (pick up the new build)"
@@ -180,11 +253,22 @@ else
   todo "enable + start osc"
   run "$SUDO systemctl enable --now osc"
 fi
+if [ "$DRY_RUN" -eq 0 ]; then
+  healthy=0
+  for _ in $(seq 1 15); do
+    if systemctl is-active --quiet osc && curl -fsS -m 3 -o /dev/null http://localhost:8080/api/health 2>/dev/null; then
+      healthy=1; break
+    fi
+    sleep 2
+  done
+  if [ "$healthy" -eq 1 ]; then ok "osc is up (health 200)"; else warn "osc not healthy yet — check: journalctl -u osc -e"; fi
+fi
 
 # ---- report ----------------------------------------------------------------------------------
-IP="$(hostname -I 2>/dev/null | awk '{print $1}')"; [ -z "$IP" ] && IP="<box-ip>"
+IP="$(hostname -I 2>/dev/null | awk '{print $1}')"; [ -n "$IP" ] || IP="<box-ip>"
 info "Done"
-ok  "Web UI / onboarding : http://$IP:8080"
-ok  "Point your charger  : ws://$IP:8080/ocpp/<stationId>"
-ok  "Logs                : journalctl -u osc -f"
-ok  "Re-run this script anytime to upgrade (config + data are preserved)."
+ok "Runs as   : $OSC_USER (unprivileged, sandboxed systemd unit)"
+ok "Web UI    : http://$IP:8080   ← open to onboard"
+ok "Charger   : ws://$IP:8080/ocpp/<stationId>"
+ok "Logs      : journalctl -u osc -f"
+ok "Upgrade   : re-run this script (config + data are preserved)"

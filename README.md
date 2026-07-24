@@ -30,7 +30,8 @@ curl -fsSL https://raw.githubusercontent.com/carlhannes/OpenSmartCharge/main/set
 ```
 
 It installs Node 24, a Mosquitto broker, and NTP time-sync; clones + builds the repo; and registers a
-systemd service (`osc`) that starts on boot. It is **idempotent** — re-run it any time to upgrade to the
+hardened systemd service (`osc`) that runs as a dedicated **unprivileged `osc` user** under
+`/opt/opensmartcharge` (never root) and starts on boot. It is **idempotent** — re-run it any time to upgrade to the
 latest `main`; your configuration (`osc.yaml`) and data (`data/osc.db`) are never touched. Then open
 `http://<box>:8080` and complete the onboarding. `--dry-run` previews changes and `--ref <tag>` pins a
 version. (Piping to `bash` runs code as it downloads — read the script first if you prefer.)

@@ -81,9 +81,9 @@ process — `node` receives `SIGTERM` directly, so the graceful shutdown handler
 step stalls (so a restart never hangs).
 
 ```bash
-cd ~/OpenSmartCharge
+cd /opt/opensmartcharge   # run these as your service user (e.g. `osc`)
 npm ci
-npm run build            # produces dist/ (tsc + vite build)
+npm run build            # produces dist/ (backend) + dist/ui (ui2 static SPA)
 ```
 
 `/etc/systemd/system/osc.service`:
@@ -96,13 +96,21 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/OpenSmartCharge
+User=osc
+Group=osc
+WorkingDirectory=/opt/opensmartcharge
 ExecStart=/usr/bin/node dist/core/lifecycle.js
 Restart=on-failure
 # Give the graceful handler room to drain + checkpoint the WAL. Its own watchdog exits at ~8 s;
 # keep this comfortably above that so systemd never SIGKILLs mid-checkpoint.
 TimeoutStopSec=20
+Environment=NODE_ENV=production
+# Sandbox: OSC only writes its SQLite data dir at runtime; networking (OCPP/MQTT/tariffs) is unaffected.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/opensmartcharge/data
+ProtectHome=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
