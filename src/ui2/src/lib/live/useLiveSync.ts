@@ -86,9 +86,16 @@ async function rehydrateSite(
       ...(tariffName ? { tariffName } : {}),
       ...(siteBreaker != null ? { breakerAmps: siteBreaker } : {}),
       ...(sitePhases != null ? { phases: sitePhases } : {}),
-      // No dynamic balancer configured → the main breaker is a static safe limit.
-      ...(site.balancers.length === 0 && siteBreaker != null
-        ? { balancerMode: "static" as const, staticLimitA: siteBreaker }
+      // Meter source reflects the actual reader type — NOT "static" just because there's no balancer.
+      balancerMode:
+        site.meterReaders[0]?.type === "tibber-pulse"
+          ? ("tibber" as const)
+          : site.meterReaders[0]?.type === "mqtt-phase"
+            ? ("mqtt" as const)
+            : ("static" as const),
+      // A static safe limit only when there's genuinely no meter reader at all.
+      ...(site.meterReaders.length === 0 && siteBreaker != null
+        ? { staticLimitA: siteBreaker }
         : {}),
     });
     useOsc.getState().setMeterName(site.meterReaders[0]?.name ?? null);
@@ -278,6 +285,18 @@ export function useLiveSync() {
             drawingA: e.currentA ?? 0,
             currentPowerW: e.powerW ?? Math.round(e.currentA * 230), // backend 3-phase power, not single-phase
             sessionKwh: e.deliveredKWh ?? e.sessionEnergyKWh,
+          });
+        }),
+        // The control-loop's "why" (which current rung is in effect) — change-guarded by the backend.
+        subscribe("loadpoint.resolve", (d) => {
+          const e = d as {
+            name: string;
+            shouldChargeNow?: boolean;
+            budgetA: number;
+            sources: { energy: string; price: string; current: string };
+          };
+          useOsc.getState().patchCharger(e.name, {
+            resolve: { shouldChargeNow: e.shouldChargeNow, budgetA: e.budgetA, sources: e.sources },
           });
         }),
         subscribe("loadpoint.mode", (d) => {

@@ -107,6 +107,13 @@ export interface Charger {
   // When true (default), a Fast boost reverts to Smart once the car is unplugged. Off = Fast is
   // sticky. Per-loadpoint config (SiteLoadpointDto); edited via PUT /api/loadpoints/:name.
   autoRevertToSmart: boolean;
+  // Latest control-loop decision (the "why"): which current rung is in effect (live-meter vs the
+  // static-tod safe fallback), plus the circuit budget. From the loadpoint.resolve SSE / DTO.
+  resolve?: {
+    shouldChargeNow?: boolean;
+    budgetA: number;
+    sources: { energy: string; price: string; current: string };
+  } | null;
 }
 
 export interface Session {

@@ -89,6 +89,8 @@ export function mapLoadpoint(lp: LoadpointStateDto, site?: SiteDto): Charger {
     availableTargetUnits: lp.availableTargetUnits ?? ["pct", "km", "kwh"],
     // Per-loadpoint config from the site topology (survives SSE patches, like boundVehicleId).
     autoRevertToSmart: siteLp?.autoRevertToSmart ?? true,
+    // The control loop's latest "why" (which current rung is in effect etc.); null until first tick.
+    resolve: lp.resolve ?? null,
   };
 }
 
