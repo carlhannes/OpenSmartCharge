@@ -164,7 +164,17 @@ run "$SUDO chown '$OSC_USER:$OSC_USER' '$OSC_HOME'"
 
 # ---- system services: time sync + MQTT broker -----------------------------------------------
 info "System services"
-run "$SUDO systemctl enable --now systemd-timesyncd" || warn "could not enable systemd-timesyncd"
+# Time sync — clock accuracy matters for 15-min tariff-slot bucketing. Skip if the clock is already
+# synchronized (VMs commonly sync from the host, or already run chrony); otherwise install + enable
+# systemd-timesyncd (a separate package on modern Ubuntu, so its unit may be absent until installed).
+if timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -qiE 'yes|true'; then
+  ok "clock already synchronized (timedatectl)"
+else
+  todo "enable time sync (systemd-timesyncd)"
+  ensure_pkg systemd-timesyncd || true
+  run "$SUDO systemctl enable --now systemd-timesyncd" \
+    || warn "could not enable time sync — run 'timedatectl' to check; install chrony if you prefer"
+fi
 if [ ! -f /etc/mosquitto/conf.d/osc.conf ]; then
   todo "write /etc/mosquitto/conf.d/osc.conf (listener 1883, allow_anonymous true)"
   if [ "$DRY_RUN" -eq 0 ]; then
