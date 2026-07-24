@@ -220,7 +220,10 @@ User=$OSC_USER
 Group=$OSC_USER
 WorkingDirectory=$OSC_HOME
 ExecStart=$NODE_BIN dist/core/lifecycle.js
-Restart=on-failure
+# Restart on ANY exit (not just failures) so a UI-triggered restart (POST /api/system/restart, a clean
+# exit) is brought back too; systemd's default StartLimitBurst still bounds a crash loop.
+Restart=always
+RestartSec=2
 # Give the graceful handler room to drain + checkpoint the WAL (its own watchdog exits at ~8s).
 TimeoutStopSec=20
 Environment=NODE_ENV=production

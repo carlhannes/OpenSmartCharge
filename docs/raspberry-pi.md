@@ -100,7 +100,10 @@ User=osc
 Group=osc
 WorkingDirectory=/opt/opensmartcharge
 ExecStart=/usr/bin/node dist/core/lifecycle.js
-Restart=on-failure
+# Restart on any exit (not just failures) so a UI-triggered restart (POST /api/system/restart, a clean
+# exit) is also brought back. systemd's default StartLimitBurst still bounds a crash loop.
+Restart=always
+RestartSec=2
 # Give the graceful handler room to drain + checkpoint the WAL. Its own watchdog exits at ~8 s;
 # keep this comfortably above that so systemd never SIGKILLs mid-checkpoint.
 TimeoutStopSec=20

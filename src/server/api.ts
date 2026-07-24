@@ -111,6 +111,8 @@ export interface ApiDeps {
   onVehicleOverride(name: string, vehicle: string | null): Promise<void>
   /** Called after any plan create/update/delete so the lifecycle can emit SSE + re-tick. */
   onPlansChanged(loadpointName: string): void
+  /** Gracefully restart the process (re-raise SIGTERM → drain + exit); a supervisor brings it back. */
+  requestRestart(): void
 }
 
 const HHMM = /^\d{2}:\d{2}$/
@@ -1412,6 +1414,20 @@ export function createApiRouter(deps: ApiDeps): Router {
       // configSchema rejected the merged result — nothing was written.
       res.status(400).json({ error: 'invalid config', detail: (e as Error).message })
     }
+  })
+
+  // POST /api/system/restart — gracefully restart the OSC process. Reuses the SIGTERM shutdown path
+  // (drain OCPP/MQTT/HTTP → WAL checkpoint → exit), so it only actually comes back under a supervisor
+  // that restarts on exit (systemd Restart=always / a docker restart policy). `supervised` reflects
+  // whether one was detected, so the UI can warn before restarting a process nothing will revive.
+  router.post('/system/restart', (_req: Request, res: Response) => {
+    const supervised =
+      !!process.env.INVOCATION_ID || // systemd service
+      !!process.env.JOURNAL_STREAM || // systemd (stdout → journald)
+      !!process.env.container || // podman/some containers
+      process.pid === 1 // typical container PID 1
+    res.json({ ok: true, supervised })
+    deps.requestRestart()
   })
 
   // GET /api/transactions

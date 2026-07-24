@@ -1307,6 +1307,13 @@ async function main() {
     onTargetChange: handleTargetChange,
     onVehicleOverride: handleVehicleOverride,
     onPlansChanged: handlePlansChanged,
+    // Re-raise SIGTERM so the existing graceful-shutdown handler drains + exits(0); a supervisor
+    // (systemd Restart=always / docker restart policy) then brings the process back. The small delay
+    // lets the HTTP response flush before the HTTP server is torn down.
+    requestRestart: () => {
+      log.warn('restart requested via API — re-raising SIGTERM for a graceful restart')
+      setTimeout(() => process.kill(process.pid, 'SIGTERM'), 250)
+    },
   })
   log.info({ port: config.site.port }, 'HTTP server listening')
 
