@@ -13,6 +13,19 @@ export function getOcppServer(): OcppServer | undefined {
   return sharedServer
 }
 
+// Create the shared OCPP WS server if it isn't up yet, and return it. The lifecycle calls this at boot
+// so OSC ALWAYS listens for OCPP — a charger that connects to a fresh, not-yet-configured install then
+// shows up as an unclaimed "pending" station the onboarding flow can claim. Without this the server
+// only started once a charger was already configured, which is a chicken-and-egg on first run
+// ("waiting for a charger to connect…" would hang forever).
+export function ensureOcppServer(
+  db: ConstructorParameters<typeof OcppServer>[0],
+  log: ConstructorParameters<typeof OcppServer>[1],
+): OcppServer {
+  if (!sharedServer) sharedServer = new OcppServer(db, log, 6)
+  return sharedServer
+}
+
 registerCharger({
   type: 'ocpp16',
 
@@ -29,13 +42,12 @@ registerCharger({
     const stationId = config.stationId
     const maxA = config.maxA ?? 16
 
-    // Lazily create the shared server on first charger instantiation
-    if (!sharedServer) {
-      sharedServer = new OcppServer(ctx.db, ctx.log, 6)
-    }
+    // Attach to the shared OCPP server (started at boot by the lifecycle so a fresh install already
+    // listens for unclaimed chargers; created here too if for some reason it isn't up yet).
+    ensureOcppServer(ctx.db, ctx.log)
 
-    sharedServer.registerStation(stationId, config.autoStartTransaction ?? true)
-    sharedServer.setStationPhases(stationId, config.phases ?? 3)
+    sharedServer!.registerStation(stationId, config.autoStartTransaction ?? true)
+    sharedServer!.setStationPhases(stationId, config.phases ?? 3)
 
     const debouncedSet = createDebouncedSetter({
       minIntervalMs: (config.minWriteIntervalSec ?? 10) * 1000,

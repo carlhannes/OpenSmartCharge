@@ -32,7 +32,7 @@ import {
   getBalancerModule,
   getVehicleModule,
 } from '../sdk/registry-api.js'
-import { getOcppServer } from '../modules/charger-ocpp16/index.js'
+import { ensureOcppServer } from '../modules/charger-ocpp16/index.js'
 import { startServer } from '../server/index.js'
 import { startMqttBridge } from '../server/mqtt-bridge.js'
 import type { Charger } from '../sdk/charger.js'
@@ -1325,7 +1325,9 @@ async function main() {
   })
 
   // Attach OCPP WS upgrade handler to the HTTP server
-  const ocppServer = getOcppServer()
+  // Always start the OCPP server (even with no chargers configured yet) so a fresh install listens for
+  // unclaimed chargers → they appear in GET /api/chargers/pending for the onboarding "claim" flow.
+  const ocppServer = ensureOcppServer(db, log)
   if (ocppServer) {
     for (const lpCfg of config.loadpoints) {
       const chargerCfg = config.chargers.find((c) => c.name === lpCfg.charger)
