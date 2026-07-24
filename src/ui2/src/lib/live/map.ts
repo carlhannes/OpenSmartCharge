@@ -87,6 +87,8 @@ export function mapLoadpoint(lp: LoadpointStateDto, site?: SiteDto): Charger {
     minSoc: lp.minSoc ?? null,
     constraintAmps: null, // filled from the balancer allocation, not the loadpoint
     availableTargetUnits: lp.availableTargetUnits ?? ["pct", "km", "kwh"],
+    // Per-loadpoint config from the site topology (survives SSE patches, like boundVehicleId).
+    autoRevertToSmart: siteLp?.autoRevertToSmart ?? true,
   };
 }
 

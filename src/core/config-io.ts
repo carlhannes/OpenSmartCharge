@@ -160,6 +160,8 @@ export function buildConfigExport(inp: ConfigExportInput): Record<string, unknow
       targetTime: st?.targetTime,
       targetKWh: st?.targetKWh,
       minSoc: st?.minSoc,
+      // Only export when turned OFF (default is true) — keeps configs clean; clean() drops undefined.
+      autoRevertToSmart: lp.autoRevertToSmart === false ? false : undefined,
     })
   })
 

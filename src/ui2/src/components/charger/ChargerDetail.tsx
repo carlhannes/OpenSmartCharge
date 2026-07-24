@@ -11,6 +11,7 @@ import {
   setMinSoc,
   setActiveVehicle,
   setGuestTarget,
+  setAutoRevert,
 } from "@/lib/live/commands";
 import { Timeline24h } from "./Timeline24h";
 import { StatusPill } from "@/components/StatusPill";
@@ -109,6 +110,22 @@ export function ChargerDetail({ charger, onClose }: Props) {
                 </button>
               );
             })}
+          </div>
+
+          {/* Fast-boost behaviour: whether Fast auto-reverts to Smart when the car is unplugged. */}
+          <div className="mb-5 flex items-start justify-between gap-3 rounded-2xl border border-border/60 bg-card px-4 py-3">
+            <div>
+              <div className="text-sm font-medium">Return to Smart after charging</div>
+              <div className="mt-0.5 text-xs text-muted-foreground">
+                When on, a Fast boost reverts to Smart once the car is unplugged. Off keeps Fast
+                until you change it.
+              </div>
+            </div>
+            <Switch
+              checked={charger.autoRevertToSmart}
+              onCheckedChange={(v) => void setAutoRevert(charger.id, v)}
+              aria-label="Return to Smart after charging"
+            />
           </div>
 
           <Timeline24h chargerId={charger.id} />

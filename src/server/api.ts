@@ -742,7 +742,12 @@ export function createApiRouter(deps: ApiDeps): Router {
       res.status(404).json({ error: 'loadpoint not found' })
       return
     }
-    const b = req.body as { vehicle?: unknown; tariff?: unknown; balancer?: unknown }
+    const b = req.body as {
+      vehicle?: unknown
+      tariff?: unknown
+      balancer?: unknown
+      autoRevertToSmart?: unknown
+    }
     const refs = [
       ['vehicle', b.vehicle, deps.vehicles] as const,
       ['tariff', b.tariff, deps.tariffs] as const,
@@ -757,14 +762,28 @@ export function createApiRouter(deps: ApiDeps): Router {
       }
       patch[field] = val
     }
+    // Behavioural config field (not a ref): whether Fast auto-reverts to Smart on unplug.
+    if (b.autoRevertToSmart !== undefined) {
+      if (typeof b.autoRevertToSmart !== 'boolean') {
+        res.status(400).json({ error: 'autoRevertToSmart must be a boolean' })
+        return
+      }
+      patch.autoRevertToSmart = b.autoRevertToSmart
+    }
     if (Object.keys(patch).length === 0) {
-      res.status(400).json({ error: 'nothing to bind (vehicle/tariff/balancer)' })
+      res.status(400).json({ error: 'nothing to update (vehicle/tariff/balancer/autoRevertToSmart)' })
       return
     }
     setOverride(deps.db, 'loadpoint', name, patch)
     deps.reconcile.reloadLoadpoint(name)
     const lp = deps.config.loadpoints.find((l) => l.name === name)!
-    res.json({ name, vehicle: lp.vehicle, tariff: lp.tariff, balancer: lp.balancer })
+    res.json({
+      name,
+      vehicle: lp.vehicle,
+      tariff: lp.tariff,
+      balancer: lp.balancer,
+      autoRevertToSmart: lp.autoRevertToSmart,
+    })
   })
 
   // ── Charging plans (per loadpoint) ──────────────────────────────────────────
@@ -1290,6 +1309,9 @@ export function createApiRouter(deps: ApiDeps): Router {
           targetTime: st?.targetTime,
           targetKWh: st?.targetKWh,
           minSoc: st?.minSoc,
+          // Behavioural config (whether Fast auto-reverts to Smart on unplug) — a config field, so it
+          // rides the site topology, not the runtime state.
+          autoRevertToSmart: lp.autoRevertToSmart,
         }
       }),
       chargers: c.chargers.map((ch) => ({

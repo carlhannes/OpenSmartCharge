@@ -22,6 +22,7 @@ const lp = {
   sessionEnergyKWh: 3.2,
   maxCurrentA: 16,
   minSoc: 20,
+  autoRevertToSmart: true, // Fast auto-reverts to Smart on unplug (default); toggled via loadpoint PUT
 }
 const veh = { soc: 62, range: 310, batteryCapacity: 77 }
 let oneShotCap = null
@@ -461,6 +462,35 @@ const server = http.createServer((req, res) => {
     return
   }
 
+  // Loadpoint config edit (bindings + autoRevertToSmart) — PUT /api/loadpoints/:name.
+  const lpItem = p.match(/^\/api\/loadpoints\/([^/]+)$/)
+  if (lpItem && req.method === 'PUT') {
+    let body = ''
+    req.on('data', (c) => (body += c))
+    req.on('end', () => {
+      let b = {}
+      try {
+        b = body ? JSON.parse(body) : {}
+      } catch {
+        /* ignore */
+      }
+      if (b.autoRevertToSmart !== undefined) {
+        if (typeof b.autoRevertToSmart !== 'boolean')
+          return send(res, { error: 'autoRevertToSmart must be a boolean' }, 400)
+        lp.autoRevertToSmart = b.autoRevertToSmart
+      }
+      emit('config.changed', { kind: 'loadpoint', name: lpItem[1] })
+      send(res, {
+        name: lpItem[1],
+        vehicle: 'enyaq',
+        tariff: 'home',
+        balancer: 'house',
+        autoRevertToSmart: lp.autoRevertToSmart,
+      })
+    })
+    return
+  }
+
   // Writes: mutate state, then push the matching SSE event.
   if (req.method === 'POST' && p.startsWith('/api/loadpoints/')) {
     let body = ''
@@ -551,6 +581,7 @@ const server = http.createServer((req, res) => {
           balancer: 'house',
           vehicle: 'enyaq',
           maxCurrentA: lp.maxCurrentA,
+          autoRevertToSmart: lp.autoRevertToSmart,
         },
       ],
       chargers: [

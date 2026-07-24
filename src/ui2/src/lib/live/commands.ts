@@ -199,6 +199,13 @@ export async function setChargerMaxAmps(chargerId: string, maxA: number): Promis
   if (isLive()) await api.updateChargerApi(chargerId, { maxA });
 }
 
+/** Per-loadpoint "auto-revert Fast → Smart on unplug": optimistic patch; PUT /api/loadpoints/:name
+ *  when live (SSE `config.changed` → rehydrateSite reconciles). Off = Fast stays sticky. */
+export async function setAutoRevert(chargerId: string, enabled: boolean): Promise<void> {
+  useOsc.getState().patchCharger(chargerId, { autoRevertToSmart: enabled });
+  if (isLive()) await api.updateLoadpoint(chargerId, { autoRevertToSmart: enabled });
+}
+
 /** Charger display label (rename): optimistic; PUT /api/chargers/:name {label} when live. */
 export async function renameCharger(chargerId: string, label: string): Promise<void> {
   useOsc.getState().renameCharger(chargerId, label);

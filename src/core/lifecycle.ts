@@ -1038,6 +1038,7 @@ async function main() {
             availableSince.get(lp.name),
             nowMs,
             FAST_BOOST_UNPLUG_GRACE_MS,
+            lp.autoRevertToSmart,
           )
         ) {
           st.mode = 'smart'

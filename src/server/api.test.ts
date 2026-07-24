@@ -791,6 +791,57 @@ test('PUT /vehicles/:name: blank secret kept, changed field reloads live, name/t
   }
 })
 
+test('PUT /api/loadpoints/:name autoRevertToSmart: default true, toggled off persists + shows in /api/site', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-autorevert-'))
+  const db = openDb(dir)
+  try {
+    const config = configSchema.parse({
+      chargers: [{ name: 'garage', type: 'ocpp16', stationId: 'S1' }],
+      loadpoints: [{ name: 'garage', charger: 'garage' }],
+    })
+    // Schema default: Fast auto-reverts to Smart unless explicitly disabled.
+    expect(config.loadpoints[0].autoRevertToSmart).toBe(true)
+
+    const reconcile = {
+      reloadLoadpoint: (name: string) => {
+        const lp = config.loadpoints.find((l) => l.name === name)
+        if (lp) Object.assign(lp, getOverride(db, 'loadpoint', name))
+      },
+    }
+    const deps = {
+      db,
+      config,
+      loadpoints: new Map<string, unknown>([['garage', { name: 'garage', maxCurrentA: 16 }]]),
+      chargers: new Map(),
+      vehicles: new Map(),
+      tariffs: new Map(),
+      balancers: new Map(),
+      events: { emit() {} },
+      reconcile,
+    } as unknown as ApiDeps
+
+    await withApi(deps, async (baseUrl) => {
+      // Turn it OFF → 200, echoed, persisted as an override.
+      const r = await putJson(`${baseUrl}/api/loadpoints/garage`, { autoRevertToSmart: false })
+      expect(r.status).toBe(200)
+      expect(await r.json()).toMatchObject({ name: 'garage', autoRevertToSmart: false })
+      expect(getOverride(db, 'loadpoint', 'garage')).toMatchObject({ autoRevertToSmart: false })
+      // /api/site reflects the new value.
+      const site = (await (await fetch(`${baseUrl}/api/site`)).json()) as {
+        loadpoints: { name: string; autoRevertToSmart?: boolean }[]
+      }
+      expect(site.loadpoints.find((l) => l.name === 'garage')?.autoRevertToSmart).toBe(false)
+      // Non-boolean → 400.
+      expect(
+        (await putJson(`${baseUrl}/api/loadpoints/garage`, { autoRevertToSmart: 'nope' })).status,
+      ).toBe(400)
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('POST /target validates minSoc and passes it through', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'osc-api-minsoc-'))
   const db = openDb(dir)

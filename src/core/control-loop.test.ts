@@ -97,15 +97,22 @@ test('circuitForLoadpoint resolves the owning circuit', () => {
 test('shouldExpireFastToSmart: Fast is a boost that reverts only after the car is unplugged past the grace', () => {
   const grace = 5 * 60_000
   const t0 = 1_000_000
-  // Unplugged (Available) longer than the grace → revert fast → smart.
-  expect(shouldExpireFastToSmart('fast', t0, t0 + grace + 1, grace)).toBe(true)
+  // Unplugged (Available) longer than the grace → revert fast → smart (auto-revert enabled).
+  expect(shouldExpireFastToSmart('fast', t0, t0 + grace + 1, grace, true)).toBe(true)
   // Unplugged only briefly (reposition / blip) → keep Fast.
-  expect(shouldExpireFastToSmart('fast', t0, t0 + grace - 1, grace)).toBe(false)
+  expect(shouldExpireFastToSmart('fast', t0, t0 + grace - 1, grace, true)).toBe(false)
   // Still plugged (or restart / WS blip → Unavailable, never sets the timer) → keep Fast.
-  expect(shouldExpireFastToSmart('fast', undefined, t0 + 10 * grace, grace)).toBe(false)
+  expect(shouldExpireFastToSmart('fast', undefined, t0 + 10 * grace, grace, true)).toBe(false)
   // Only Fast expires — smart/disabled are never auto-changed even if long "unplugged".
-  expect(shouldExpireFastToSmart('smart', t0, t0 + 10 * grace, grace)).toBe(false)
-  expect(shouldExpireFastToSmart('disabled', t0, t0 + 10 * grace, grace)).toBe(false)
+  expect(shouldExpireFastToSmart('smart', t0, t0 + 10 * grace, grace, true)).toBe(false)
+  expect(shouldExpireFastToSmart('disabled', t0, t0 + 10 * grace, grace, true)).toBe(false)
+})
+
+test('shouldExpireFastToSmart: auto-revert disabled → Fast is sticky, never reverts even past the grace', () => {
+  const grace = 5 * 60_000
+  const t0 = 1_000_000
+  // Same "unplugged well past grace" input that reverts when enabled → stays Fast when disabled.
+  expect(shouldExpireFastToSmart('fast', t0, t0 + 10 * grace, grace, false)).toBe(false)
 })
 
 test('softStartLimit: resume from ~0 commands half the target (≥6A); then full; no-op while drawing', () => {

@@ -96,6 +96,10 @@ const loadpointConfigSchema = z.object({
   tariff: z.string().optional(),
   balancer: z.string().optional(),
   defaultMode: chargeModeSchema.default('smart'),
+  // When true (default), a `fast` boost auto-reverts to `smart` once the car is unplugged past the
+  // grace (see shouldExpireFastToSmart). Set false to keep Fast "sticky" — it stays Fast across an
+  // unplug until the mode is changed by hand.
+  autoRevertToSmart: z.boolean().default(true),
   targetSoc: z.number().min(0).max(100).optional(),
   targetTime: z
     .string()

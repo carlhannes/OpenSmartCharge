@@ -104,6 +104,9 @@ export interface Charger {
   minSoc: number | null; // keep-above floor (%), from POST /target { minSoc }
   constraintAmps: number | null; // when limited by balancer
   availableTargetUnits: Plan["unit"][]; // units the plan editor may offer (from the backend)
+  // When true (default), a Fast boost reverts to Smart once the car is unplugged. Off = Fast is
+  // sticky. Per-loadpoint config (SiteLoadpointDto); edited via PUT /api/loadpoints/:name.
+  autoRevertToSmart: boolean;
 }
 
 export interface Session {
@@ -320,6 +323,7 @@ function seed(): Pick<
     minSoc: null,
     constraintAmps: null,
     availableTargetUnits: ["pct", "km", "kwh"],
+    autoRevertToSmart: true,
   };
   const plan: Plan = {
     id: "p_default",
@@ -500,6 +504,7 @@ export const useOsc = create<OscState>()((set, get) => ({
       minSoc: null,
       constraintAmps: null,
       availableTargetUnits: ["pct", "km", "kwh"],
+      autoRevertToSmart: true,
     };
     set((s) => ({
       chargers: [...s.chargers, charger],

@@ -240,6 +240,10 @@ loadpoints:
     tariff: home # optional — must match a name in tariffs[]
     balancer: house-main # optional — must match a name in balancers[]
     defaultMode: smart # disabled | smart | fast
+    autoRevertToSmart:
+      true # optional (default true). When true, a `fast` boost reverts to `smart`
+      # once the car is unplugged (past a 5-min grace). Set false to keep
+      # Fast "sticky" — it stays Fast across an unplug until changed by hand.
     targetSoc: 80 # default charge target (%) — used when a vehicle SoC is available
     targetTime:
       '07:00' # daily departure time (HH:MM, site-local — see site.timezone)
@@ -268,6 +272,8 @@ loadpoints:
 In `smart` mode two signals **force-charge**, overriding both the price wait and a reached target: a **`minSoc` floor** breach, and **remote climate/preconditioning running while the car is plugged in**. When climate is the _only_ reason to charge (battery already at target), OSC offers just the **6 A IEC minimum** — a car that draws preconditioning from the charger (e.g. Kia EV6) then runs it off the grid; how much it actually pulls is up to the car (some, like the Škoda Enyaq, run climate off the battery when at their charge limit and draw ≈nothing). OSC learns climate is on from the vehicle poll (faster during the day window; `POST /api/vehicles/:name/refresh` forces it immediately). `fast` and `disabled` ignore both (fast always charges; disabled never does).
 
 The mode can be changed at any time via the UI, REST, or MQTT — it takes effect immediately (an on-demand control-loop tick) and otherwise on the next tick (default 30 s).
+
+**`fast` is a boost that ends at unplug.** A `fast` boost is deliberately sticky against transients (WS blips, restarts, brief repositioning unplugs all keep it) and reverts to `smart` only once the car has been genuinely unplugged past a 5-min grace. Set **`autoRevertToSmart: false`** per loadpoint (config field, or the per-charger toggle in the app) to disable that revert entirely — Fast then stays Fast across an unplug until you change the mode by hand. Default is `true` (revert on unplug).
 
 ### The config model (osc.yaml is an import format)
 

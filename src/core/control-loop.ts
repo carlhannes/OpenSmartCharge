@@ -90,15 +90,19 @@ export function softStartLimit(targetA: number, prevCommandedA: number, minA = 6
  * `Available` (a real unplug), or undefined when the car is plugged. Fast reverts only after that
  * exceeds `graceMs`, so a brief reposition-unplug, a wifi/WS blip (which reports `Unavailable`, not
  * `Available`, so never sets this), and an OSC restart (no Available observed) all KEEP Fast — only a
- * true end-of-session reverts it. `smart`/`disabled` are unaffected. Pure.
+ * true end-of-session reverts it. `smart`/`disabled` are unaffected. `enabled` is the loadpoint's
+ * `autoRevertToSmart` flag: when false the boost is STICKY (never auto-reverts — stays Fast across an
+ * unplug until the mode is changed by hand). Pure.
  */
 export function shouldExpireFastToSmart(
   mode: ChargeMode,
   availableUnpluggedSinceMs: number | undefined,
   now: number,
   graceMs: number,
+  enabled: boolean,
 ): boolean {
   return (
+    enabled &&
     mode === 'fast' &&
     availableUnpluggedSinceMs !== undefined &&
     now - availableUnpluggedSinceMs > graceMs

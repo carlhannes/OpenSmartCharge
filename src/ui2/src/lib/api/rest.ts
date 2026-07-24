@@ -187,6 +187,7 @@ export interface SiteLoadpointDto {
   targetSoc?: number;
   targetTime?: string;
   targetKWh?: number;
+  autoRevertToSmart?: boolean; // Fast auto-reverts to Smart on unplug (default true); false = sticky
 }
 export interface SiteChargerDto {
   name: string;
@@ -262,6 +263,12 @@ export const setTarget = (
   name: string,
   t: { soc?: number; time?: string; kwh?: number | null; minSoc?: number },
 ) => apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/target`, json(t));
+// Loadpoint config edit (bindings + behavioural flags like autoRevertToSmart) → PUT /api/loadpoints/:name.
+// config.changed SSE → rehydrateSite reconciles.
+export const updateLoadpoint = (
+  name: string,
+  patch: { vehicle?: string; tariff?: string; balancer?: string; autoRevertToSmart?: boolean },
+) => apiFetch<unknown>(`/api/loadpoints/${name}`, jsonBody("PUT", patch));
 // Per-session active-vehicle override: null = Guest, or the bound vehicle's name = force the bound car.
 export const setLoadpointVehicle = (name: string, vehicle: string | null) =>
   apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/vehicle`, json({ vehicle }));
