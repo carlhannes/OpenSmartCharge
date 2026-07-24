@@ -1,10 +1,10 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useOsc } from "@/lib/mock/store";
 import { HeroStatus } from "@/components/home/HeroStatus";
 import { HomePowerCard } from "@/components/home/HomePowerCard";
 import { ChargerCard } from "@/components/home/ChargerCard";
 import { ChargerDetail } from "@/components/charger/ChargerDetail";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { AlertTriangle } from "lucide-react";
 
 export const Route = createFileRoute("/")({
@@ -13,8 +13,26 @@ export const Route = createFileRoute("/")({
 
 function Home() {
   const chargers = useOsc((s) => s.chargers);
+  const source = useOsc((s) => s.source);
   const moduleHealth = useOsc((s) => s.moduleHealth);
+  const nav = useNavigate();
   const degraded = useMemo(() => moduleHealth.filter((m) => m.status !== "ok"), [moduleHealth]);
+
+  // First-run: a live backend with no chargers is a fresh install → send them to onboarding (where the
+  // "import a backup" option also lives). Guarded by a short delay + a re-check of live store state so
+  // the initial rehydrate (source flips to 'live' before /api/site finishes loading) can't trigger a
+  // spurious redirect on a configured site.
+  useEffect(() => {
+    if (source !== "live") return;
+    const t = setTimeout(() => {
+      const s = useOsc.getState();
+      if (s.source === "live" && s.chargers.length === 0) {
+        void nav({ to: "/onboarding/$step", params: { step: "welcome" } });
+      }
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [source, chargers.length, nav]);
+
   // A degraded module that IS a charger link means charging is actually interrupted — don't claim
   // "charging continues". A degraded peripheral (prices / balancer / vehicle / MQTT) is different:
   // charging really does continue on the last-known plan. Correlate against the charger list (the
@@ -62,7 +80,7 @@ function Home() {
         {chargers.length === 0 && (
           <Link
             to="/onboarding/$step"
-            params={{ step: "charger" }}
+            params={{ step: "welcome" }}
             className="block rounded-3xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground hover:bg-secondary/50"
           >
             + Connect your first charger

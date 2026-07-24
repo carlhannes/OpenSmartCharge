@@ -10,9 +10,15 @@ import {
   addPlan as addPlanCmd,
   updatePlan as updatePlanCmd,
   setTimezone,
+  setRegion,
+  setBreaker,
+  claimCharger as claimChargerCmd,
+  importBackup,
+  restartSystem,
 } from "@/lib/live/commands";
+import * as api from "@/lib/api/rest";
+import { waitForHealthy } from "@/lib/live/restart-flow";
 import { REGIONS } from "@/lib/copy";
-import { ConfigLockNote } from "@/components/settings/ConfigLockNote";
 import { VehicleForm } from "@/components/VehicleForm";
 import { useEffect, useState } from "react";
 import { Copy, Check } from "lucide-react";
@@ -153,11 +159,13 @@ function StepShell({
 }
 
 function Welcome() {
+  const [showImport, setShowImport] = useState(false);
   return (
     <StepShell eyebrow="Welcome" title="Let's get your car charging smart.">
       <p className="text-sm text-muted-foreground">
-        Six short steps. We'll connect your charger, pick your electricity zone, tell OSC about your
-        house, and set your first plan. You can skip anything and finish later from Settings.
+        A few quick steps: we'll connect your charger, pick your electricity zone, tell OSC about
+        your house, add your car, and set your first plan. You can skip anything and finish later
+        from Settings.
       </p>
       <div className="mt-6 space-y-2 text-sm">
         {[
@@ -175,39 +183,196 @@ function Welcome() {
           </div>
         ))}
       </div>
+      <div className="mt-6 border-t border-border/60 pt-5">
+        <button
+          onClick={() => setShowImport((v) => !v)}
+          className="text-sm font-medium text-primary hover:underline"
+        >
+          …or import a backup instead
+        </button>
+        {showImport && <ImportPanel />}
+      </div>
     </StepShell>
   );
 }
 
+// Import an exported osc.yaml backup, then restart to apply it (skipping the manual steps). Reuses
+// POST /api/config/import (dry-run preview + real import) and the shared restart-then-reload flow.
+function ImportPanel() {
+  const [text, setText] = useState("");
+  const [preview, setPreview] = useState<string[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [phase, setPhase] = useState<"idle" | "checking" | "importing" | "restarting" | "timeout">(
+    "idle",
+  );
+
+  const onFile = (f: File | undefined) => {
+    if (f) void f.text().then(setText);
+  };
+
+  const check = async () => {
+    setErr(null);
+    setPreview(null);
+    setPhase("checking");
+    try {
+      const r = await importBackup(text, "replace", true);
+      setPreview(r.sections);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setPhase("idle");
+    }
+  };
+
+  const importAndRestart = async () => {
+    setErr(null);
+    setPhase("importing");
+    try {
+      await importBackup(text, "replace", false);
+    } catch (e) {
+      setErr((e as Error).message);
+      setPhase("idle");
+      return;
+    }
+    useOsc.getState().finishOnboarding();
+    setPhase("restarting");
+    await restartSystem();
+    const ok = await waitForHealthy();
+    if (ok) window.location.assign("/");
+    else setPhase("timeout");
+  };
+
+  if (phase === "restarting")
+    return (
+      <div className="mt-4 flex items-center gap-3 rounded-2xl border border-border/60 bg-card p-5 text-sm">
+        <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
+        Importing & restarting OSC… this page reloads automatically when it's back.
+      </div>
+    );
+  if (phase === "timeout")
+    return (
+      <div className="mt-4 rounded-2xl border border-status-warn/40 bg-status-warn/10 p-5 text-sm text-status-warn">
+        OSC hasn't come back yet. Under systemd/docker it should return shortly — reload this page.
+        If you started it manually, start it again, then reload.
+      </div>
+    );
+
+  return (
+    <div className="mt-4 space-y-3 rounded-2xl border border-border/60 bg-card p-4">
+      <p className="text-xs text-muted-foreground">
+        Paste an <code>osc.yaml</code> backup (Settings → System → Export), or choose a file. It
+        replaces the current config and applies on restart. Vehicle passwords are included only if
+        the backup was exported with credentials.
+      </p>
+      <input
+        type="file"
+        accept=".yaml,.yml,text/yaml"
+        onChange={(e) => onFile(e.target.files?.[0])}
+        className="block w-full text-xs text-muted-foreground file:mr-3 file:rounded-full file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-xs file:font-medium"
+      />
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={5}
+        placeholder={"site:\n  name: My Home\n…"}
+        className="w-full rounded-lg border border-input bg-background p-2 font-mono text-xs"
+      />
+      {preview && (
+        <div className="rounded-lg bg-secondary/60 p-2 text-xs">
+          Looks valid — will import: {preview.join(", ")}
+        </div>
+      )}
+      {err && <div className="text-xs text-status-bad">{err}</div>}
+      <div className="flex gap-2">
+        <button
+          onClick={() => void check()}
+          disabled={!text.trim() || phase === "checking"}
+          className="rounded-full bg-secondary px-4 py-2 text-xs font-medium disabled:opacity-50"
+        >
+          {phase === "checking" ? "Checking…" : "Check"}
+        </button>
+        <button
+          onClick={() => void importAndRestart()}
+          disabled={!text.trim() || phase === "importing"}
+          className="rounded-full bg-primary px-4 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50"
+        >
+          {phase === "importing" ? "Importing…" : "Import & restart"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ChargerStep({ addMode }: { addMode?: boolean }) {
+  const live = useOsc((s) => s.source === "live");
+  // Demo store simulation (id-based) for offline/demo mode.
   const emit = useOsc((s) => s.emitPending);
-  const pending = useOsc((s) => s.pendingChargers);
-  const claim = useOsc((s) => s.claimPending);
-  // Against a live backend, chargers are paired in osc.yaml — this flow is a preview (no write API).
-  const locked = useOsc((s) => s.source === "live");
+  const demoPending = useOsc((s) => s.pendingChargers);
+  const claimDemo = useOsc((s) => s.claimPending);
+  // Live: poll the backend for connected-but-unclaimed OCPP stations.
+  const [livePending, setLivePending] = useState<api.PendingChargerDto[]>([]);
   const [copied, setCopied] = useState(false);
-  const [claimed, setClaimed] = useState(false);
+  const [claimedName, setClaimedName] = useState<string | null>(null);
   const [name, setName] = useState("Garage");
   const [amps, setAmps] = useState(16);
-  const url = "ws://osc.local:8080/ocpp/garage";
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
+  const host = typeof window !== "undefined" ? window.location.host : "osc.local:8080";
+  const url = `ws://${host}/ocpp/<your-charger-id>`;
+
+  // Demo: surface a simulated pending station after a beat.
   useEffect(() => {
-    if (pending.length === 0 && !claimed) {
-      const t = setTimeout(() => emit(), 3500);
+    if (live || claimedName) return;
+    if (demoPending.length === 0) {
+      const t = setTimeout(() => emit(), 2500);
       return () => clearTimeout(t);
     }
-  }, [pending.length, claimed, emit]);
+  }, [live, demoPending.length, claimedName, emit]);
 
-  const detected = pending[0];
+  // Live: poll pending stations until one is claimed.
+  useEffect(() => {
+    if (!live || claimedName) return;
+    let active = true;
+    const tick = () =>
+      api
+        .getPendingChargers()
+        .then((list) => active && setLivePending(list))
+        .catch(() => {});
+    void tick();
+    const iv = setInterval(() => void tick(), 3000);
+    return () => {
+      active = false;
+      clearInterval(iv);
+    };
+  }, [live, claimedName]);
+
+  const detected = live ? livePending[0] : demoPending[0];
+
+  const doClaim = async () => {
+    if (!detected) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      if (live) {
+        await claimChargerCmd({ stationId: detected.stationId, name, maxA: amps });
+      } else {
+        claimDemo((detected as { id: string }).id, name, amps);
+      }
+      setClaimedName(name);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <StepShell eyebrow={addMode ? "Add charger" : "Step 1"} title="Connect your charger">
-      {locked && (
-        <ConfigLockNote>
-          New chargers are paired in your config file (osc.yaml) — this is a preview.
-        </ConfigLockNote>
-      )}
-      <p className="text-sm text-muted-foreground">Point your OCPP 1.6J charger at this address:</p>
+      <p className="text-sm text-muted-foreground">
+        In your charger's settings, point its OCPP 1.6J connection at this address — the last
+        segment is your charger's own ID / serial:
+      </p>
       <div className="mt-3 flex items-center gap-2 rounded-2xl border border-border/60 bg-card p-3">
         <code className="flex-1 truncate font-mono text-sm">{url}</code>
         <button
@@ -224,16 +389,16 @@ function ChargerStep({ addMode }: { addMode?: boolean }) {
       </div>
 
       <div className="mt-6">
-        {claimed ? (
+        {claimedName ? (
           <div className="rounded-2xl border border-primary/40 bg-primary/5 p-5 text-sm font-medium text-primary">
             <span className="inline-flex items-center gap-1.5">
-              <Check className="h-4 w-4" /> Charger added — {name} is connected.
+              <Check className="h-4 w-4" /> Charger added — {claimedName} is connected.
             </span>
           </div>
         ) : !detected ? (
           <div className="flex items-center gap-3 rounded-2xl border border-dashed p-5 text-sm text-muted-foreground">
             <span className="h-2 w-2 animate-pulse rounded-full bg-status-warn" />
-            Waiting for charger to connect…
+            Waiting for a charger to connect…
           </div>
         ) : (
           <div className="rounded-2xl border border-primary/40 bg-primary/5 p-5">
@@ -264,14 +429,13 @@ function ChargerStep({ addMode }: { addMode?: boolean }) {
                   className="w-24 rounded-lg border border-input bg-background px-3 py-2 text-sm tabular-nums"
                 />
               </div>
+              {err && <div className="text-xs text-status-bad">{err}</div>}
               <button
-                onClick={() => {
-                  claim(detected.id, name, amps);
-                  setClaimed(true);
-                }}
-                className="w-full rounded-full bg-primary py-2.5 text-sm font-medium text-primary-foreground"
+                onClick={() => void doClaim()}
+                disabled={busy || !name.trim()}
+                className="w-full rounded-full bg-primary py-2.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
               >
-                Claim this charger
+                {busy ? "Claiming…" : "Claim this charger"}
               </button>
             </div>
           </div>
@@ -283,7 +447,6 @@ function ChargerStep({ addMode }: { addMode?: boolean }) {
 
 function RegionStep() {
   const region = useOsc((s) => s.config.region);
-  const setConfig = useOsc((s) => s.setConfig);
   return (
     <StepShell eyebrow="Step 2" title="Your electricity zone">
       <p className="text-sm text-muted-foreground">This picks the day-ahead price feed.</p>
@@ -291,7 +454,7 @@ function RegionStep() {
         {REGIONS.map((r) => (
           <button
             key={r.id}
-            onClick={() => setConfig({ region: r.id })}
+            onClick={() => void setRegion(r.id)}
             className={`flex w-full items-center justify-between rounded-2xl border p-4 text-left transition ${
               region === r.id ? "border-primary bg-primary/5" : "border-border/60 bg-card"
             }`}
@@ -306,7 +469,7 @@ function RegionStep() {
 }
 
 function HouseStep() {
-  const c = useOsc((s) => s.config);
+  const breakerAmps = useOsc((s) => s.config.breakerAmps);
   const setConfig = useOsc((s) => s.setConfig);
   return (
     <StepShell eyebrow="Step 3" title="Your house">
@@ -318,33 +481,18 @@ function HouseStep() {
           type="number"
           min={6}
           max={200}
-          value={c.breakerAmps}
+          value={breakerAmps}
           onChange={(e) => setConfig({ breakerAmps: parseInt(e.target.value, 10) || 0 })}
+          onBlur={(e) => void setBreaker(parseInt(e.target.value, 10) || breakerAmps)}
           className="w-28 rounded-lg border border-input bg-background px-3 py-2 tabular-nums"
         />
         <span className="text-sm text-muted-foreground">A</span>
       </div>
-      <div className="mt-6 space-y-2">
-        {[
-          { id: "tibber", label: "Tibber Pulse", desc: "Live per-phase currents." },
-          { id: "mqtt", label: "MQTT meter", desc: "DSMR / OBIS bridge." },
-          { id: "static", label: "Safe static limit", desc: "No live meter needed." },
-        ].map((o) => (
-          <button
-            key={o.id}
-            onClick={() => setConfig({ balancerMode: o.id as never })}
-            className={`flex w-full items-start gap-3 rounded-2xl border p-4 text-left transition ${
-              c.balancerMode === o.id ? "border-primary bg-primary/5" : "border-border/60 bg-card"
-            }`}
-          >
-            <div className="flex-1">
-              <div className="text-sm font-medium">{o.label}</div>
-              <div className="text-xs text-muted-foreground">{o.desc}</div>
-            </div>
-            {c.balancerMode === o.id && <span className="text-primary">✓</span>}
-          </button>
-        ))}
-      </div>
+      <p className="mt-3 text-xs text-muted-foreground">
+        OSC never lets total draw exceed this. For live headroom — charging harder while the house
+        is quiet — add a Tibber Pulse or MQTT meter later in Settings; otherwise it uses a safe
+        static limit.
+      </p>
     </StepShell>
   );
 }
