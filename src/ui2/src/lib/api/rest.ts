@@ -1,4 +1,4 @@
-// REST client for the OpenSmartCharge backend — mirrors src/ui/client/rest.ts.
+// REST client for the OpenSmartCharge backend.
 // Relative `/api` paths; works via the Vite dev proxy (dev) or same-origin (prod).
 // Over-the-wire shapes: Dates are serialized as ISO strings; omitted optionals are absent.
 import type { DayKey } from "@/lib/format";
@@ -324,6 +324,43 @@ export const setTariffZone = (name: string, zone: string) =>
   apiFetch<unknown>(`/api/tariffs/${name}`, jsonBody("PUT", { zone }));
 export const updateChargerApi = (name: string, patch: { maxA?: number; label?: string }) =>
   apiFetch<unknown>(`/api/chargers/${name}`, jsonBody("PUT", patch));
+
+// Charger claim (onboarding + "add charger"). `pending` = OCPP stations connected but not yet claimed.
+export interface PendingChargerDto {
+  stationId: string;
+  vendor?: string;
+  model?: string;
+  status?: string;
+  connectedAt?: string;
+}
+export const getPendingChargers = () => apiFetch<PendingChargerDto[]>("/api/chargers/pending");
+// Claims a pending station → creates the charger + its loadpoint (201). config.changed → rehydrateSite.
+export const claimCharger = (body: {
+  stationId: string;
+  name: string;
+  maxA?: number;
+  phases?: number;
+  tariff?: string;
+  balancer?: string;
+  vehicle?: string;
+}) => apiFetch<{ name: string }>("/api/chargers", jsonBody("POST", body));
+
+// Config backup. Export is a file download (a GET URL, not a fetch); import validates then applies on
+// the next restart (POST /api/system/restart). See docs/ui2-api-wishlist.md + docs/config.md.
+export interface ImportResultDto {
+  dryRun: boolean;
+  mode: "merge" | "replace";
+  sections: string[];
+  restartRequired: boolean;
+}
+export const configExportUrl = (secrets: boolean) =>
+  `/api/config/export${secrets ? "?secrets=1" : ""}`;
+export const importConfig = (config: string, mode: "merge" | "replace", dryRun = false) =>
+  apiFetch<ImportResultDto>("/api/config/import", jsonBody("POST", { config, mode, dryRun }));
+
+// Graceful process restart. `supervised` = a process manager (systemd/docker) will bring OSC back up.
+export const restartSystem = () =>
+  apiFetch<{ ok: boolean; supervised: boolean }>("/api/system/restart", { method: "POST" });
 
 export const getHealth = () => apiFetch<Record<string, ModuleHealth>>("/api/health");
 export const getSite = () => apiFetch<SiteDto>("/api/site");

@@ -101,6 +101,20 @@ fetch/poll), plus one new SSE event. No new settings — pure readout.
   not every tick), on the `*` wildcard → `/events` like the others. `powerW` also now rides the existing
   **`loadpoint.state`** event. The mock (`scripts/mock-backend.mjs`) emits both.
 
+## 9. System restart + config backup wired ✅
+`POST /api/system/restart` → `{ ok, supervised }`, then a graceful self-restart (re-raises SIGTERM →
+drain + WAL checkpoint → exit(0); a supervisor — systemd `Restart=always` / a docker restart policy —
+brings it back). `supervised` reflects whether one was detected (systemd/container env) so the UI can
+warn on hosts where nothing would revive it. Used to **apply a config import** and from **Settings →
+Restart OSC**: the UI fires it, polls `GET /api/health`, and reloads when OSC is back.
+
+Now **wired into ui2** (previously backend-only): charger claim (`GET /api/chargers/pending` →
+`POST /api/chargers`) drives the live onboarding **charger** step (region → `PUT /api/tariffs/:name`,
+house breaker → `PUT /api/site`), and config **export/import** (`GET /api/config/export[?secrets=1]`,
+`POST /api/config/import`) powers the welcome-screen "import a backup" and **Settings → Backup &
+restore** (export has an "include credentials" toggle; import is replace + dry-run-previewed, applied on
+the restart above). The mock (`scripts/mock-backend.mjs`) serves all of these.
+
 ---
 
 ## Persistence & reset (for the UI's mental model)

@@ -4,7 +4,6 @@
   "exclude": [
     "node_modules",
     "dist",
-    "src/ui",
     "src/ui2",
     "**/*.test.ts",
     "src/modules/charger-ocpp16/mock-charger.ts"

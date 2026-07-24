@@ -211,3 +211,37 @@ export async function renameCharger(chargerId: string, label: string): Promise<v
   useOsc.getState().renameCharger(chargerId, label);
   if (isLive()) await api.updateChargerApi(chargerId, { label });
 }
+
+/** Claim a pending OCPP station as a charger (+ its loadpoint). Live: POST /api/chargers (the
+ *  `config.changed` SSE → rehydrateSite adds it). Demo is driven by the store's `claimPending` in the
+ *  wizard component (id-based sim), so this command's demo branch is a no-op. */
+export async function claimCharger(body: {
+  stationId: string;
+  name: string;
+  maxA?: number;
+  phases?: number;
+  tariff?: string;
+  balancer?: string;
+  vehicle?: string;
+}): Promise<void> {
+  if (isLive()) await api.claimCharger(body);
+}
+
+/** Import a config backup (an osc.yaml document). Applies on the next restart (see `restartSystem`).
+ *  Returns the import result (sections / restartRequired) so the caller can preview a dry-run or report
+ *  success. In pure demo (no live backend) it's a benign no-op result. */
+export async function importBackup(
+  config: string,
+  mode: "merge" | "replace" = "replace",
+  dryRun = false,
+): Promise<api.ImportResultDto> {
+  if (!isLive()) return { dryRun, mode, sections: [], restartRequired: true };
+  return api.importConfig(config, mode, dryRun);
+}
+
+/** Gracefully restart OSC. Returns { supervised } so the UI can warn when nothing will revive the
+ *  process (e.g. a bare `nohup` dev instance). Demo: no-op (supervised:false). */
+export async function restartSystem(): Promise<{ ok: boolean; supervised: boolean }> {
+  if (!isLive()) return { ok: true, supervised: false };
+  return api.restartSystem();
+}

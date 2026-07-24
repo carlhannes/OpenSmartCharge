@@ -11,6 +11,6 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ['dist/**', 'node_modules/**', 'src/ui/**', 'src/ui2/**'],
+    ignores: ['dist/**', 'node_modules/**', 'src/ui2/**'],
   },
 )

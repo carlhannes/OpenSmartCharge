@@ -78,6 +78,25 @@ test('PUT /api/smartcharging: validate-first, live reconcile, restart-required f
   }
 })
 
+// POST /api/system/restart: responds { ok, supervised } immediately and triggers the injected
+// restart exactly once. `supervised` is env-derived (systemd/container), so we only assert its type.
+test('POST /api/system/restart returns {ok, supervised} and calls requestRestart once', async () => {
+  let restarts = 0
+  const deps = {
+    requestRestart: () => {
+      restarts++
+    },
+  } as unknown as ApiDeps
+  await withApi(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/system/restart`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; supervised: boolean }
+    expect(body.ok).toBe(true)
+    expect(typeof body.supervised).toBe('boolean')
+  })
+  expect(restarts).toBe(1)
+})
+
 // Config export/import over HTTP: export redacts creds (unless ?secrets=1); import validates + is
 // restart-required; a bad mode/body is 400. The merge/replace/redaction semantics are unit-tested in
 // config-io.test.ts — this covers the wire contract.

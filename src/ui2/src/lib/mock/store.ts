@@ -198,7 +198,6 @@ interface OscState {
   setConfig: (patch: Partial<Config>) => void;
   finishOnboarding: () => void;
   resetAll: () => void;
-  importSnapshot: (json: string) => boolean;
 
   oneShotAmps: (chargerId: string, amps: number | null) => void;
 
@@ -530,16 +529,6 @@ export const useOsc = create<OscState>()((set, get) => ({
 
   resetAll: () => {
     set(seed());
-  },
-
-  importSnapshot: (json) => {
-    try {
-      const parsed = JSON.parse(json);
-      set(parsed);
-      return true;
-    } catch {
-      return false;
-    }
   },
 
   oneShotAmps: (chargerId, amps) =>

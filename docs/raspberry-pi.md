@@ -72,6 +72,8 @@ Then restart: `sudo systemctl restart systemd-timesyncd`.
 
 ## Running OSC as a systemd service
 
+> **Quickest path — the installer:** `curl -fsSL https://raw.githubusercontent.com/carlhannes/OpenSmartCharge/main/setup.sh | bash` does everything in this section (installs Node + mosquitto + NTP, builds, and writes this exact systemd unit) idempotently, and re-running it upgrades in place without touching `osc.yaml` or `data/`. The manual steps below are the under-the-hood reference.
+
 The Pi is a good fit for a LAN deployment. Build once, then run the **compiled** entry point as a single
 process — `node` receives `SIGTERM` directly, so the graceful shutdown handler runs on every
 `systemctl stop`/`restart`: it stops the control loop, closes the OCPP/HTTP/MQTT connections, and
@@ -79,9 +81,9 @@ process — `node` receives `SIGTERM` directly, so the graceful shutdown handler
 step stalls (so a restart never hangs).
 
 ```bash
-cd ~/OpenSmartCharge
+cd /opt/opensmartcharge   # run these as your service user (e.g. `osc`)
 npm ci
-npm run build            # produces dist/ (tsc + vite build)
+npm run build            # produces dist/ (backend) + dist/ui (ui2 static SPA)
 ```
 
 `/etc/systemd/system/osc.service`:
@@ -94,13 +96,24 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/OpenSmartCharge
+User=osc
+Group=osc
+WorkingDirectory=/opt/opensmartcharge
 ExecStart=/usr/bin/node dist/core/lifecycle.js
-Restart=on-failure
+# Restart on any exit (not just failures) so a UI-triggered restart (POST /api/system/restart, a clean
+# exit) is also brought back. systemd's default StartLimitBurst still bounds a crash loop.
+Restart=always
+RestartSec=2
 # Give the graceful handler room to drain + checkpoint the WAL. Its own watchdog exits at ~8 s;
 # keep this comfortably above that so systemd never SIGKILLs mid-checkpoint.
 TimeoutStopSec=20
+Environment=NODE_ENV=production
+# Sandbox: OSC only writes its SQLite data dir at runtime; networking (OCPP/MQTT/tariffs) is unaffected.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/opensmartcharge/data
+ProtectHome=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
