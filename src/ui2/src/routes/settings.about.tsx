@@ -7,6 +7,7 @@ export const Route = createFileRoute("/settings/about")({ component: AboutSettin
 function AboutSettings() {
   const reset = useOsc((s) => s.resetAll);
   const setConfig = useOsc((s) => s.setConfig);
+  const homeName = useOsc((s) => s.config.homeName);
   const nav = useNavigate();
   const [arming, setArming] = useState(false);
   const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -34,6 +35,12 @@ function AboutSettings() {
           Lean, modular EV smart-charging. OCPP 1.6J on your LAN, day-ahead pricing, house load
           balancing, and a ready-when-you-leave promise.
         </p>
+        {homeName && homeName !== "OpenSmartCharge" && (
+          <p className="mt-3 text-sm text-muted-foreground">
+            This installation: <span className="font-medium text-foreground">{homeName}</span>{" "}
+            <span className="text-xs">(edit in Settings → House)</span>
+          </p>
+        )}
       </div>
 
       <button

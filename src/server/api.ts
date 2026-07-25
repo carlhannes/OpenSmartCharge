@@ -707,12 +707,23 @@ export function createApiRouter(deps: ApiDeps): Router {
       res.status(400).json({ error: `unknown vehicle type "${type}"` })
       return
     }
-    const parsed = collectVehicleFields(module, req.body as Record<string, unknown>, { edit: true })
+    const body = req.body as Record<string, unknown>
+    const parsed = collectVehicleFields(module, body, { edit: true })
     if (!parsed.ok) {
       res.status(400).json({ error: parsed.error })
       return
     }
-    setOverride(deps.db, 'vehicle', name, { type, ...parsed.fields })
+    const patch: Record<string, unknown> = { type, ...parsed.fields }
+    // `label` is a universal cosmetic display name (like a charger's), NOT a module config field. A
+    // blank/absent one leaves the stored value untouched (setOverride merges). Trimmed, stored as-is.
+    if (body.label !== undefined) {
+      if (typeof body.label !== 'string') {
+        res.status(400).json({ error: 'label must be a string' })
+        return
+      }
+      patch.label = body.label.trim()
+    }
+    setOverride(deps.db, 'vehicle', name, patch)
     await deps.reconcile.reloadVehicle(name)
     if (module.capabilities.soc)
       void deps.vehicles
@@ -1338,6 +1349,8 @@ export function createApiRouter(deps: ApiDeps): Router {
         const caps = deps.vehicles.get(v.name)?.capabilities
         return {
           name: v.name,
+          // Cosmetic display label (falls back to the immutable name) — mirrors the charger DTO.
+          label: (v as { label?: string }).label ?? v.name,
           type: v.type,
           vin: (v as { vin?: string }).vin,
           // Capabilities from the live module instance (drives the UI's target-unit + auto/manual logic).

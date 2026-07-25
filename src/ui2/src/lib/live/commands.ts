@@ -158,6 +158,14 @@ export async function updateVehicle(id: string, fields: Record<string, string>):
   useOsc.getState().updateVehicle(id, patch);
 }
 
+/** Vehicle display label (rename): optimistic store update of the display `name`; PUT /api/vehicles/:name
+ *  {label} when live (config.changed → rehydrateSite reconciles). Mirrors renameCharger — `id` (the
+ *  vehicle name) stays the immutable key; only the cosmetic label changes. */
+export async function renameVehicle(id: string, label: string): Promise<void> {
+  useOsc.getState().updateVehicle(id, { name: label });
+  if (isLive()) await api.updateVehicle(id, { label });
+}
+
 /** Remove a vehicle. Live: DELETE (config.changed → rehydrateSite drops it); demo: store remove. */
 export async function removeVehicle(id: string): Promise<void> {
   if (isLive()) {
@@ -191,6 +199,12 @@ export async function setRegion(zone: string): Promise<void> {
 export async function setBreaker(amps: number): Promise<void> {
   useOsc.getState().setConfig({ breakerAmps: amps });
   if (isLive()) await api.setSiteBreaker(amps);
+}
+
+/** Home / installation name (site-level): optimistic local; PUT /api/site {name} when live. */
+export async function setSiteName(name: string): Promise<void> {
+  useOsc.getState().setConfig({ homeName: name });
+  if (isLive()) await api.setSiteName(name);
 }
 
 /** Static-fallback margins (the safe limit used when there's no live meter): optimistic local +

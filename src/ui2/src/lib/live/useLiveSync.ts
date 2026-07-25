@@ -82,6 +82,7 @@ async function rehydrateSite(
     const siteBreaker = site.site.mainBreakerA ?? site.balancers[0]?.mainBreakerA;
     const sitePhases = site.balancers[0]?.phases; // only a balancer exposes phases; else default 3
     useOsc.getState().setConfig({
+      ...(site.site.name ? { homeName: site.site.name } : {}),
       ...(zone ? { region: zone } : {}),
       ...(tariffName ? { tariffName } : {}),
       ...(siteBreaker != null ? { breakerAmps: siteBreaker } : {}),

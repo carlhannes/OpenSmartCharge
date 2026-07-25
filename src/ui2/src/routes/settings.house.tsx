@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useOsc } from "@/lib/mock/store";
-import { setBreaker, setSmartCharging } from "@/lib/live/commands";
+import { setBreaker, setSiteName, setSmartCharging } from "@/lib/live/commands";
 import { fmtKW } from "@/lib/format";
 
 export const Route = createFileRoute("/settings/house")({ component: HouseSettings });
@@ -27,6 +27,24 @@ function HouseSettings() {
 
   return (
     <div className="space-y-4">
+      {/* Home / installation name */}
+      <div className="rounded-2xl border border-border/60 bg-card p-4">
+        <label className="mb-1 block text-xs uppercase tracking-widest text-muted-foreground">
+          Home name
+        </label>
+        <input
+          type="text"
+          value={config.homeName ?? ""}
+          placeholder="OpenSmartCharge"
+          onChange={(e) => setConfig({ homeName: e.target.value })}
+          onBlur={(e) => void setSiteName(e.target.value.trim() || "OpenSmartCharge")}
+          className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+        />
+        <p className="mt-2 text-xs text-muted-foreground">
+          A friendly name for this installation — shows in config backups and Home Assistant.
+        </p>
+      </div>
+
       {/* Main breaker / circuit ceiling */}
       <div className="rounded-2xl border border-border/60 bg-card p-4">
         <label className="mb-1 block text-xs uppercase tracking-widest text-muted-foreground">

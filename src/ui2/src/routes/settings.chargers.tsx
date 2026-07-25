@@ -18,8 +18,11 @@ function ChargersSettings() {
   const pending = useOsc((s) => s.pendingChargers);
   const emit = useOsc((s) => s.emitPending);
   const claim = useOsc((s) => s.claimPending);
-  // Live backend → chargers are configured in osc.yaml (no write API); name/amps are read-only and
-  // the mock "pending"/remove affordances are hidden. Demo mode keeps everything interactive.
+  // Live backend: rename + max-amps ARE editable (PUT /api/chargers/:name, wired below). Only the
+  // destructive REMOVE and the pending-claim wizard are hidden in live for now — deleting a charger is
+  // a real config mutation (DELETE /api/chargers/:name exists, 409s mid-session) and claiming lives in
+  // onboarding ("Add another charger" below). Wiring both here is a roadmap item. Demo stays fully
+  // interactive.
   const locked = useOsc((s) => s.source === "live");
 
   const [undo, setUndo] = useState<{ charger: Charger; plans: Plan[] } | null>(null);

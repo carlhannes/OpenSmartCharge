@@ -147,6 +147,9 @@ export interface PendingCharger {
 export interface Config {
   isConfigured: boolean;
   onboardingStep: number;
+  // Home / installation display name (site.name; shows in backups + Home Assistant). Editable in
+  // Settings → House via setSiteName → PUT /api/site {name}.
+  homeName?: string;
   region: string;
   breakerAmps: number;
   phases: number; // supply phases — sets the max-kW axis on the Home power chart; default 3

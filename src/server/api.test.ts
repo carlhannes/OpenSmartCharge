@@ -797,6 +797,18 @@ test('PUT /vehicles/:name: blank secret kept, changed field reloads live, name/t
         password: 'secret3',
         vin,
       })
+      // Edit: a cosmetic display `label` (NOT a module field) persists; a later creds-only edit keeps
+      // it (merge); GET /api/site exposes it (falling back to the name when unset).
+      await putJson(`${baseUrl}/api/vehicles/ev`, { label: 'Family car' })
+      expect((getOverride(db, 'vehicle', 'ev') as { label?: string }).label).toBe('Family car')
+      await putJson(`${baseUrl}/api/vehicles/ev`, { password: 'secret4' })
+      expect((getOverride(db, 'vehicle', 'ev') as { label?: string }).label).toBe('Family car')
+      const site = (await (await fetch(`${baseUrl}/api/site`)).json()) as {
+        vehicles: { name: string; label: string }[]
+      }
+      expect(site.vehicles.find((v) => v.name === 'ev')?.label).toBe('Family car')
+      // A non-string label → 400.
+      expect((await putJson(`${baseUrl}/api/vehicles/ev`, { label: 42 })).status).toBe(400)
       // Bad patch (invalid VIN) → 400.
       expect(
         (await putJson(`${baseUrl}/api/vehicles/ev`, { username: 'u2', vin: 'short' })).status,

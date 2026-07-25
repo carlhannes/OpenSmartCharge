@@ -209,6 +209,7 @@ export interface SiteTariffDto {
 }
 export interface SiteVehicleDto {
   name: string;
+  label?: string; // cosmetic display name (falls back to `name`); rename via PUT /api/vehicles/:name
   type: string;
   vin?: string;
   capabilities?: VehicleCapabilitiesDto;
@@ -323,6 +324,9 @@ export const setSettings = (s: SettingsDto) =>
 // Runtime config writes — persist to config_overrides (DB-wins, no restart); each emits config.changed.
 export const setSiteBreaker = (mainBreakerA: number) =>
   apiFetch<unknown>("/api/site", jsonBody("PUT", { mainBreakerA }));
+// Home / installation display name (the site name; shows in backups + Home Assistant discovery).
+export const setSiteName = (name: string) =>
+  apiFetch<unknown>("/api/site", jsonBody("PUT", { name }));
 // Static-fallback margins — applied live via PUT /api/smartcharging.
 export const updateSmartCharging = (patch: {
   nightMarginA?: number;

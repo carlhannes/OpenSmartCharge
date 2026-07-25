@@ -136,7 +136,8 @@ export function mapVehicle(name: string, dto: VehicleStateDto, site?: SiteVehicl
   const d = dto.data;
   return {
     id: name,
-    name,
+    // Display name = the vehicle's cosmetic label (falls back to the immutable name); id stays the key.
+    name: site?.label ?? name,
     brand: "", // no brand field on the API
     // Module type + vin from the site topology (for the edit form); type falls back to 'manual'
     // (no config fields) if the site DTO is unavailable.
