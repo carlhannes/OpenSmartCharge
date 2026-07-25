@@ -270,3 +270,13 @@ export async function restartSystem(): Promise<{ ok: boolean; supervised: boolea
   if (!isLive()) return { ok: true, supervised: false };
   return api.restartSystem();
 }
+
+/** DESTRUCTIVE factory reset. Live: POST /api/system/reset (backend wipes ALL data + restarts) →
+ *  returns { supervised } like restartSystem. Demo: reset the mock store back to its seed (no backend). */
+export async function resetSystem(): Promise<{ ok: boolean; supervised: boolean }> {
+  if (!isLive()) {
+    useOsc.getState().resetAll();
+    return { ok: true, supervised: false };
+  }
+  return api.resetSystem();
+}

@@ -374,6 +374,10 @@ export const importConfig = (config: string, mode: "merge" | "replace", dryRun =
 // Graceful process restart. `supervised` = a process manager (systemd/docker) will bring OSC back up.
 export const restartSystem = () =>
   apiFetch<{ ok: boolean; supervised: boolean }>("/api/system/restart", { method: "POST" });
+// DESTRUCTIVE factory reset: wipes ALL backend data (config, plans, sessions, history) then restarts.
+// On reboot the DB is fresh, so osc.yaml (if present) re-materializes. Same `supervised` caveat.
+export const resetSystem = () =>
+  apiFetch<{ ok: boolean; supervised: boolean }>("/api/system/reset", { method: "POST" });
 
 export const getHealth = () => apiFetch<Record<string, ModuleHealth>>("/api/health");
 export const getSite = () => apiFetch<SiteDto>("/api/site");
