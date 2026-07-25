@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useOsc, startTick, type Charger, type Vehicle } from "@/lib/mock/store";
+import { useOsc, startTick, type Charger, type Vehicle, type ModuleType } from "@/lib/mock/store";
 import * as api from "@/lib/api/rest";
 import { ensureConnected, subscribe } from "@/lib/api/sse";
 import {
@@ -82,16 +82,40 @@ async function rehydrateSite(
     const siteBreaker = site.site.mainBreakerA ?? site.balancers[0]?.mainBreakerA;
     const sitePhases = site.balancers[0]?.phases; // only a balancer exposes phases; else default 3
     useOsc.getState().setConfig({
+      ...(site.site.name ? { homeName: site.site.name } : {}),
       ...(zone ? { region: zone } : {}),
       ...(tariffName ? { tariffName } : {}),
       ...(siteBreaker != null ? { breakerAmps: siteBreaker } : {}),
       ...(sitePhases != null ? { phases: sitePhases } : {}),
-      // No dynamic balancer configured → the main breaker is a static safe limit.
-      ...(site.balancers.length === 0 && siteBreaker != null
-        ? { balancerMode: "static" as const, staticLimitA: siteBreaker }
+      // Meter source reflects the actual reader type — NOT "static" just because there's no balancer.
+      balancerMode:
+        site.meterReaders[0]?.type === "tibber-pulse"
+          ? ("tibber" as const)
+          : site.meterReaders[0]?.type === "mqtt-phase"
+            ? ("mqtt" as const)
+            : ("static" as const),
+      // A static safe limit only when there's genuinely no meter reader at all.
+      ...(site.meterReaders.length === 0 && siteBreaker != null
+        ? { staticLimitA: siteBreaker }
+        : {}),
+      // Static-fallback margins (the "safe limit when no live meter" knobs) for the House page.
+      ...(site.smartCharging
+        ? {
+            nightMarginA: site.smartCharging.nightMarginA,
+            daytimeFraction: site.smartCharging.daytimeFraction,
+            reserveA: site.smartCharging.reserveA,
+          }
         : {}),
     });
     useOsc.getState().setMeterName(site.meterReaders[0]?.name ?? null);
+    // Health-key → category (from /api/site) so the System status page can label each module by type.
+    const categories: Record<string, ModuleType> = {};
+    for (const c of site.chargers) categories[c.name] = "charger";
+    for (const t of site.tariffs) categories[t.name] = "tariff";
+    for (const b of site.balancers) categories[b.name] = "balancer";
+    for (const v of site.vehicles) categories[v.name] = "vehicle";
+    for (const m of site.meterReaders) categories[m.name] = "meter";
+    useOsc.getState().setModuleCategories(categories);
     // Vehicles (name + capabilities + live reading) — mapped here so add/remove (config.changed)
     // reflects without a reload. getVehicle tolerates a manual car (data: null) → mapVehicle degrades.
     const vehicles = (
@@ -166,7 +190,9 @@ export function useLiveSync() {
       }
 
       try {
-        store.hydrate({ moduleHealth: mapHealth(await api.getHealth()) });
+        store.hydrate({
+          moduleHealth: mapHealth(await api.getHealth(), useOsc.getState().moduleCategories),
+        });
       } catch {
         /* health optional */
       }
@@ -268,6 +294,18 @@ export function useLiveSync() {
             drawingA: e.currentA ?? 0,
             currentPowerW: e.powerW ?? Math.round(e.currentA * 230), // backend 3-phase power, not single-phase
             sessionKwh: e.deliveredKWh ?? e.sessionEnergyKWh,
+          });
+        }),
+        // The control-loop's "why" (which current rung is in effect) — change-guarded by the backend.
+        subscribe("loadpoint.resolve", (d) => {
+          const e = d as {
+            name: string;
+            shouldChargeNow?: boolean;
+            budgetA: number;
+            sources: { energy: string; price: string; current: string };
+          };
+          useOsc.getState().patchCharger(e.name, {
+            resolve: { shouldChargeNow: e.shouldChargeNow, budgetA: e.budgetA, sources: e.sources },
           });
         }),
         subscribe("loadpoint.mode", (d) => {
@@ -376,7 +414,11 @@ export function useLiveSync() {
       healthTimer = setInterval(() => {
         api
           .getHealth()
-          .then((h) => useOsc.getState().hydrate({ moduleHealth: mapHealth(h) }))
+          .then((h) =>
+            useOsc
+              .getState()
+              .hydrate({ moduleHealth: mapHealth(h, useOsc.getState().moduleCategories) }),
+          )
           .catch(() => {});
       }, HEALTH_POLL_MS);
     })();

@@ -31,6 +31,8 @@ function SystemSettings() {
   const [withSecrets, setWithSecrets] = useState(false);
   const [importText, setImportText] = useState("");
   const [importPreview, setImportPreview] = useState<string[] | null>(null);
+  // Import MERGES by default (safe — adds/overlays, never wipes). Opt-in "replace" clears existing config first.
+  const [replaceMode, setReplaceMode] = useState(false);
   const [restartPhase, setRestartPhase] = useState<"idle" | "confirm" | "restarting" | "timeout">(
     "idle",
   );
@@ -75,7 +77,7 @@ function SystemSettings() {
   };
 
   // Import: read the file, dry-run to preview the sections (or surface a validation error), then the
-  // user confirms → real import (replace) → restart to apply.
+  // user confirms → real import (merge by default; replace only if opted in) → restart to apply.
   const onImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     e.target.value = "";
@@ -85,7 +87,7 @@ function SystemSettings() {
     const text = await f.text();
     setImportText(text);
     try {
-      const r = await importBackup(text, "replace", true);
+      const r = await importBackup(text, replaceMode ? "replace" : "merge", true);
       setImportPreview(r.sections);
       setStatus({ state: "idle", msg: "" });
     } catch (err) {
@@ -96,13 +98,13 @@ function SystemSettings() {
   const confirmImport = async () => {
     setStatus({ state: "loading", msg: "Importing…" });
     try {
-      await importBackup(importText, "replace", false);
+      await importBackup(importText, replaceMode ? "replace" : "merge", false);
     } catch (err) {
       setStatus({ state: "error", msg: (err as Error).message });
       return;
     }
     setImportPreview(null);
-    await doRestart(); // replace applies on restart
+    await doRestart(); // applies on restart
   };
 
   const doRestart = async () => {
@@ -150,8 +152,15 @@ function SystemSettings() {
           >
             <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${tone[m.status]}`} />
             <div className="min-w-0">
-              <div className="font-medium">{m.name}</div>
-              <div className="text-xs text-muted-foreground">{m.message}</div>
+              <div className="flex items-center gap-2">
+                <div className="font-medium">{m.name}</div>
+                {m.type && (
+                  <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    {m.type}
+                  </span>
+                )}
+              </div>
+              {m.message && <div className="text-xs text-muted-foreground">{m.message}</div>}
             </div>
           </div>
         ))}
@@ -162,7 +171,8 @@ function SystemSettings() {
         <div className="mb-2 font-medium">Backup &amp; restore</div>
         <p className="mb-3 text-xs text-muted-foreground">
           Download your configuration as an <code>osc.yaml</code> file, or restore one. Restoring{" "}
-          <span className="font-medium">replaces</span> the current config and applies on restart.
+          <span className="font-medium">merges</span> into the current config (applied on restart) —
+          tick Replace below to wipe it first instead.
         </p>
         <label className="mb-3 flex items-start gap-2 text-xs text-muted-foreground">
           <input
@@ -197,6 +207,18 @@ function SystemSettings() {
             onChange={(e) => void onImportFile(e)}
           />
         </div>
+        <label className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={replaceMode}
+            onChange={(e) => setReplaceMode(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Replace instead of merge — <span className="font-medium">wipes</span> the current config
+            first. Leave off to merge (adds/overlays, keeping anything not in the file).
+          </span>
+        </label>
         {importPreview && (
           <div className="mt-3 rounded-lg bg-secondary/60 p-3 text-xs">
             <div className="mb-2">Ready to import: {importPreview.join(", ")}.</div>

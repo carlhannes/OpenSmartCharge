@@ -216,7 +216,7 @@ function ImportPanel() {
     setPreview(null);
     setPhase("checking");
     try {
-      const r = await importBackup(text, "replace", true);
+      const r = await importBackup(text, "merge", true);
       setPreview(r.sections);
     } catch (e) {
       setErr((e as Error).message);
@@ -229,7 +229,7 @@ function ImportPanel() {
     setErr(null);
     setPhase("importing");
     try {
-      await importBackup(text, "replace", false);
+      await importBackup(text, "merge", false);
     } catch (e) {
       setErr((e as Error).message);
       setPhase("idle");

@@ -43,6 +43,11 @@ let plans = [
 let nextPlanId = 2
 let settings = { timezone: 'Europe/Stockholm' }
 let siteBreaker = 25 // site-level main breaker (A) — PUT /api/site
+let siteName = 'Mock Home' // home / installation name — PUT /api/site { name }
+// Static-fallback margins (used when no live meter): night cap = breaker − nightMarginA, day cap =
+// breaker × daytimeFraction; reserveA is headroom off the top. Read on GET /api/site.smartCharging,
+// edited via PUT /api/smartcharging.
+let smartCharging = { nightMarginA: 3, daytimeFraction: 0.5, reserveA: 1 }
 let logRetentionDays = 3 // days of logs kept before rotation — GET/PUT /api/logs/config
 let tariffZone = 'SE3' // primary tariff zone — PUT /api/tariffs/:name
 let chargerLabel = 'garage' // charger display label — PUT /api/chargers/:name { label }
@@ -282,16 +287,18 @@ setInterval(() => {
 }, 30000)
 
 // Module health — mutable so the flap below exercises the live `health.changed` SSE path (Phase 4:
-// honest banner + live status). "balancer:house" stays degraded (a peripheral) so the dashboard
-// shows the "charging continues" banner by default; "garage" (the charger link) flaps ok↔degraded
-// every 10 s + emits `health.changed`, so the honest banner switches to "not charging" and the
-// status page updates within ~1 s (via SSE) rather than waiting for the client's 15 s poll.
+// honest banner + live status). Keys are the PLAIN module names (mirroring the real backend, which
+// keys health by module name) so they match the /api/site name-sets and the status page can label
+// each row by type. "house" (the balancer) stays degraded (a peripheral) so the dashboard shows the
+// "charging continues" banner by default; "garage" (the charger link) flaps ok↔degraded every 10 s +
+// emits `health.changed`, so the honest banner switches to "not charging" and the status page updates
+// within ~1 s (via SSE) rather than waiting for the client's 15 s poll.
 const health = {
-  garage: 'ok',
-  tariff: 'ok',
-  'balancer:house': 'degraded',
-  'vehicle:enyaq': 'ok',
-  mqtt: 'ok',
+  garage: 'ok', // charger
+  home: 'ok', // tariff
+  house: 'degraded', // balancer
+  enyaq: 'ok', // vehicle
+  pulse: 'ok', // meter reader
 }
 setInterval(() => {
   health.garage = health.garage === 'ok' ? 'degraded' : 'ok'
@@ -380,7 +387,18 @@ const server = http.createServer((req, res) => {
   if (p === '/api/site' && req.method === 'PUT') {
     readBody((b) => {
       if (b.mainBreakerA != null) siteBreaker = b.mainBreakerA
+      if (b.name != null) siteName = String(b.name)
       emit('config.changed', { kind: 'site', name: 'site' })
+      send(res, { ok: true })
+    })
+    return
+  }
+  if (p === '/api/smartcharging' && req.method === 'PUT') {
+    readBody((b) => {
+      if (b.nightMarginA != null) smartCharging.nightMarginA = b.nightMarginA
+      if (b.daytimeFraction != null) smartCharging.daytimeFraction = b.daytimeFraction
+      if (b.reserveA != null) smartCharging.reserveA = b.reserveA
+      emit('config.changed', { kind: 'smartCharging', name: 'smartCharging' })
       send(res, { ok: true })
     })
     return
@@ -455,6 +473,22 @@ const server = http.createServer((req, res) => {
   // Graceful restart — the mock is unsupervised, so supervised:false (exercises the UI warning path).
   if (p === '/api/system/restart' && req.method === 'POST')
     return send(res, { ok: true, supervised: false })
+
+  // DESTRUCTIVE reset — the real backend wipes the DB then re-materializes osc.yaml on reboot; the mock
+  // has no DB, so it resets its in-memory topology back to seed (the mock's osc.yaml-equivalent). It
+  // keeps serving, so supervised:true → the UI's waitForHealthy() returns immediately and reloads.
+  if (p === '/api/system/reset' && req.method === 'POST') {
+    siteVehicles = [{ name: 'enyaq', type: 'skoda', vin: 'MOCKVIN0000000001' }]
+    plans = []
+    claimedChargers.length = 0
+    chargerLabel = 'garage'
+    siteBreaker = 25
+    siteName = 'Mock Home'
+    tariffZone = 'SE3'
+    smartCharging = { nightMarginA: 3, daytimeFraction: 0.5, reserveA: 1 }
+    emit('config.changed', { kind: 'site', name: 'site' })
+    return send(res, { ok: true, supervised: true })
+  }
 
   // Plans: /api/loadpoints/:name/plans[/:id]
   const planMatch = p.match(/^\/api\/loadpoints\/([^/]+)\/plans(?:\/([^/]+))?$/)
@@ -560,6 +594,11 @@ const server = http.createServer((req, res) => {
         if (val && f.pattern && !new RegExp(f.pattern).test(val))
           return send(res, { error: `${f.label} is invalid` }, 400)
         if (val && f.key === 'vin') v.vin = val
+      }
+      // Cosmetic display label (a non-module field) — mirrors the real backend.
+      if (b.label != null) {
+        if (typeof b.label !== 'string') return send(res, { error: 'label must be a string' }, 400)
+        v.label = b.label.trim()
       }
       emit('config.changed', { kind: 'vehicle', name })
       return send(res, { name, type: v.type })
@@ -673,11 +712,12 @@ const server = http.createServer((req, res) => {
   if (p === '/api/site')
     return send(res, {
       site: {
-        name: 'Mock Home',
+        name: siteName,
         port: PORT,
         mainBreakerA: siteBreaker,
         timezone: settings.timezone,
       },
+      smartCharging,
       loadpoints: [
         {
           name: 'garage',
@@ -716,7 +756,7 @@ const server = http.createServer((req, res) => {
       ],
       balancers: [{ name: 'house', type: 'mqtt-circuit', mainBreakerA: siteBreaker, phases: 3 }],
       tariffs: [{ name: 'home', type: 'nordpool', zone: tariffZone }],
-      vehicles: siteVehicles,
+      vehicles: siteVehicles.map((v) => ({ ...v, label: v.label ?? v.name })),
       meterReaders: [{ name: 'pulse', type: 'tibber-pulse' }],
     })
   if (vehItem && req.method === 'GET') {

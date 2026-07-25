@@ -55,11 +55,12 @@ remove + re-add; not wired as a single call.
   (skoda: `username, password, vin`; manual: none), validated generically from the descriptor. Returns
   `{ name, type }` (201) immediately; a telemetry vehicle's auth + first fetch run in the background
   (poll `GET /api/vehicles/:name`). Credentials are stored server-side and **never returned or logged**;
-  `GET /api/site` stays whitelisted to `{ name, type, vin, capabilities, targetUnits }`.
-- `PUT /api/vehicles/:name { ...fields }` — edit credentials/config. Name + type are the entity key and
-  are **immutable** (rename = delete + re-add). A **blank field keeps** the stored value (setOverride
-  merges), so the form pre-fills what it knows (e.g. `vin`) and leaves write-only creds blank to keep
-  them. Rebuilt live via reconcile (`reloadVehicle`); returns `{ name, type }`. Never echoes creds.
+  `GET /api/site` stays whitelisted to `{ name, label, type, vin, capabilities, targetUnits }`.
+- `PUT /api/vehicles/:name { ...fields, label? }` — edit credentials/config. Name + type are the entity
+  key and are **immutable**; a cosmetic **`label`** (mirroring chargers) is the user-facing rename and
+  falls back to `name` when unset. A **blank field keeps** the stored value (setOverride merges), so the
+  form pre-fills what it knows (e.g. `vin`) and leaves write-only creds blank to keep them. Rebuilt live
+  via reconcile (`reloadVehicle`); returns `{ name, type }`. Never echoes creds.
 - `DELETE /api/vehicles/:name` — teardown + drops `vehicle_cache`; a bound loadpoint degrades to no-SoC.
 - `POST /api/vehicles/:name/refresh` — forces a live poll now → `{name, health, data, capacityKWh}` (same
   shape as the GET). Hits the real vehicle API — wire it to an explicit "refresh" affordance, not a
@@ -138,3 +139,17 @@ local + `if (isLive()) await api.…`), drop the `disabled`/`ConfigLockNote` gat
 back to `name` when unset — so a rename displays and reconciles without flashing. The charger `name`
 stays the immutable key. Everything else on this list is wired (Phase 1: region + breaker + charger
 maxA; the rest queued behind their flows).
+
+## v0.2.2 additions (found running v0.2.1 on the VM) ✅
+
+- **Vehicle display `label`** — the car equivalent of the charger `label`. `PUT /api/vehicles/:name`
+  now accepts `label`; `GET /api/site.vehicles[]` returns it (falls back to `name`). The internal
+  `name` stays the immutable identity key; ui2 shows `label ?? name` and matches by id everywhere.
+- **`POST /api/system/reset`** — a real factory reset (the old ui2 "Reset all data" was client-only).
+  Wipes every DB table in one transaction (config overrides, settings, plans, sessions, meter history,
+  caches — enumerated from `sqlite_master`, so it never drifts) then self-restarts via the same path
+  as `/system/restart`. On reboot the fresh DB re-runs `materializeConfigOnce`: re-imports `osc.yaml`
+  if present (→ deployed base config) or stays blank (→ onboarding). Returns `{ ok, supervised }`.
+- Static-fallback margins were already exposed (`GET /api/site.smartCharging`) and editable
+  (`PUT /api/smartcharging`); v0.2.2 just wires Settings → House to them, and single-sources the app
+  version from `package.json`.

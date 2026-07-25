@@ -32,6 +32,20 @@ interface Props {
 
 const MODE_ICONS = { off: Power, smart: Sparkles, fast: Zap };
 
+// The control loop's current-limit rung, in plain language — the "why" behind a reduced amp cap.
+function resolveLabel(current: string): string {
+  switch (current) {
+    case "live-meter":
+      return "Balancing on your live house meter";
+    case "historical-worstcase":
+      return "Using historical worst-case house load";
+    case "static-tod":
+      return "No live meter — safe static limit (time-of-day)";
+    default:
+      return `Current source: ${current}`;
+  }
+}
+
 export function ChargerDetail({ charger, onClose }: Props) {
   const vehicles = useOsc((s) => s.vehicles);
   const allPlans = useOsc((s) => s.plans);
@@ -129,6 +143,28 @@ export function ChargerDetail({ charger, onClose }: Props) {
           </div>
 
           <Timeline24h chargerId={charger.id} />
+
+          {/* Load-balancing "why": which current-limit rung the control loop is on right now. */}
+          {charger.resolve && (
+            <div className="mt-5 flex items-start gap-2 rounded-2xl border border-border/60 bg-card px-4 py-3">
+              <span
+                className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                  charger.resolve.sources.current === "live-meter"
+                    ? "bg-status-ok"
+                    : "bg-status-warn"
+                }`}
+              />
+              <div className="min-w-0">
+                <div className="text-sm font-medium">
+                  {resolveLabel(charger.resolve.sources.current)}
+                </div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  Circuit budget {Math.round(charger.resolve.budgetA)} A · price{" "}
+                  {charger.resolve.sources.price} · energy {charger.resolve.sources.energy}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Vehicle — Auto (identify) · Guest · each configured car. Highlights the sticky pick. */}
           <div className="mt-5 rounded-2xl border border-border/60 bg-card p-4">

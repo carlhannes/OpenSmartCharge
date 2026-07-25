@@ -89,6 +89,8 @@ export function mapLoadpoint(lp: LoadpointStateDto, site?: SiteDto): Charger {
     availableTargetUnits: lp.availableTargetUnits ?? ["pct", "km", "kwh"],
     // Per-loadpoint config from the site topology (survives SSE patches, like boundVehicleId).
     autoRevertToSmart: siteLp?.autoRevertToSmart ?? true,
+    // The control loop's latest "why" (which current rung is in effect etc.); null until first tick.
+    resolve: lp.resolve ?? null,
   };
 }
 
@@ -134,7 +136,8 @@ export function mapVehicle(name: string, dto: VehicleStateDto, site?: SiteVehicl
   const d = dto.data;
   return {
     id: name,
-    name,
+    // Display name = the vehicle's cosmetic label (falls back to the immutable name); id stays the key.
+    name: site?.label ?? name,
     brand: "", // no brand field on the API
     // Module type + vin from the site topology (for the edit form); type falls back to 'manual'
     // (no config fields) if the site DTO is unavailable.
@@ -163,10 +166,19 @@ export function mapMeterWatts(
   return phases.length ? Math.round(phases.reduce((a, b) => a + b, 0) * VOLTAGE) : null;
 }
 
-export function mapHealth(rec: Record<string, ModuleHealth>): StoreHealth[] {
+export function mapHealth(
+  rec: Record<string, ModuleHealth>,
+  categories?: Record<string, StoreHealth["type"]>,
+): StoreHealth[] {
   const toStatus = (h: ModuleHealth): StoreHealth["status"] =>
     h === "ok" ? "ok" : h === "degraded" ? "warn" : "bad";
-  return Object.entries(rec).map(([id, h]) => ({ id, name: id, status: toStatus(h), message: "" }));
+  return Object.entries(rec).map(([id, h]) => ({
+    id,
+    name: id,
+    status: toStatus(h),
+    message: "",
+    type: categories?.[id],
+  }));
 }
 
 /** Bucket tariff slots into the 24-hour-of-day number[] the Timeline consumes; fill gaps with the mean. */

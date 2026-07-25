@@ -209,6 +209,7 @@ export interface SiteTariffDto {
 }
 export interface SiteVehicleDto {
   name: string;
+  label?: string; // cosmetic display name (falls back to `name`); rename via PUT /api/vehicles/:name
   type: string;
   vin?: string;
   capabilities?: VehicleCapabilitiesDto;
@@ -220,6 +221,9 @@ export interface SiteMeterDto {
 }
 export interface SiteDto {
   site: { name: string; port: number; mainBreakerA?: number };
+  // Static-fallback margins (used when there's no live meter): night cap = breaker − nightMarginA,
+  // day cap = breaker × daytimeFraction; reserveA is headroom kept off the top.
+  smartCharging?: { nightMarginA: number; daytimeFraction: number; reserveA: number };
   loadpoints: SiteLoadpointDto[];
   chargers: SiteChargerDto[];
   balancers: SiteBalancerDto[];
@@ -320,6 +324,15 @@ export const setSettings = (s: SettingsDto) =>
 // Runtime config writes — persist to config_overrides (DB-wins, no restart); each emits config.changed.
 export const setSiteBreaker = (mainBreakerA: number) =>
   apiFetch<unknown>("/api/site", jsonBody("PUT", { mainBreakerA }));
+// Home / installation display name (the site name; shows in backups + Home Assistant discovery).
+export const setSiteName = (name: string) =>
+  apiFetch<unknown>("/api/site", jsonBody("PUT", { name }));
+// Static-fallback margins — applied live via PUT /api/smartcharging.
+export const updateSmartCharging = (patch: {
+  nightMarginA?: number;
+  daytimeFraction?: number;
+  reserveA?: number;
+}) => apiFetch<unknown>("/api/smartcharging", jsonBody("PUT", patch));
 export const setTariffZone = (name: string, zone: string) =>
   apiFetch<unknown>(`/api/tariffs/${name}`, jsonBody("PUT", { zone }));
 export const updateChargerApi = (name: string, patch: { maxA?: number; label?: string }) =>
@@ -361,6 +374,10 @@ export const importConfig = (config: string, mode: "merge" | "replace", dryRun =
 // Graceful process restart. `supervised` = a process manager (systemd/docker) will bring OSC back up.
 export const restartSystem = () =>
   apiFetch<{ ok: boolean; supervised: boolean }>("/api/system/restart", { method: "POST" });
+// DESTRUCTIVE factory reset: wipes ALL backend data (config, plans, sessions, history) then restarts.
+// On reboot the DB is fresh, so osc.yaml (if present) re-materializes. Same `supervised` caveat.
+export const resetSystem = () =>
+  apiFetch<{ ok: boolean; supervised: boolean }>("/api/system/reset", { method: "POST" });
 
 export const getHealth = () => apiFetch<Record<string, ModuleHealth>>("/api/health");
 export const getSite = () => apiFetch<SiteDto>("/api/site");

@@ -97,6 +97,48 @@ test('POST /api/system/restart returns {ok, supervised} and calls requestRestart
   expect(restarts).toBe(1)
 })
 
+// POST /api/system/reset: wipes EVERY table (config, settings, plans, history) in one shot, then
+// restarts once. On the next boot a fresh DB re-materializes osc.yaml — not exercised here (no reboot).
+test('POST /api/system/reset clears all seeded tables and calls requestRestart once', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-reset-'))
+  const db = openDb(dir)
+  let restarts = 0
+  const count = (t: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n
+  try {
+    // Seed rows across three distinct tables (config layer, settings KV, runtime plans).
+    db.prepare("INSERT INTO config_overrides (kind, name, patch) VALUES ('site','site',?)").run(
+      '{"mainBreakerA":25}',
+    )
+    db.prepare("INSERT INTO settings (key, value) VALUES ('config.materialized','1')").run()
+    db.prepare(
+      "INSERT INTO charge_plans (loadpoint_name, days_mask, ready_by, target_value, target_unit) VALUES ('garage',31,'07:00',80,'pct')",
+    ).run()
+    expect(count('config_overrides')).toBe(1)
+
+    const deps = {
+      db,
+      requestRestart: () => {
+        restarts++
+      },
+    } as unknown as ApiDeps
+    await withApi(deps, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/system/reset`, { method: 'POST' })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { ok: boolean; supervised: boolean }
+      expect(body.ok).toBe(true)
+      expect(typeof body.supervised).toBe('boolean')
+    })
+    // Every seeded table is now empty (dynamic enumeration wiped them all).
+    expect(count('config_overrides')).toBe(0)
+    expect(count('settings')).toBe(0)
+    expect(count('charge_plans')).toBe(0)
+    expect(restarts).toBe(1)
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // Config export/import over HTTP: export redacts creds (unless ?secrets=1); import validates + is
 // restart-required; a bad mode/body is 400. The merge/replace/redaction semantics are unit-tested in
 // config-io.test.ts — this covers the wire contract.
@@ -797,6 +839,18 @@ test('PUT /vehicles/:name: blank secret kept, changed field reloads live, name/t
         password: 'secret3',
         vin,
       })
+      // Edit: a cosmetic display `label` (NOT a module field) persists; a later creds-only edit keeps
+      // it (merge); GET /api/site exposes it (falling back to the name when unset).
+      await putJson(`${baseUrl}/api/vehicles/ev`, { label: 'Family car' })
+      expect((getOverride(db, 'vehicle', 'ev') as { label?: string }).label).toBe('Family car')
+      await putJson(`${baseUrl}/api/vehicles/ev`, { password: 'secret4' })
+      expect((getOverride(db, 'vehicle', 'ev') as { label?: string }).label).toBe('Family car')
+      const site = (await (await fetch(`${baseUrl}/api/site`)).json()) as {
+        vehicles: { name: string; label: string }[]
+      }
+      expect(site.vehicles.find((v) => v.name === 'ev')?.label).toBe('Family car')
+      // A non-string label → 400.
+      expect((await putJson(`${baseUrl}/api/vehicles/ev`, { label: 42 })).status).toBe(400)
       // Bad patch (invalid VIN) → 400.
       expect(
         (await putJson(`${baseUrl}/api/vehicles/ev`, { username: 'u2', vin: 'short' })).status,

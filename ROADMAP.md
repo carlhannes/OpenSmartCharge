@@ -230,4 +230,16 @@ in `useLiveSync`, subscribe `loadpoint.plans` + `settings.changed`, setup timezo
 - [ ] Exclude `*.test.ts` + `mock-charger.ts` from the production build (they currently compile into `dist/` — harmless dead weight). Add to `tsconfig.json`/build config.
 - [ ] Unify the typed test **mock charger** (`src/modules/charger-ocpp16/mock-charger.ts`) with the `.mjs` sim (`scripts/lib/fake-charger.mjs`) to remove transport duplication.
 - [ ] `powerW` is on `ChargerStatus` but not surfaced on `LoadpointState`/UI — add a field + bridge if a power readout is wanted.
-- [ ] Surface each loadpoint's resolver `sources` (energy/price/current rung) on `/api/loadpoints/:name` for UI observability (currently debug-logged only).
+- [x] Surface each loadpoint's resolver `sources` (energy/price/current rung) for UI observability — **done in 0.2.2**: `loadpoint.resolve` SSE + `resolve` on the site/loadpoint DTO, shown as a plain-language "why" badge on the charger detail.
+- [ ] **Charger delete + pending-claim from Settings in live mode** (0.2.2 deferral). Charger rename + max-amps are live-editable; `DELETE /api/chargers/:name` (409s on an active session) and the pending-claim wizard exist but are only wired in *demo* on the Settings page. Deleting a charger is a destructive config mutation, and claiming a new one already lives in onboarding — so wire both into Settings → Chargers with a live-safe confirm (no optimistic undo, since a live delete isn't trivially reversible).
+
+### Charge-plan UX — future (found running v0.2.x on the VM, 2026-07-25; NOT in 0.2.2)
+
+- [ ] **No-plan default should charge-when-plugged.** The UI says "No plans — I'll just charge when plugged
+  in", but with no applicable plan for the active vehicle the loadpoint sits idle — the copy is misleading.
+  Desired behaviour: when no plan covers the active vehicle, smart mode charges unconditionally (fast-like)
+  so "plug in → it charges" actually holds. Control-loop change (no-plan → charge) + make the copy honest.
+- [ ] **Auto-create a sensible default charge plan when a vehicle is added** (e.g. weekdays, ready-by 07:00,
+  80%), so a freshly-onboarded car charges without manual plan setup.
+- [ ] **Onboarding plan step needs real work** — it doesn't reliably create/attach a usable plan during
+  first-run. Revisit after the two items above.

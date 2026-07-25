@@ -151,7 +151,9 @@ function RootComponent() {
                 </div>
                 <div className="leading-tight">
                   <div className="font-display text-sm font-semibold">OpenSmartCharge</div>
-                  <div className="text-[11px] text-muted-foreground">v0.3 · self-hosted</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    v{__APP_VERSION__} · self-hosted
+                  </div>
                 </div>
               </div>
             </div>

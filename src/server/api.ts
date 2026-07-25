@@ -707,12 +707,23 @@ export function createApiRouter(deps: ApiDeps): Router {
       res.status(400).json({ error: `unknown vehicle type "${type}"` })
       return
     }
-    const parsed = collectVehicleFields(module, req.body as Record<string, unknown>, { edit: true })
+    const body = req.body as Record<string, unknown>
+    const parsed = collectVehicleFields(module, body, { edit: true })
     if (!parsed.ok) {
       res.status(400).json({ error: parsed.error })
       return
     }
-    setOverride(deps.db, 'vehicle', name, { type, ...parsed.fields })
+    const patch: Record<string, unknown> = { type, ...parsed.fields }
+    // `label` is a universal cosmetic display name (like a charger's), NOT a module config field. A
+    // blank/absent one leaves the stored value untouched (setOverride merges). Trimmed, stored as-is.
+    if (body.label !== undefined) {
+      if (typeof body.label !== 'string') {
+        res.status(400).json({ error: 'label must be a string' })
+        return
+      }
+      patch.label = body.label.trim()
+    }
+    setOverride(deps.db, 'vehicle', name, patch)
     await deps.reconcile.reloadVehicle(name)
     if (module.capabilities.soc)
       void deps.vehicles
@@ -1338,6 +1349,8 @@ export function createApiRouter(deps: ApiDeps): Router {
         const caps = deps.vehicles.get(v.name)?.capabilities
         return {
           name: v.name,
+          // Cosmetic display label (falls back to the immutable name) — mirrors the charger DTO.
+          label: (v as { label?: string }).label ?? v.name,
           type: v.type,
           vin: (v as { vin?: string }).vin,
           // Capabilities from the live module instance (drives the UI's target-unit + auto/manual logic).
@@ -1420,13 +1433,44 @@ export function createApiRouter(deps: ApiDeps): Router {
   // (drain OCPP/MQTT/HTTP → WAL checkpoint → exit), so it only actually comes back under a supervisor
   // that restarts on exit (systemd Restart=always / a docker restart policy). `supervised` reflects
   // whether one was detected, so the UI can warn before restarting a process nothing will revive.
+  // Detected process supervisor (systemd/container) — a restart/reset only revives OSC under one; the
+  // UI warns otherwise. Shared by /system/restart and /system/reset.
+  const detectSupervised = (): boolean =>
+    !!process.env.INVOCATION_ID || // systemd service
+    !!process.env.JOURNAL_STREAM || // systemd (stdout → journald)
+    !!process.env.container || // podman/some containers
+    process.pid === 1 // typical container PID 1
+
   router.post('/system/restart', (_req: Request, res: Response) => {
-    const supervised =
-      !!process.env.INVOCATION_ID || // systemd service
-      !!process.env.JOURNAL_STREAM || // systemd (stdout → journald)
-      !!process.env.container || // podman/some containers
-      process.pid === 1 // typical container PID 1
-    res.json({ ok: true, supervised })
+    res.json({ ok: true, supervised: detectSupervised() })
+    deps.requestRestart()
+  })
+
+  // POST /api/system/reset — DESTRUCTIVE factory reset. Wipes EVERY table (config overrides, settings,
+  // plans, sessions, meter history, module caches) in one transaction, then restarts via the same path
+  // as /system/restart. On reboot the DB is fresh, so materializeConfigOnce re-imports osc.yaml if one
+  // is present (→ back to the deployed base config) or leaves it blank (→ onboarding). Tables are
+  // enumerated dynamically so this never drifts as the schema grows.
+  router.post('/system/reset', (_req: Request, res: Response) => {
+    const tables = (
+      deps.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .all() as Array<{ name: string }>
+    ).map((r) => r.name)
+    try {
+      deps.db.exec('BEGIN')
+      for (const t of tables) deps.db.prepare(`DELETE FROM "${t}"`).run()
+      deps.db.exec('COMMIT')
+    } catch {
+      try {
+        deps.db.exec('ROLLBACK')
+      } catch {
+        // not in a transaction / already rolled back — nothing to undo
+      }
+      res.status(500).json({ error: 'reset failed' })
+      return
+    }
+    res.json({ ok: true, supervised: detectSupervised() })
     deps.requestRestart()
   })
 

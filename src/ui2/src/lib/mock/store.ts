@@ -107,6 +107,13 @@ export interface Charger {
   // When true (default), a Fast boost reverts to Smart once the car is unplugged. Off = Fast is
   // sticky. Per-loadpoint config (SiteLoadpointDto); edited via PUT /api/loadpoints/:name.
   autoRevertToSmart: boolean;
+  // Latest control-loop decision (the "why"): which current rung is in effect (live-meter vs the
+  // static-tod safe fallback), plus the circuit budget. From the loadpoint.resolve SSE / DTO.
+  resolve?: {
+    shouldChargeNow?: boolean;
+    budgetA: number;
+    sources: { energy: string; price: string; current: string };
+  } | null;
 }
 
 export interface Session {
@@ -121,11 +128,14 @@ export interface Session {
   socEnd?: number;
 }
 
+export type ModuleType = "charger" | "tariff" | "balancer" | "vehicle" | "meter" | "system";
+
 export interface ModuleHealth {
   id: string;
   name: string;
   status: "ok" | "warn" | "bad";
   message: string;
+  type?: ModuleType; // category for the status page (derived from /api/site in live mode)
 }
 
 export interface PendingCharger {
@@ -137,6 +147,9 @@ export interface PendingCharger {
 export interface Config {
   isConfigured: boolean;
   onboardingStep: number;
+  // Home / installation display name (site.name; shows in backups + Home Assistant). Editable in
+  // Settings → House via setSiteName → PUT /api/site {name}.
+  homeName?: string;
   region: string;
   breakerAmps: number;
   phases: number; // supply phases — sets the max-kW axis on the Home power chart; default 3
@@ -145,6 +158,11 @@ export interface Config {
   houseUsageKw: number;
   currencySymbol: string;
   tariffName?: string; // primary tariff name — target for region writes (PUT /api/tariffs/:name)
+  // Static-fallback margins (from /api/site.smartCharging): night cap = breaker − nightMarginA,
+  // day cap = breaker × daytimeFraction; reserveA is headroom off the top. Edited via setSmartCharging.
+  nightMarginA?: number;
+  daytimeFraction?: number;
+  reserveA?: number;
 }
 
 interface OscState {
@@ -170,6 +188,8 @@ interface OscState {
    *  every meter reading (live) / tick (demo); samples older than 15 min are dropped. */
   powerHistory: PowerSample[];
   meterName: string | null; // main meter reader name (from /api/site) — matches meter.snapshot
+  // Health-key → module category, built from /api/site so status rows can show what each module IS.
+  moduleCategories: Record<string, ModuleType>;
   _houseBaseW: number; // demo-only: wandering non-EV base for the mock house-power sim
 
   // actions
@@ -208,6 +228,7 @@ interface OscState {
   /** Replace the power-history buffer (seeded from GET /api/power-history on load). */
   setPowerHistory: (samples: PowerSample[]) => void;
   setMeterName: (n: string | null) => void;
+  setModuleCategories: (m: Record<string, ModuleType>) => void;
   hydrate: (
     patch: Partial<
       Pick<OscState, "chargers" | "vehicles" | "moduleHealth" | "prices" | "sessions" | "plans">
@@ -360,11 +381,41 @@ function seed(): Pick<
     plans: [plan],
     sessions,
     moduleHealth: [
-      { id: "ocpp", name: "Charger link (OCPP)", status: "ok", message: "1 charger online." },
-      { id: "tariff", name: "Day-ahead prices", status: "ok", message: "Elering · SE3 · fresh." },
-      { id: "balancer", name: "House load balancer", status: "ok", message: "Tibber Pulse live." },
-      { id: "vehicle", name: "Vehicle data", status: "ok", message: "Škoda Enyaq linked." },
-      { id: "mqtt", name: "MQTT / Home Assistant", status: "ok", message: "Broker connected." },
+      {
+        id: "ocpp",
+        name: "Charger link (OCPP)",
+        status: "ok",
+        message: "1 charger online.",
+        type: "charger",
+      },
+      {
+        id: "tariff",
+        name: "Day-ahead prices",
+        status: "ok",
+        message: "Elering · SE3 · fresh.",
+        type: "tariff",
+      },
+      {
+        id: "balancer",
+        name: "House load balancer",
+        status: "ok",
+        message: "Tibber Pulse live.",
+        type: "balancer",
+      },
+      {
+        id: "vehicle",
+        name: "Vehicle data",
+        status: "ok",
+        message: "Škoda Enyaq linked.",
+        type: "vehicle",
+      },
+      {
+        id: "mqtt",
+        name: "MQTT / Home Assistant",
+        status: "ok",
+        message: "Broker connected.",
+        type: "system",
+      },
     ],
     prices: demoPrices,
     loadpointPlans: {
@@ -381,6 +432,9 @@ function seed(): Pick<
       staticLimitA: 16,
       houseUsageKw: 1.8,
       currencySymbol: "€",
+      nightMarginA: 3,
+      daytimeFraction: 0.5,
+      reserveA: 1,
     },
     tickMs: 1500,
   };
@@ -394,6 +448,7 @@ export const useOsc = create<OscState>()((set, get) => ({
   housePowerW: null, // set by the meter (live) or the demo tick; card hides until a real value arrives
   powerHistory: [],
   meterName: null,
+  moduleCategories: {},
   _houseBaseW: 700,
 
   setMode: (chargerId, mode) =>
@@ -553,6 +608,7 @@ export const useOsc = create<OscState>()((set, get) => ({
     })),
   setPowerHistory: (samples) => set({ powerHistory: samples }),
   setMeterName: (n) => set({ meterName: n }),
+  setModuleCategories: (m) => set({ moduleCategories: m }),
   hydrate: (patch) => set(patch),
   patchCharger: (id, patch) =>
     set((s) => ({ chargers: s.chargers.map((c) => (c.id === id ? { ...c, ...patch } : c)) })),
@@ -567,7 +623,10 @@ export const useOsc = create<OscState>()((set, get) => ({
       return {
         moduleHealth: exists
           ? s.moduleHealth.map((m) => (m.id === id ? { ...m, status } : m))
-          : [...s.moduleHealth, { id, name: id, status, message: "" }],
+          : [
+              ...s.moduleHealth,
+              { id, name: id, status, message: "", type: s.moduleCategories[id] },
+            ],
       };
     }),
 
