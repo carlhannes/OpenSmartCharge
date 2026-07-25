@@ -193,6 +193,17 @@ export async function setBreaker(amps: number): Promise<void> {
   if (isLive()) await api.setSiteBreaker(amps);
 }
 
+/** Static-fallback margins (the safe limit used when there's no live meter): optimistic local +
+ *  PUT /api/smartcharging when live (applies immediately; the control loop reads it each tick). */
+export async function setSmartCharging(patch: {
+  nightMarginA?: number;
+  daytimeFraction?: number;
+  reserveA?: number;
+}): Promise<void> {
+  useOsc.getState().setConfig(patch);
+  if (isLive()) await api.updateSmartCharging(patch);
+}
+
 /** Charger max current: optimistic; PUT /api/chargers/:name when live (charger id == charger name). */
 export async function setChargerMaxAmps(chargerId: string, maxA: number): Promise<void> {
   useOsc.getState().setChargerMaxAmps(chargerId, maxA);

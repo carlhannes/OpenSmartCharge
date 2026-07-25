@@ -97,6 +97,14 @@ async function rehydrateSite(
       ...(site.meterReaders.length === 0 && siteBreaker != null
         ? { staticLimitA: siteBreaker }
         : {}),
+      // Static-fallback margins (the "safe limit when no live meter" knobs) for the House page.
+      ...(site.smartCharging
+        ? {
+            nightMarginA: site.smartCharging.nightMarginA,
+            daytimeFraction: site.smartCharging.daytimeFraction,
+            reserveA: site.smartCharging.reserveA,
+          }
+        : {}),
     });
     useOsc.getState().setMeterName(site.meterReaders[0]?.name ?? null);
     // Health-key → category (from /api/site) so the System status page can label each module by type.

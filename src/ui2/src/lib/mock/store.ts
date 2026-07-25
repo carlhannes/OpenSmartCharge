@@ -155,6 +155,11 @@ export interface Config {
   houseUsageKw: number;
   currencySymbol: string;
   tariffName?: string; // primary tariff name — target for region writes (PUT /api/tariffs/:name)
+  // Static-fallback margins (from /api/site.smartCharging): night cap = breaker − nightMarginA,
+  // day cap = breaker × daytimeFraction; reserveA is headroom off the top. Edited via setSmartCharging.
+  nightMarginA?: number;
+  daytimeFraction?: number;
+  reserveA?: number;
 }
 
 interface OscState {
@@ -424,6 +429,9 @@ function seed(): Pick<
       staticLimitA: 16,
       houseUsageKw: 1.8,
       currencySymbol: "€",
+      nightMarginA: 3,
+      daytimeFraction: 0.5,
+      reserveA: 1,
     },
     tickMs: 1500,
   };

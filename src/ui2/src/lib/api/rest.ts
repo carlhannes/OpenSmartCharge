@@ -220,6 +220,9 @@ export interface SiteMeterDto {
 }
 export interface SiteDto {
   site: { name: string; port: number; mainBreakerA?: number };
+  // Static-fallback margins (used when there's no live meter): night cap = breaker − nightMarginA,
+  // day cap = breaker × daytimeFraction; reserveA is headroom kept off the top.
+  smartCharging?: { nightMarginA: number; daytimeFraction: number; reserveA: number };
   loadpoints: SiteLoadpointDto[];
   chargers: SiteChargerDto[];
   balancers: SiteBalancerDto[];
@@ -320,6 +323,12 @@ export const setSettings = (s: SettingsDto) =>
 // Runtime config writes — persist to config_overrides (DB-wins, no restart); each emits config.changed.
 export const setSiteBreaker = (mainBreakerA: number) =>
   apiFetch<unknown>("/api/site", jsonBody("PUT", { mainBreakerA }));
+// Static-fallback margins — applied live via PUT /api/smartcharging.
+export const updateSmartCharging = (patch: {
+  nightMarginA?: number;
+  daytimeFraction?: number;
+  reserveA?: number;
+}) => apiFetch<unknown>("/api/smartcharging", jsonBody("PUT", patch));
 export const setTariffZone = (name: string, zone: string) =>
   apiFetch<unknown>(`/api/tariffs/${name}`, jsonBody("PUT", { zone }));
 export const updateChargerApi = (name: string, patch: { maxA?: number; label?: string }) =>
