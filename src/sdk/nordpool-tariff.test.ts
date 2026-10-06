@@ -157,3 +157,60 @@ test('factory: scheduled refetch uses the global fetch and jitters the SCHEDULE,
     vi.useRealTimers()
   }
 })
+
+test('upsertSlots: a failed insert rolls back — nothing half-written, the shared connection stays usable', () => {
+  withDb((db) => {
+    const bad = { ...slot('2026-07-04T10:00:00Z', '2026-07-04T10:15:00Z', 1), pricePerKWh: null }
+    expect(() =>
+      upsertSlots(db, 'SE4', [
+        slot('2026-07-04T09:45:00Z', '2026-07-04T10:00:00Z', 1),
+        bad as unknown as TariffSlot, // violates price_per_kwh NOT NULL
+      ]),
+    ).toThrow()
+    expect(latestSlotEnd(db, 'SE4')).toBeNull() // the first row was rolled back too
+    // No transaction was left open: the next write commits normally.
+    upsertSlots(db, 'SE4', [slot('2026-07-04T09:45:00Z', '2026-07-04T10:00:00Z', 1)])
+    expect(latestSlotEnd(db, 'SE4')?.toISOString()).toBe('2026-07-04T10:00:00.000Z')
+  })
+})
+
+test('factory: stop() during an in-flight fetch never re-arms the schedule; health is derived live', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-03-10T08:00:00Z'))
+  const dir = mkdtempSync(join(tmpdir(), 'osc-np-'))
+  const db = openDb(dir)
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger
+  let release: (slots: TariffSlot[]) => void = () => {}
+  let calls = 0
+  try {
+    const tariff = createNordpoolDayAheadTariff(
+      { db, events: new EventEmitter(), log },
+      {
+        name: 't',
+        zone: 'SE3',
+        provider: 'test',
+        fetchSlots: () => {
+          calls++
+          return new Promise<TariffSlot[]>((r) => (release = r))
+        },
+      },
+    )
+    await tariff.start() // resolves at once — the first fetch never blocks boot
+    expect(calls).toBe(1)
+    expect(tariff.health()).toBe('unavailable') // nothing cached yet
+
+    await tariff.stop() // a reconcile swap while the fetch is still in flight
+    release([slot('2026-03-10T08:00:00Z', '2026-03-11T08:00:00Z', 1)])
+    await vi.advanceTimersByTimeAsync(48 * 3600_000)
+    expect(calls).toBe(1) // the stopped instance did not schedule another fetch
+
+    // Health reflects the cache as it is NOW, with no fetch needed to refresh it.
+    expect(tariff.health()).toBe('unavailable') // the slot ended at 2026-03-11T08:00Z, 48 h ago
+    upsertSlots(db, 'SE3', [slot('2026-03-12T07:00:00Z', '2026-03-13T08:00:00Z', 1)])
+    expect(tariff.health()).toBe('ok')
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+    vi.useRealTimers()
+  }
+})

@@ -50,17 +50,24 @@ export function upsertSlots(db: DatabaseSync, zone: string, slots: TariffSlot[])
     `INSERT OR REPLACE INTO tariff_slots (zone, slot_start, slot_end, price_per_kwh, currency)
      VALUES (?, ?, ?, ?, ?)`,
   )
+  // The connection is shared by the whole app: a transaction left open by a failed insert would hold
+  // every later write uncommitted (lost on exit) and make every later BEGIN throw — roll it back.
   db.exec('BEGIN')
-  for (const slot of slots) {
-    stmt.run(
-      zone,
-      slot.start.toISOString(),
-      slot.end.toISOString(),
-      slot.pricePerKWh,
-      slot.currency,
-    )
+  try {
+    for (const slot of slots) {
+      stmt.run(
+        zone,
+        slot.start.toISOString(),
+        slot.end.toISOString(),
+        slot.pricePerKWh,
+        slot.currency,
+      )
+    }
+    db.exec('COMMIT')
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
   }
-  db.exec('COMMIT')
 }
 
 export function getSlots(db: DatabaseSync, zone: string, from: Date, to: Date): TariffSlot[] {
@@ -182,7 +189,9 @@ export function createNordpoolDayAheadTariff(ctx: ModuleCtx, opts: NordpoolTarif
   const { name, zone, provider, fetchSlots, rangeHours = 48 } = opts
   const state: SchedulerState = { consecutiveFailures: 0 }
   let timer: ReturnType<typeof setTimeout> | undefined
-  let health: ModuleHealth = 'unavailable'
+  // A fetch in flight when stop() runs (a reconcile swap) must not re-arm the schedule afterwards —
+  // otherwise the discarded instance keeps fetching for the life of the process.
+  let stopped = false
 
   // Fetch range: current hour (truncated) → +rangeHours.
   function fetchRange(): { from: Date; to: Date } {
@@ -192,6 +201,9 @@ export function createNordpoolDayAheadTariff(ctx: ModuleCtx, opts: NordpoolTarif
   }
 
   function scheduleNext(): void {
+    if (stopped) return
+    // A manual refresh() can overlap an in-flight run; both finish here — keep exactly one timer.
+    if (timer !== undefined) clearTimeout(timer)
     const decision = nextDelay(state, hasTomorrow(ctx.db, zone), new Date())
     const jitterMs = Math.floor(Math.random() * SCHEDULE_JITTER_MS)
     ctx.log.info(
@@ -207,7 +219,6 @@ export function createNordpoolDayAheadTariff(ctx: ModuleCtx, opts: NordpoolTarif
       const slots = await fetchSlots(zone, from, to, globalThis.fetch)
       upsertSlots(ctx.db, zone, slots)
       state.consecutiveFailures = 0
-      health = computeTariffHealth(ctx.db, zone)
       ctx.log.info({ name, zone, provider, slots: slots.length }, 'nordpool prices updated')
       ctx.events.emit('tariff.updated', { name, zone })
     } catch (err) {
@@ -217,11 +228,9 @@ export function createNordpoolDayAheadTariff(ctx: ModuleCtx, opts: NordpoolTarif
           { err, zone, provider },
           'nordpool tariff: zone not found — check your config',
         )
-        health = computeTariffHealth(ctx.db, zone)
         return
       }
       state.consecutiveFailures++
-      health = computeTariffHealth(ctx.db, zone)
       ctx.log.warn(
         { err, zone, provider, consecutiveFailures: state.consecutiveFailures },
         'nordpool fetch failed',
@@ -234,10 +243,13 @@ export function createNordpoolDayAheadTariff(ctx: ModuleCtx, opts: NordpoolTarif
     get id() {
       return name
     },
+    // Not awaited: the first fetch must never hold up boot (the HTTP + OCPP listeners start after the
+    // modules), and cached prices already serve the planner meanwhile. LAN-survivable by construction.
     async start() {
-      await runOnce()
+      void runOnce()
     },
     async stop() {
+      stopped = true
       if (timer !== undefined) clearTimeout(timer)
     },
     // Manual out-of-band refetch (POST /api/tariffs/:name/refresh). Cancels the pending timer and
@@ -248,8 +260,10 @@ export function createNordpoolDayAheadTariff(ctx: ModuleCtx, opts: NordpoolTarif
       if (timer !== undefined) clearTimeout(timer)
       await runOnce()
     },
+    // Derived from the cache on every call (one MAX query), so the periodic health sweep sees the data
+    // go stale on its own instead of a value frozen at the last fetch attempt.
     health() {
-      return health
+      return computeTariffHealth(ctx.db, zone)
     },
     async prices(from, to) {
       return getSlots(ctx.db, zone, from, to)
