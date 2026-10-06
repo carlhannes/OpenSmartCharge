@@ -11,13 +11,12 @@ export function generateFlatSlots(
   pricePerKWh: number,
   currency: string,
 ): TariffSlot[] {
+  const HOUR_MS = 3_600_000
   const slots: TariffSlot[] = []
-  const cursor = new Date(from)
-  cursor.setMinutes(0, 0, 0) // align to the top of the hour containing `from`
-  while (cursor < to) {
-    const start = new Date(cursor)
-    cursor.setHours(cursor.getHours() + 1)
-    slots.push({ start, end: new Date(cursor), pricePerKWh, currency })
+  // Epoch steps, not local setHours(): on a DST host the repeated autumn hour would otherwise become
+  // one 2-hour slot. Aligned to the (UTC) hour containing `from`, so the first slot covers `now`.
+  for (let t = Math.floor(from.getTime() / HOUR_MS) * HOUR_MS; t < to.getTime(); t += HOUR_MS) {
+    slots.push({ start: new Date(t), end: new Date(t + HOUR_MS), pricePerKWh, currency })
   }
   return slots
 }

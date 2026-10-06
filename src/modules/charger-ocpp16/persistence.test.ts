@@ -102,6 +102,8 @@ test('closeOpenTransaction finalizes an abandoned open tx (stamps energy, stops 
     energy_kwh: number
   }
   expect(row.end_time).not.toBeNull()
+  // ISO with a zone suffix, so Date.parse reads it as UTC (not the host's local time)
+  expect(row.end_time).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
   expect(row.energy_kwh).toBeCloseTo(3.0, 3) // (1_003_000 − 1_000_000)/1000
 })
 

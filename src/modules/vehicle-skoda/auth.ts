@@ -4,6 +4,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { Logger } from 'pino'
 import { saveRefreshToken, loadRefreshToken } from './persistence.js'
 import type { SkodaCfg } from './types.js'
+import { REQUEST_TIMEOUT_MS } from './api.js'
 
 // VW Group Identity constants (from evcc params.go and vwidentity/endpoint.go)
 const IDENTITY_BASE = 'https://identity.vwgroup.io'
@@ -85,7 +86,13 @@ async function navigate(
     if (cookie) headers['Cookie'] = cookie
     if (contentType) headers['Content-Type'] = contentType
 
-    const resp = await fetch(currentUrl, { method, headers, body, redirect: 'manual' })
+    const resp = await fetch(currentUrl, {
+      method,
+      headers,
+      body,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
     jar?.collect(currentUrl, resp.headers)
 
     const location = resp.headers.get('location')
@@ -300,6 +307,7 @@ export function createAuthClient(
     const resp = await fetch(REFRESH_TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       body: JSON.stringify({ token: refreshToken }),
     })
     if (!resp.ok) throw new Error(`Skoda token refresh: HTTP ${resp.status}`)
@@ -322,6 +330,7 @@ export function createAuthClient(
     const resp = await fetch(CODE_EXCHANGE_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       // evcc field name is "verifier", not "code_verifier"
       body: JSON.stringify({ code, redirectUri: REDIRECT_URI, verifier }),
     })

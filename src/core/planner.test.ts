@@ -139,3 +139,28 @@ test('buildPlanSeries (disabled): no slot charges even with a charging plan slot
 test('buildPlanSeries: empty prices → empty series', () => {
   expect(buildPlanSeries([], [planSlot(1, 0, true)], 'smart')).toEqual([])
 })
+
+test('planner slots stay 15 min long across the autumn DST change, whatever the host timezone', () => {
+  // generateSlots used local-time setMinutes(); on a DST host the 02:00–03:00 repeat produced one
+  // 75-min slot and dropped four. Run with a DST host zone to prove the stepping is host-independent.
+  const prevTz = process.env.TZ
+  process.env.TZ = 'Europe/Stockholm'
+  try {
+    const from = new Date('2026-10-24T23:00:00Z') // 01:00 CEST, an hour before the change
+    const to = new Date('2026-10-25T03:00:00Z') // 4 h of real time later
+    const prices: TariffSlot[] = [{ start: from, end: to, pricePerKWh: 1, currency: 'SEK' }]
+    const slots = plan({
+      now: from,
+      targetTime: to,
+      requiredKWh: 1000, // more than fits → every slot is selected
+      priceSlots: prices,
+      maxCurrentA: 16,
+      phases: 3,
+    })
+    expect(slots).toHaveLength(16)
+    for (const s of slots) expect(s.end.getTime() - s.start.getTime()).toBe(15 * 60_000)
+  } finally {
+    if (prevTz === undefined) delete process.env.TZ
+    else process.env.TZ = prevTz
+  }
+})

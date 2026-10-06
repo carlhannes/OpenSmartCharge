@@ -114,3 +114,18 @@ test('a failed start-charge surfaces the HTTP error (so the reconciler can escal
     /rate limited.*429/,
   )
 })
+
+test('every MySkoda call carries a timeout signal (a hung request must never freeze the control tick)', async () => {
+  const signals: Array<AbortSignal | null | undefined> = []
+  const fetchFn = (async (_url: string | URL, init?: RequestInit) => {
+    signals.push(init?.signal)
+    return { status: 202, ok: true, headers: new Headers(), json: async () => ({}) }
+  }) as unknown as typeof globalThis.fetch
+  await getChargingStatus('VIN', 'tok', fetchFn)
+  await startCharging('VIN', 'tok', fetchFn)
+  expect(signals).toHaveLength(2)
+  for (const s of signals) {
+    expect(s).toBeInstanceOf(AbortSignal)
+    expect(s!.aborted).toBe(false) // created per request, not ahead of time
+  }
+})

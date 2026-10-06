@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { parseMeterValue } from './meter-parser.js'
+import { parseMeterValue, latestReadings } from './meter-parser.js'
 import type { MeterValue, SampledValue } from './types.js'
 
 function mv(samples: Array<{ measurand?: string; value: string; unit?: string }>): MeterValue {
@@ -64,4 +64,27 @@ test('respects the declared energy unit: kWh is kept, Wh (or absent) is divided 
   expect(energy('12.5', 'kWh')).toBe(12.5) // already kWh — do NOT divide (would be 1000× too small)
   expect(energy('12500', 'Wh')).toBe(12.5) // Wh → kWh
   expect(energy('12500')).toBe(12.5) // absent unit defaults to Wh
+})
+
+test('power respects a declared kW unit (W is the default)', () => {
+  expect(
+    parseMeterValue(mv([{ measurand: 'Power.Active.Import', value: '7.4', unit: 'kW' }])).powerW,
+  ).toBe(7400)
+  expect(
+    parseMeterValue(mv([{ measurand: 'Power.Active.Import', value: '7400', unit: 'W' }])).powerW,
+  ).toBe(7400)
+  const live = latestReadings({
+    connectorId: 1,
+    meterValue: [
+      {
+        timestamp: 't',
+        sampledValue: [{ measurand: 'Power.Active.Import', value: '11', unit: 'kW' }],
+      },
+    ],
+  })
+  expect(live.powerW).toBe(11000)
+})
+
+test('a sample with no measurand is the energy register (the OCPP 1.6 default)', () => {
+  expect(parseMeterValue(mv([{ value: '12500', unit: 'Wh' }])).energyKwh).toBe(12.5)
 })

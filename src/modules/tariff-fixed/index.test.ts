@@ -31,3 +31,21 @@ test('the "fixed" tariff defaults to 0 price / SEK when unconfigured', async () 
   const slots = await t.prices(new Date('2026-01-01T00:00:00Z'), new Date('2026-01-01T02:00:00Z'))
   expect(slots.every((s) => s.pricePerKWh === 0 && s.currency === 'SEK')).toBe(true)
 })
+
+test('generateFlatSlots: every slot is one real hour across the autumn DST change', () => {
+  const prevTz = process.env.TZ
+  process.env.TZ = 'Europe/Stockholm'
+  try {
+    const slots = generateFlatSlots(
+      new Date('2026-10-24T23:00:00Z'),
+      new Date('2026-10-25T03:00:00Z'),
+      1,
+      'SEK',
+    )
+    expect(slots).toHaveLength(4)
+    for (const s of slots) expect(s.end.getTime() - s.start.getTime()).toBe(3_600_000)
+  } finally {
+    if (prevTz === undefined) delete process.env.TZ
+    else process.env.TZ = prevTz
+  }
+})

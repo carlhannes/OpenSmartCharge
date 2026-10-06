@@ -1,4 +1,4 @@
-import type { MeterValue, MeterValuesReq } from './types.js'
+import type { MeterValue, MeterValuesReq, SampledValue } from './types.js'
 
 export interface ParsedMeterValue {
   energyKwh?: number
@@ -16,31 +16,36 @@ export interface ParsedMeterValue {
  * A measurand that is absent or non-numeric is omitted (undefined), never NaN.
  * Energy is converted from Wh (OCPP `Energy.Active.Import.Register`) to kWh.
  */
-export function parseMeterValue(mv: MeterValue): ParsedMeterValue {
-  const get = (measurand: string) => mv.sampledValue.find((s) => s.measurand === measurand)?.value
-  const num = (raw: string | undefined): number | undefined => {
-    if (raw === undefined) return undefined
-    const n = parseFloat(raw)
-    return isNaN(n) ? undefined : n
-  }
+// OCPP 1.6: a sampled value with no `measurand` IS the energy register (the spec's default).
+const measurandOf = (s: SampledValue): string => s.measurand ?? 'Energy.Active.Import.Register'
+const sampleOf = (mv: MeterValue, measurand: string): SampledValue | undefined =>
+  mv.sampledValue.find((s) => measurandOf(s) === measurand)
 
-  // The energy register is Wh by default (OCPP), but some chargers report kWh and say so via
-  // `unit`. Respect the declared unit instead of always dividing by 1000 (a kWh reading divided
-  // by 1000 would be 1000× too small and corrupt the session-energy delta).
-  const energySample = mv.sampledValue.find((s) => s.measurand === 'Energy.Active.Import.Register')
-  const energyRaw = num(energySample?.value)
-  const energyKwh =
-    energyRaw === undefined
-      ? undefined
-      : energySample?.unit === 'kWh'
-        ? energyRaw
-        : energyRaw / 1000
+function num(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined
+  const n = parseFloat(raw)
+  return isNaN(n) ? undefined : n
+}
+
+// The energy register defaults to Wh and power to W, but chargers may report kWh / kW and say so via
+// `unit`. Respect the declared unit — otherwise a kWh reading is 1000× too small (corrupting the
+// session-energy delta) and a kW reading shows ~7 W for a 7 kW charge.
+function energyKwhOf(s: SampledValue | undefined): number | undefined {
+  const n = num(s?.value)
+  return n === undefined ? undefined : s?.unit === 'kWh' ? n : n / 1000
+}
+function powerWOf(s: SampledValue | undefined): number | undefined {
+  const n = num(s?.value)
+  return n === undefined ? undefined : s?.unit === 'kW' ? n * 1000 : n
+}
+
+export function parseMeterValue(mv: MeterValue): ParsedMeterValue {
   return {
-    energyKwh,
-    powerW: num(get('Power.Active.Import')),
-    currentA: num(get('Current.Import')),
-    voltageV: num(get('Voltage')),
-    socPct: num(get('SoC')),
+    energyKwh: energyKwhOf(sampleOf(mv, 'Energy.Active.Import.Register')),
+    powerW: powerWOf(sampleOf(mv, 'Power.Active.Import')),
+    currentA: num(sampleOf(mv, 'Current.Import')?.value),
+    voltageV: num(sampleOf(mv, 'Voltage')?.value),
+    socPct: num(sampleOf(mv, 'SoC')?.value),
   }
 }
 
@@ -58,15 +63,12 @@ export function latestReadings(params: MeterValuesReq): LatestReadings {
   const out: LatestReadings = {}
   for (const mv of params.meterValue) {
     const currents = mv.sampledValue
-      .filter((s) => s.measurand === 'Current.Import')
+      .filter((s) => measurandOf(s) === 'Current.Import')
       .map((s) => parseFloat(s.value))
       .filter((n) => !isNaN(n))
     if (currents.length > 0) out.currentA = Math.max(...currents)
-    const powerRaw = mv.sampledValue.find((s) => s.measurand === 'Power.Active.Import')?.value
-    if (powerRaw !== undefined) {
-      const p = parseFloat(powerRaw)
-      if (!isNaN(p)) out.powerW = p
-    }
+    const p = powerWOf(sampleOf(mv, 'Power.Active.Import'))
+    if (p !== undefined) out.powerW = p
   }
   return out
 }

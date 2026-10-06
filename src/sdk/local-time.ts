@@ -92,20 +92,30 @@ function getOffsetMs(d: Date, tz: string): number {
   return d.getTime() - new Date(fakeUtcStr).getTime()
 }
 
+/** The instant `hour:minute` occurs in `tz` on the local calendar day (y, m, d). */
+function localInstant(
+  y: number,
+  m: number,
+  d: number,
+  hour: number,
+  minute: number,
+  tz: string,
+): Date {
+  // Build the wall-clock time as a "fake UTC" instant, then shift by the zone's offset at that time.
+  // Date.UTC normalizes day overflow (d + 1 on the 31st → the 1st of next month). Safe for the times
+  // we use it (publish window, plan ready-by, targets) — none sit in the 02:00–03:00 DST gap.
+  const fakeUtc = new Date(Date.UTC(y, m - 1, d, hour, minute))
+  return new Date(fakeUtc.getTime() + getOffsetMs(fakeUtc, tz))
+}
+
 /** Ms until the next occurrence of HH:MM in `tz` local time (same day or tomorrow). */
 export function msUntilLocalTime(now: Date, hour: number, minute: number, tz: string): number {
   const p = localParts(now, tz)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  // Build the target as "fake UTC" from local parts, then subtract the local offset to get real
-  // UTC. Safe for the times we use it (publish window, midnight, plan ready-by) — none sit in the
-  // 02:00–03:00 DST gap.
-  const fakeUTC = new Date(
-    `${p.year}-${pad(p.month)}-${pad(p.day)}T${pad(hour)}:${pad(minute)}:00Z`,
-  )
-  const target = new Date(fakeUTC.getTime() + getOffsetMs(fakeUTC, tz))
-  if (target.getTime() > now.getTime()) return target.getTime() - now.getTime()
-  // Already past today's occurrence → aim for tomorrow.
-  return target.getTime() + 24 * 3600_000 - now.getTime()
+  const today = localInstant(p.year, p.month, p.day, hour, minute, tz)
+  if (today.getTime() > now.getTime()) return today.getTime() - now.getTime()
+  // Already past → tomorrow's wall-clock time, rebuilt from the calendar day: on a DST night "+24 h"
+  // would land an hour off (07:00 → 06:00 or 08:00).
+  return localInstant(p.year, p.month, p.day + 1, hour, minute, tz).getTime() - now.getTime()
 }
 
 /** The next occurrence of "HH:MM" in `tz` — today if still ahead, else tomorrow — as an instant. */

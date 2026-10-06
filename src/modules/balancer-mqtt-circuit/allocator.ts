@@ -1,7 +1,13 @@
 import type { LoadpointSnapshot } from '../../sdk/balancer.js'
 import { IEC_MIN_CURRENT_A } from '../../sdk/electrical.js'
 
-const HYSTERESIS_A = 1 // dead-band: ignore allocation changes within ±1A of last commanded value
+const HYSTERESIS_A = 1 // dead-band: ignore a rise of ≤ 1 A over the last commanded value
+
+// Hysteresis only ever HOLDS a lower value: a small budget rise keeps the previous command (no
+// micro-oscillation), but a drop always follows the budget — holding the old, higher value would
+// allocate more than the circuit has (and the lifecycle's deadband would then keep it there).
+const settle = (give: number, prev: number | undefined): number =>
+  prev !== undefined && prev <= give && give - prev <= HYSTERESIS_A ? prev : give
 
 /**
  * Split a circuit's already-resolved current budget across its loadpoints. `circuitBudgetA` comes
@@ -39,10 +45,8 @@ export function allocate(input: { loadpoints: LoadpointSnapshot[]; circuitBudget
   // fast loadpoints get priority (served in declaration order)
   for (const lp of fast) {
     const give = Math.min(lp.maxCurrentA, remaining)
-    // Apply hysteresis before the floor: if the candidate is within ±HYSTERESIS_A of the last
-    // commanded value, keep the existing value to avoid micro-oscillation on small load wobble.
-    const prev = lp.commandedA
-    const stable = prev !== undefined && Math.abs(give - prev) <= HYSTERESIS_A ? prev : give
+    // Hysteresis before the floor, so a held value is still subject to the IEC minimum.
+    const stable = settle(give, lp.commandedA)
     const final = stable < IEC_MIN_CURRENT_A ? 0 : stable
     result.set(lp.id, final)
     remaining -= final
@@ -53,8 +57,7 @@ export function allocate(input: { loadpoints: LoadpointSnapshot[]; circuitBudget
     const share = Math.floor(remaining / smart.length)
     for (const lp of smart) {
       const give = Math.min(share, lp.maxCurrentA)
-      const prev = lp.commandedA
-      const stable = prev !== undefined && Math.abs(give - prev) <= HYSTERESIS_A ? prev : give
+      const stable = settle(give, lp.commandedA)
       result.set(lp.id, stable < IEC_MIN_CURRENT_A ? 0 : stable)
     }
   }

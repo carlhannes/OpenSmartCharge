@@ -72,7 +72,10 @@ export function closeOpenTransaction(db: DatabaseSync, transactionId: number): v
     | undefined
   if (!tx || tx.end_time != null) return
   const energyKwh = latestEnergyKwh(db, transactionId)
-  db.prepare(`UPDATE transactions SET end_time = datetime('now'), energy_kwh = ? WHERE id = ?`).run(
+  // ISO 8601 with 'Z', like every other start/end time in this table: SQLite's datetime('now') has no
+  // zone suffix, which Date.parse (the UI's session history) reads as LOCAL time.
+  db.prepare(`UPDATE transactions SET end_time = ?, energy_kwh = ? WHERE id = ?`).run(
+    new Date().toISOString(),
     energyKwh,
     transactionId,
   )

@@ -38,7 +38,9 @@ export async function loadPlugins(dir: string, log: Logger): Promise<void> {
     try {
       const mod = await import(pathToFileURL(path).href)
       if (typeof mod.default === 'function') {
-        mod.default(pluginApi)
+        // Awaited: an async plugin must finish registering before the lifecycle instantiates modules,
+        // or its types would be warned about and skipped as unknown.
+        await mod.default(pluginApi)
         log.info({ plugin: file }, 'plugin loaded')
       } else {
         log.warn({ plugin: file }, 'plugin skipped — no default export function')

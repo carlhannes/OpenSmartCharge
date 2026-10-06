@@ -75,3 +75,16 @@ test('isValidTimeZone accepts IANA zones and rejects garbage', () => {
   expect(isValidTimeZone('Not/AZone')).toBe(false)
   expect(isValidTimeZone('Mars/Phobos')).toBe(false)
 })
+
+test('msUntilLocalTime lands on the right wall-clock time across a DST change (tomorrow ≠ +24 h)', () => {
+  // Sat 2026-10-24 22:00 CEST; the clocks go back at 03:00 that night, so tomorrow 07:00 CET is 10 h
+  // away — a naive "today's 07:00 + 24 h" would land on 06:00 CET (9 h).
+  const now = new Date('2026-10-24T20:00:00Z')
+  const target = new Date(now.getTime() + msUntilLocalTime(now, 7, 0, SE))
+  expect(target.toISOString()).toBe('2026-10-25T06:00:00.000Z')
+  expect(localHour(target, SE)).toBe(7)
+  // …and in spring (Sat 2026-03-28 22:00 CET → 07:00 CEST on Sunday = 8 h away)
+  const spring = new Date('2026-03-28T21:00:00Z')
+  const t2 = new Date(spring.getTime() + msUntilLocalTime(spring, 7, 0, SE))
+  expect(t2.toISOString()).toBe('2026-03-29T05:00:00.000Z')
+})

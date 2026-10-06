@@ -90,12 +90,26 @@ test('fast takes its ceiling, smart gets the remainder', () => {
   expect(allocations.get('smart1')).toBe(0) // remaining 0 → sub-6A floor
 })
 
-test('hysteresis: allocation within ±1A of commandedA stays unchanged', () => {
+test('hysteresis: a rise of ≤ 1 A over commandedA holds the previous value', () => {
   const { allocations } = allocate({
     loadpoints: [lp({ id: 'a', mode: 'fast', currentA: 9, commandedA: 9 })],
-    circuitBudgetA: 8, // give=8; |8-9|=1 ≤ 1 → stays at 9
+    circuitBudgetA: 10, // give=10; rise of 1 ≤ 1 → stays at 9 (no micro-oscillation)
   })
   expect(allocations.get('a')).toBe(9)
+})
+
+test('hysteresis never allocates above the budget: a small drop follows the budget down', () => {
+  const { allocations } = allocate({
+    loadpoints: [
+      lp({ id: 'a', mode: 'smart', currentA: 9, commandedA: 9 }),
+      lp({ id: 'b', mode: 'smart', currentA: 9, commandedA: 9 }),
+    ],
+    circuitBudgetA: 16, // share=8 each; holding 9 would hand out 18 A on a 16 A circuit
+  })
+  expect(allocations.get('a')).toBe(8)
+  expect(allocations.get('b')).toBe(8)
+  const total = [...allocations.values()].reduce((x, y) => x + y, 0)
+  expect(total).toBeLessThanOrEqual(16)
 })
 
 test('hysteresis breach: allocation outside ±1A moves to the new value', () => {

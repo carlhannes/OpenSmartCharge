@@ -100,20 +100,16 @@ export function buildPlanSeries(
   }))
 }
 
+const SLOT_MS = 15 * 60_000
+
+// Epoch arithmetic, never local-time setters: on a host with DST, stepping with setMinutes() makes
+// the repeated autumn hour one 75-min slot and drops four. Every UTC offset in use is a multiple of
+// 15 min, so a UTC quarter-hour boundary is a local one too. Rounds UP (a `from` past a boundary by
+// even 1 ms starts at the next one, never in the past).
 function generateSlots(from: Date, to: Date): { start: Date; end: Date }[] {
   const slots: { start: Date; end: Date }[] = []
-  const cursor = new Date(from)
-  // Round up to next 15-min boundary.
-  // When minutes % 15 === 0 but seconds/ms > 0 we must still round UP —
-  // otherwise cursor moves backwards relative to `from` and generates stale slots.
-  const rem = cursor.getMinutes() % 15
-  const sub = cursor.getSeconds() * 1000 + cursor.getMilliseconds()
-  if (rem !== 0 || sub > 0) cursor.setMinutes(cursor.getMinutes() + (15 - rem), 0, 0)
-
-  while (cursor < to) {
-    const start = new Date(cursor)
-    cursor.setMinutes(cursor.getMinutes() + 15)
-    slots.push({ start, end: new Date(cursor) })
+  for (let t = Math.ceil(from.getTime() / SLOT_MS) * SLOT_MS; t < to.getTime(); t += SLOT_MS) {
+    slots.push({ start: new Date(t), end: new Date(t + SLOT_MS) })
   }
   return slots
 }

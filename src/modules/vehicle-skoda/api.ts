@@ -5,6 +5,10 @@ import type {
 } from './types.js'
 
 const BASE_URI = 'https://mysmob.api.connect.skoda-auto.cz/api'
+// Every MySkoda call is bounded: a car-side start-charge is awaited inside the control tick, so a hung
+// connection would otherwise freeze current control for that circuit (no internet path may sit
+// between a charger and a safe current limit). Shared with auth.ts.
+export const REQUEST_TIMEOUT_MS = 15_000
 // Connectivity generations required by the Skoda API (from evcc params.go)
 const ALL_GEN =
   'connectivityGenerations=MOD1&connectivityGenerations=MOD2&connectivityGenerations=MOD3&connectivityGenerations=MOD4'
@@ -20,6 +24,7 @@ async function skodaGet<T>(
 ): Promise<T> {
   const res = await fetchFn(`${BASE_URI}${path}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   if (res.status === 429 || res.status === 430) {
     const retryAfter = res.headers.get('retry-after')
@@ -70,6 +75,7 @@ async function skodaPost(
   const res = await fetchFn(`${BASE_URI}${path}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   if (res.status === 429 || res.status === 430) {
     const retryAfter = res.headers.get('retry-after')
