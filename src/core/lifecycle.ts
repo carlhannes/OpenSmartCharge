@@ -497,6 +497,8 @@ async function main() {
   const sessionFirstReading = new Map<string, { soc: number; sessionEnergyKWh: number }>()
   // Loadpoints we've already warned about being below minSoc while disabled (warn once per episode).
   const minSocWarned = new Set<string>()
+  // Balancers we've already warned about being missing from their circuit (warn once per episode).
+  const missingBalancerWarned = new Set<string>()
 
   // Charging efficiency to use for this loadpoint right now: the value OBSERVED this session (two
   // real readings with enough delta) when available, else the configured default. Session-scoped.
@@ -1145,7 +1147,19 @@ async function main() {
       let allocations: Map<string, number> | null = null
       if (circuit.kind === 'balancer') {
         const balancer = balancers.get(circuit.balancerName)
-        if (!balancer) return
+        if (!balancer) {
+          // No split without the balancer (handing each loadpoint the whole budget could overload the
+          // fuse), so these chargers keep their last limit. Say so — once — instead of going silent.
+          if (!missingBalancerWarned.has(circuit.balancerName)) {
+            missingBalancerWarned.add(circuit.balancerName)
+            log.warn(
+              { balancer: circuit.balancerName, loadpoints: lpCfgs.map((l) => l.name) },
+              'balancer unavailable — its loadpoints are not being commanded (chargers hold their last limit)',
+            )
+          }
+          return
+        }
+        missingBalancerWarned.delete(circuit.balancerName)
         const snaps = resolved.map((r) => {
           const snap = buildSnapshot(
             r.state,
