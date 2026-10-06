@@ -2,6 +2,7 @@
 
 Running log of bugs/quirks found during live testing, to gather and fix later. Newest batch first.
 Each entry: **Symptom** (what was seen) · **Evidence** · **Where** · **Root cause** · **Fix idea** · **Severity**.
+Resolved entries are removed (numbers within a batch stay stable, so gaps are expected).
 
 ---
 
@@ -31,7 +32,7 @@ Each entry: **Symptom** (what was seen) · **Evidence** · **Where** · **Root c
   next cadence poll (~15 min drawing / ~10 min idle-day), so the displayed % + the final confirmation can
   lag minutes (owner saw ~73% / "still charging" for ~1 min before a poll caught it up to 75% + paused).
 - **Where:** `src/core/smart-charging/vehicle-poll.ts` `shouldPollVehicle` warrants only on connect + the
-  drawing/idle cadence + failure-backoff — no "estimate crossed target" warrant. `maybePollVehicles`
+  drawing/idle cadence (the lifecycle wraps it in failure-backoff) — no "estimate crossed target" warrant. `maybePollVehicles`
   (`src/core/lifecycle.ts`) drives it.
 - **Fix idea:** a ONE-SHOT confirmation poll when the estimate first crosses the target this session
   (debounced, reset on unplug — same demand-driven pattern as the connect poll). Bonus: self-corrects an
@@ -41,63 +42,11 @@ Each entry: **Symptom** (what was seen) · **Evidence** · **Where** · **Root c
 
 ---
 
-## 2026-07-14 — UI derives the charge "plan" on the frontend
-
-### 1. Charger chart computes the "cheap window" client-side, deadline-unaware  ·  severity: medium
-
-- **Symptom:** the charger-detail chart _"Next 24 hours · price & plan"_ shades a "cheap window" that
-  ignores the ready-by. With target **75% by 07:00**, it shaded the genuinely-cheapest block at **midday
-  (~11–14)** — hours the car can't use before an 07:00 deadline. It's labelled "plan" but shows no actual
-  backend plan (just a price curve + a client-side cheapest-hours guess + the ready-by marker).
-- **Evidence:** live prices min `0.674` / max `2.433` kr/kWh matched the chart's `0.67`/`2.43` (so the
-  _price_ data is correct), but the cheapest slots (11:45–14:30) are **after** the 07:00 ready-by, while the
-  backend was correctly `shouldChargeNow:false`, waiting for the cheapest pre-07:00 slots. The chart
-  contradicts what the backend will actually do.
-- **Where:** `src/ui2/src/components/charger/Timeline24h.tsx` calls `cheapWindows(prices)` from
-  `src/ui2/src/lib/mock/prices.ts` — a naive "cheapest ~35% of prices" threshold
-  (`threshold = prices.sorted[floor(len*0.35)]`) that takes **only prices** (no target, no deadline, nothing
-  from the planner). Prices are also downsampled to 24 **clock-hour** buckets in
-  `src/ui2/src/lib/live/map.ts` (`new Array<number>(24)`), so the axis is a "today 00–24" view, not the
-  titled "next 24 h".
-- **Root cause:** the frontend **recomputes charging intent** instead of deriving it from the backend. The
-  planner (`src/core/planner.ts`) already computes the deadline-constrained schedule every tick (cheapest
-  slots within `[now, readyBy]` that add the required kWh) — it just isn't exposed over the API, so the UI
-  fills the gap by guessing from prices.
-- **Fix idea:** (1) **Backend** — expose the planner's schedule for a loadpoint, e.g.
-  `GET /api/loadpoints/:name/plan` → the selected charge slots over the window + the price series +
-  ready-by. (2) **Frontend** — `Timeline24h` renders _that_ (selected slots + prices + ready-by marker);
-  delete the `cheapWindows` / `mock/prices` client-side computation, and make the window a true
-  next-24h-from-now. Principle (owner's call, 2026-07-14): **everything is derived from the backend — no
-  price/plan logic on the client.**
-- **Severity:** medium — display-only. The backend charges correctly; the chart just misleads.
-- **Resolved (2026-07-16, `feat/ocpp-zaptec-charging`):** the backend now exposes the planner's real
-  forward schedule via `GET /api/loadpoints/:name/plan` — the tick stores the schedule it already computes
-  (`state.plannedSlots`, from `decideShouldCharge`), and `buildPlanSeries` (`src/core/planner.ts`) merges it
-  with a 24 h price fetch. `Timeline24h.tsx` renders those backend slots on a true rolling now→now+24 h axis;
-  the client-side `cheapWindows` guess is deleted from the live path (demo mode synthesizes its own,
-  deadline-aware, slots). The shaded charge window is now the cheapest hours BEFORE the ready-by, matching
-  `resolve.shouldChargeNow`.
-
----
-
 ## 2026-07-08 — live session (WiFi switch, charger reboot, stale Skoda)
 
 Context: the laptop was briefly on the wrong WiFi. The Zaptec Go (LAN/OCPP) dropped and rebooted; the
 Skoda (MySkoda cloud) polls had been failing for hours. Surfaced a cluster of health/status-reporting,
 data-freshness, and recovery bugs.
-
-### 1. False "charging continues" banner when the charger itself is down  ·  severity: high
-- **Symptom:** UI showed *"Something's degraded — charging continues."* while the OCPP charger was **not
-  connected**. As the user put it: "that's just wrong" — charging can't continue if the charger is offline.
-- **Where:** `src/ui2/src/routes/index.tsx:17,31` — `degraded = moduleHealth.filter(m => m.status !== "ok")`
-  and a hardcoded string `"Something's degraded — charging continues."` shown for **any** non-ok module.
-- **Root cause:** the banner conflates two very different degradations. OSC's design is that degradation of
-  **resolver inputs** (tariff/meter/vehicle → the energy/price/current fallback ladders) means charging
-  continues on a fallback — true. But degradation of the **charger/OCPP control path** means charging
-  **cannot** happen. The banner assumes the former for everything.
-- **Fix idea:** make the message conditional on *which* module is degraded. Charger/OCPP `unavailable` →
-  "Charging stopped — charger offline." A data-source (tariff/meter/vehicle) degraded → "Charging continues
-  on a fallback." Possibly derive a single "is charging actually possible right now" signal on the backend.
 
 ### 2. Module health is not liveness/accuracy-aware  ·  severity: high
 - **Symptom:** `GET /api/health` reported `garage: ok` and `enyaq: ok` in states where that was misleading —
@@ -109,17 +58,10 @@ data-freshness, and recovery bugs.
 - **Root cause:** health is a coarse per-module ok/degraded/unavailable that isn't tied to data freshness or
   connector/session state.
 - **Fix idea:** make `health()` staleness-aware per module (esp. vehicle — mirror the meter reader's
-  `staleAfterSec`), and have the charger health reflect WS-heartbeat recency + connector state. Feeds #1/#3.
-
-### 3. Settings → System status page doesn't reflect actual status  ·  severity: med
-- **Symptom:** the status page in UI settings didn't reflect the real module status.
-- **Where:** `src/ui2/src/routes/settings.system.tsx` renders `store.moduleHealth`; refreshed only by a poll
-  in `src/ui2/src/lib/live/useLiveSync.ts:276` (`setInterval(getHealth, HEALTH_POLL_MS)`), errors swallowed
-  (`.catch(() => {})`, line ~140). **No `health.changed` SSE event exists.**
-- **Root cause:** health is poll-only (lags the interval; a failed poll silently keeps stale values) and the
-  page shows whatever the last poll returned. Compounded by #2 (the underlying values are themselves coarse).
-- **Fix idea:** add a `health.changed` SSE event (emit on transitions) so status is live; surface poll
-  failures instead of swallowing; verify the page renders per-module health clearly (incl. charger offline).
+  `staleAfterSec`), and have the charger health reflect WS-heartbeat recency + connector state.
+- **Status:** vehicle health is now failure/staleness-aware (`sourceHealth`), charger health tracks the
+  OCPP connection, and every transition emits `health.changed` (SSE + MQTT). Remaining: a Nord Pool
+  tariff caches its health until its next fetch attempt, so the 15 s sweep can't see it go stale.
 
 ### 4. Skoda/vehicle does not auto-recover from transient API failures  ·  severity: high
 - **Symptom:** the vehicle showed as disconnected/stale and never recovered on its own; only a manual force
@@ -172,23 +114,9 @@ data-freshness, and recovery bugs.
   recover a `chargeMode:OFF`/`SuspendedEV` car without manual scripting or a replug; (b) an auto-recovery that,
   on `vehicle.pluggedIn && connector Available/SuspendedEV && drawing 0 A`, runs Hard-reset→start-charge;
   (c) the existing resume-nudge (RemoteStop+Start) did **not** cover this state — extend/verify it.
-
-### 8. Tariff is empty → "Next 24 hours · price & plan" blank, smart charging degraded  ·  severity: high (for tomorrow)
-- **Symptom:** the 24-hour price & plan view is empty; resolver on `price: "historical-avg"` (degraded).
-- **Evidence (confirmed):** `GET /api/tariffs/home/prices` returns **0 slots for now→+24 h**, and only **2
-  stale slots total** in −24 h→+36 h (both `2026-07-07T21:30–22:00Z`, ~a day old). **No tariff/price/fetch
-  log lines** in the last 250 debug entries — the provider isn't fetching (or isn't logging that it tries).
-  Meanwhile `GET /api/health` reports the tariff (`home`) as **`ok`** despite having no data (health-accuracy,
-  ties to #2).
-- **Root cause (to confirm):** the elprisetjustnu (SE4) fetch isn't populating `tariff_slots` — likely failed
-  during the no-internet window and hasn't retried (no visible retry/backoff, same shape as #4), and possibly
-  the fetch cadence/schedule doesn't re-attempt soon after connectivity returns. Not a ui2 issue (the API
-  genuinely has no data).
-- **Fix idea:** investigate the tariff module's fetch schedule + error handling (retry/backoff after a failed
-  fetch; a fetch on connectivity-regain / boot); make tariff `health()` reflect "no usable price data" instead
-  of `ok`; ui2 should show "prices unavailable" rather than a blank. Consider a `POST /api/tariffs/:name/refresh`
-  (like the vehicle's) for a manual kick.
-- **Tonight:** does **not** block the charge — fast mode ignores prices. Matters for tomorrow's *smart* charging.
+- **Status:** (a) shipped — `startCharging?()` / `stopCharging?()` on the Vehicle SDK; (b)+(c) became the
+  SessionReconciler's recovery ladder (`src/core/session-reconciler.ts`: RemoteStart → resume → car-side
+  wake → clear-profile → reset, each guarded by grace / cooldown / max-attempts).
 
 ### 9. Logs viewer default level (warn) hides routine activity  ·  severity: low (UX)
 - **Symptom:** "the Skoda polls don't show up in the logs" — because successful polls (`skoda refresh ok`)
@@ -232,7 +160,8 @@ data-freshness, and recovery bugs.
 ---
 
 ### Cross-cutting theme
-Several of these (#1, #2, #3, #4) are one underlying gap: **OSC's health/status reporting is coarse and not
-freshness/liveness-aware**, so the UI can't honestly say "is charging actually happening / is each module's
-data fresh." A single accurate "charging possible + why/why-not" signal on the backend, plus staleness-aware
-per-module health and a `health.changed` SSE event, would fix the reporting layer that #1–#3 all sit on.
+The 2026-07-08 batch exposed one underlying gap: **health/status reporting that was not freshness/liveness
+aware**. Most of it has since landed — staleness-aware vehicle health, a charger-aware home banner, and a
+`health.changed` SSE event mirrored to MQTT. What remains is listed above (#2 for the tariff, #5 for the
+UI's SoC-only vehicle updates) plus a single backend "charging possible + why/why-not" signal, which the
+`resolve` payload on each loadpoint now approximates.

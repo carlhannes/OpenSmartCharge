@@ -25,11 +25,11 @@
 
 ## Data flow (smart mode, healthy)
 
-1. **Config loaded** — YAML parsed, zod-validated, modules instantiated from registry
+1. **Config loaded** — the DB config store (schema defaults ⊕ overrides) is read and zod-validated; on a fresh database `osc.yaml` is imported into it once first. Modules are instantiated from the registry.
 2. **Loadpoints created** — one per `loadpoints[]` entry, mode restored from SQLite
 3. **Tariff module** — fetches day-ahead prices (elprisetjustnu for SE1–SE4, Elering for EE/FI/LV/LT), stores in SQLite; exposes `prices(from, to)`
 4. **Control tick** (every `controlIntervalSec`, default 30 s) — one damped loop drives everything. For each smart-mode loadpoint it resolves the governing recurring **plan** (else the ad-hoc target) through a single **target resolver** (`resolveTarget` in `smart-charging/energy.ts` — owns unit conversion incl. `km`→% via the car's range/SoC ratio, the energy degradation ladder, and the display `resolvedSoc`) into `requiredKWh` + `readyBy`, then the price and current ladders, turns that into a 15-min schedule, and commands the charger through a deadband. A **minSoc** floor overrides the price wait and force-charges when the SoC is critically low. Loadpoints sharing a balancer coordinate through `allocate()` (headroom = `mainBreakerA − max(housePhaseCurrents) + sum(chargerCurrents)`); a balancer-less loadpoint is its own circuit and takes the resolved current budget directly. The balancer is a per-tick allocator, not the loop driver — see [AGENTS.md](../AGENTS.md) → "Smart charging" and "Modules vs. the lifecycle".
-5. **Vehicle polling** — demand-driven and **lifecycle-owned**: the module exposes `refresh()` (one fetch, no timer); the lifecycle polls it on charger-connect and, while charging, at most every `vehiclePollIntervalSec` (default 30 min) — never while idle. SoC is cached to SQLite and estimated forward between polls at the efficiency **observed this session** (else the configured constant). SoC/range/capacity are treated as **capabilities**: the vehicle module supplies them today, but the resolver takes plain data, so a charger reporting SoC over the Type-2 wire could feed the same path later — and a loadpoint only offers the target units its data can back (`availableTargetUnits`).
+5. **Vehicle polling** — demand-driven and **lifecycle-owned**: the module exposes `refresh()` (one fetch, no timer); the lifecycle polls it on charger-connect, then every `vehiclePollIntervalSec` (default 15 min) while drawing and the faster `vehicleIdlePollIntervalSec` while plugged-but-idle in the day window — never while unplugged. SoC is cached to SQLite and estimated forward between polls at the efficiency **observed this session** (else the configured constant). SoC/range/capacity are treated as **capabilities**: the vehicle module supplies them today, but the resolver takes plain data, so a charger reporting SoC over the Type-2 wire could feed the same path later — and a loadpoint only offers the target units its data can back (`availableTargetUnits`).
 6. **REST / MQTT** — reflect current loadpoint state to consumers
 7. **Web UI** — subscribes to SSE, renders live state
 
@@ -37,7 +37,7 @@
 
 ### `src/core/config.ts`
 
-The zod schema + the `Config` type. `configSchema.parse({})` is the all-defaults baseline (the effective-config base). `readConfigDocument()` reads `osc.yaml` as a raw import document (no defaults applied); `loadConfig()` reads + validates it. `osc.yaml` is **not** the live config — see [Configuration model](#configuration-model).
+The zod schema + the `Config` type. `configSchema.parse({})` is the all-defaults baseline (the effective-config base). `readConfigDocument()` reads `osc.yaml` as a raw import document (no defaults applied); validation happens in `importConfig` / `getEffectiveConfig` against the same schema. `osc.yaml` is **not** the live config — see [Configuration model](#configuration-model).
 
 ### `src/core/config-overrides.ts`
 
@@ -53,7 +53,7 @@ The reconcile seam: after an API write persists an override, rebuilds the affect
 
 ### `src/core/registry.ts`
 
-A typed module registry. Modules call `registerCharger('ocpp16', factory)` at import time. The core looks up the right factory when instantiating configured modules.
+A thin factory layer over the SDK registry (`src/sdk/registry-api.ts`). Modules call `registerCharger({ type, create })` at import time; `createCharger(type, cfg, ctx)` and friends look the factory up and throw on an unknown type.
 
 ### `src/core/plugin-loader.ts`
 
@@ -65,7 +65,7 @@ A typed `EventEmitter` wrapper. Used for internal pub/sub (e.g., "loadpoint mode
 
 ### `src/core/db.ts`
 
-Opens (or creates) `./data/osc.db` via `node:sqlite` (Node.js v22.5+ built-in). Runs migrations on startup. Exports typed query helpers — no raw SQL outside `db.ts`.
+Opens (or creates) `./data/osc.db` via `node:sqlite` (Node.js v22.5+ built-in) and runs the additive migrations on startup. Query helpers live next to the feature that owns the table (`loadpoint.ts`, `plans.ts`, `settings.ts`, `log-store.ts`, the OCPP module's `persistence.ts`, …).
 
 ### `src/core/loadpoint.ts`
 
@@ -81,11 +81,11 @@ Computes estimated SoC from `lastKnownSoc + (sessionKWhDelivered × chargingEffi
 
 ### `src/core/health.ts`
 
-Polls all registered modules' `health()` methods. Publishes to `osc/health/<module>` on MQTT and serves `GET /api/health`.
+A passive map of per-module health (`createHealthMap` / `updateHealth` / `getHealthSummary`). The lifecycle refreshes it on module events and in a 15 s sweep and emits `health.changed` on every transition; the API serves it on `GET /api/health` and the MQTT bridge mirrors it to `osc/health/<module>`.
 
 ### `src/core/lifecycle.ts`
 
-Entry point. Orchestrates: load config → open DB → load plugins → instantiate modules → start server → start balancer loops → register SIGINT/SIGTERM handlers for graceful shutdown.
+Entry point. Orchestrates: materialize/load config → open DB → load plugins → instantiate modules → start the HTTP, OCPP and MQTT servers → run the single control loop (one damped tick per `controlIntervalSec`) and the health sweep → register SIGINT/SIGTERM handlers for graceful shutdown.
 
 ## Module boundaries
 
@@ -96,9 +96,10 @@ interface ModuleCtx {
   db: DatabaseSync
   events: EventEmitter
   log: Logger
-  fetch: typeof globalThis.fetch // jittered 0–120 s — PUBLIC scheduled data only (tariffs)
 }
 ```
+
+Modules make HTTP calls with the plain global `fetch` plus a per-request timeout. Jitter, backoff and cadence are scheduling concerns that live where the schedule is decided (the lifecycle; the shared Nord Pool factory for the publish-window refetch), never inside a request primitive.
 
 There is no `ctx.mqtt`: a module that talks MQTT (a meter reader, the outbound bridge) carries its **own** `broker` in its config and opens its own connection — reading a meter and OSC publishing are fully independent.
 
@@ -122,6 +123,10 @@ SQLite at `./data/osc.db`. Tables:
 - `meter_values` — raw meter value samples per session
 - `tariff_slots` — cached price slots per (zone, slotStart)
 - `vehicle_cache` — per-vehicle: `soc`, `battery_capacity_kwh`, `range_km`, `is_charging`, `target_soc`, `plugged_in`, `climate_active`, `fetched_at`
+- `household_load_hourly` — hourly MAX of the household phase current per site-local day+hour; feeds the historical current rung (`src/core/smart-charging/rollup.ts`)
+- `logs` — the runtime log store behind the Logs viewer (`src/core/log-store.ts`); rotated by age
+- `module_kv` — a shared key/value table for small durable module state (e.g. the Škoda refresh token)
+- `ocpp_tx_counter` — the OCPP transaction-id sequence
 
 Migrations run automatically on startup (additive only — no destructive migrations).
 

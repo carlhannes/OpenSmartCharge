@@ -10,8 +10,9 @@ const ALL_GEN =
   'connectivityGenerations=MOD1&connectivityGenerations=MOD2&connectivityGenerations=MOD3&connectivityGenerations=MOD4'
 
 // Shared authenticated GET. Surfaces rate-limiting (429/430) as a distinct, legible error so a
-// hard limit is obvious in logs. (Our cadence — poll on connect + ~30 min while charging, never
-// idle — keeps us far under the limits, but a 429 should still be unmistakable.)
+// hard limit is obvious in logs. (Our cadence — on connect, then every 15 min while drawing / 10 min
+// while idle by day, never while unplugged — keeps us far under the limits, but a 429 should still be
+// unmistakable.)
 async function skodaGet<T>(
   path: string,
   accessToken: string,

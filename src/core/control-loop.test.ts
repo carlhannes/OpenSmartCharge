@@ -138,7 +138,9 @@ test('bareCircuitAmps: disabled/smart-not-now → 0; smart-now/fast → budget; 
   expect(bareCircuitAmps('fast', undefined, 10, true, false)).toBe(10)
 })
 
-const D = (over: Partial<LpDecision> & Pick<LpDecision, 'loadpointName' | 'mode' | 'budgetA'>): LpDecision => ({
+const D = (
+  over: Partial<LpDecision> & Pick<LpDecision, 'loadpointName' | 'mode' | 'budgetA'>,
+): LpDecision => ({
   targetReached: false,
   pauseOnTarget: true,
   ...over,

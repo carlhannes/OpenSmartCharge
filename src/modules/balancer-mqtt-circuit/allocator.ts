@@ -1,6 +1,6 @@
 import type { LoadpointSnapshot } from '../../sdk/balancer.js'
+import { IEC_MIN_CURRENT_A } from '../../sdk/electrical.js'
 
-const OCPP_MIN_A = 6 // per-loadpoint minimum below which we round to 0
 const HYSTERESIS_A = 1 // dead-band: ignore allocation changes within ±1A of last commanded value
 
 /**
@@ -43,7 +43,7 @@ export function allocate(input: { loadpoints: LoadpointSnapshot[]; circuitBudget
     // commanded value, keep the existing value to avoid micro-oscillation on small load wobble.
     const prev = lp.commandedA
     const stable = prev !== undefined && Math.abs(give - prev) <= HYSTERESIS_A ? prev : give
-    const final = stable < OCPP_MIN_A ? 0 : stable
+    const final = stable < IEC_MIN_CURRENT_A ? 0 : stable
     result.set(lp.id, final)
     remaining -= final
   }
@@ -55,7 +55,7 @@ export function allocate(input: { loadpoints: LoadpointSnapshot[]; circuitBudget
       const give = Math.min(share, lp.maxCurrentA)
       const prev = lp.commandedA
       const stable = prev !== undefined && Math.abs(give - prev) <= HYSTERESIS_A ? prev : give
-      result.set(lp.id, stable < OCPP_MIN_A ? 0 : stable)
+      result.set(lp.id, stable < IEC_MIN_CURRENT_A ? 0 : stable)
     }
   }
 

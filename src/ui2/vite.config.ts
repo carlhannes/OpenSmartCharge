@@ -27,7 +27,7 @@ const backend = process.env.OSC_BACKEND ?? "http://localhost:8080";
 export default defineConfig({
   // App version, baked in from the root package.json (see rootPkg) → available as __APP_VERSION__.
   define: { __APP_VERSION__: JSON.stringify(rootPkg.version) },
-  // Fixed port so ui2 coexists with the existing UI (5173) and backend (8080).
+  // Fixed port so the UI dev server never collides with the backend (8080).
   // Proxy /api + /events to the backend (no CORS on the server → same-origin via proxy).
   server: {
     port: 5174,
@@ -39,16 +39,9 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: { "@": resolve(projectDir, "src") },
-    // Prevent duplicate React / Query copies (which crash hooks) across SSR + client.
-    dedupe: [
-      "react",
-      "react-dom",
-      "react/jsx-runtime",
-      "react/jsx-dev-runtime",
-      "@tanstack/react-query",
-      "@tanstack/query-core",
-    ],
+    // `@/*` resolves through tsConfigPaths() below (one source: tsconfig paths).
+    // Prevent duplicate React copies (which crash hooks) across the prerender + client builds.
+    dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime"],
   },
   plugins: [
     tsConfigPaths({ projects: ["./tsconfig.json"] }),

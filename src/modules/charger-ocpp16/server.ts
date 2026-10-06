@@ -20,6 +20,7 @@ interface OcppClient {
   on(event: string, listener: (...args: unknown[]) => void): this
 }
 import type {
+  AuthorizeReq,
   BootNotificationReq,
   StatusNotificationReq,
   MeterValuesReq,
@@ -65,7 +66,6 @@ interface StationState {
   client: OcppClient
   activeTransactionId?: number
   connectorId: number
-  statusCallbacks: Set<StatusCallback>
   autoStartTransaction: boolean
   /** Auto-start fires ONCE per plug-in; reset to false on a genuine Available (unplug). Keeps a full
    *  car that cycles Preparing↔Charging (cable still in) from churning fresh empty transactions. */
@@ -323,7 +323,6 @@ export class OcppServer {
     const state: StationState = {
       client,
       connectorId: 1,
-      statusCallbacks: this.subsFor(stationId), // persistent set — survives reconnects
       autoStartTransaction,
       hasAutoStarted: false, // re-armed each connect; an in-progress tx is guarded by activeTransactionId
       // Rehydrate any in-progress transaction from SQLite: on an OSC restart or a bare WS
@@ -411,7 +410,7 @@ export class OcppServer {
     }))
 
     client.handle('Authorize', async ({ params }) => {
-      const p = params as { idTag: string }
+      const p = params as AuthorizeReq
       this.log.debug({ stationId, idTag: p.idTag }, 'Authorize accepted')
       return { idTagInfo: { status: 'Accepted' } }
     })

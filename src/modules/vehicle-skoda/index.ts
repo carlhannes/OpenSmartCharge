@@ -1,6 +1,6 @@
 import { registerVehicle } from '../../sdk/registry-api.js'
 import type { VehicleCapabilities, VehicleData } from '../../sdk/vehicle.js'
-import { sourceHealth } from '../../core/source-reconciler.js'
+import { sourceHealth } from '../../sdk/source-reconciler.js'
 import { parseConfig } from './types.js'
 import { upsertVehicleCache, loadVehicleCache } from './persistence.js'
 import {
@@ -62,9 +62,6 @@ registerVehicle({
       try {
         const accessToken = await auth.token()
 
-        // Vehicle reads use the global `fetch`, NOT ctx.fetch: this is a demand-driven, time-sensitive
-        // poll (triggered on charger-connect / during charging), so it must return promptly. ctx.fetch's
-        // 0–120 s anti-thundering-herd jitter is only for public, non-urgent scheduled data (tariffs).
         // Charging status is the primary read; air-conditioning (plug + climate) is best-effort.
         const [charging, airCon] = await Promise.all([
           getChargingStatus(cfg.vin, accessToken, fetch),

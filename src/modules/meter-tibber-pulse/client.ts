@@ -1,7 +1,7 @@
-import mqtt, { type MqttClient } from 'mqtt'
+import type { MqttClient } from 'mqtt'
 import type { Logger } from 'pino'
-import type { Broker } from '../../sdk/broker.js'
-import type { MeterSnapshot } from '../../sdk/meter-reader.js'
+import { connectBroker, endBroker, type Broker } from '../../sdk/broker.js'
+import { meterHealth, type MeterSnapshot } from '../../sdk/meter-reader.js'
 import type { ModuleHealth } from '../../sdk/types.js'
 import { extractMetrics } from './dsmr.js'
 
@@ -58,23 +58,17 @@ export function createPulseClient(opts: PulseClientOpts): PulseClientHandle {
 
     if (!payload || payload.length === 0) return
 
-    // JSON status frames start with '{'
+    const text = payload.toString('utf8')
+
+    // JSON status frames start with '{' — counted, not parsed further (no DSMR data in them).
     if (payload[0] === 0x7b) {
       try {
-        JSON.parse(payload.toString('utf8'))
+        JSON.parse(text)
         stats.json++
         return
       } catch {
         /* fall through — not valid JSON, treat as text */
       }
-    }
-
-    let text: string
-    try {
-      text = payload.toString('utf8')
-    } catch {
-      stats.binary++
-      return
     }
 
     // Require OBIS power marker — must be a DSMR frame
@@ -103,14 +97,7 @@ export function createPulseClient(opts: PulseClientOpts): PulseClientHandle {
 
   return {
     start(): Promise<void> {
-      const c = mqtt.connect({
-        host: opts.broker.host,
-        port: opts.broker.port,
-        username: opts.broker.user,
-        password: opts.broker.password,
-        clientId: `pulse-bridge-${Math.random().toString(16).slice(2, 8)}`,
-        clean: true,
-      })
+      const c = connectBroker(opts.broker, 'pulse-bridge')
       mqttClient = c
 
       c.on('connect', () => {
@@ -137,23 +124,8 @@ export function createPulseClient(opts: PulseClientOpts): PulseClientHandle {
       return Promise.resolve()
     },
 
-    stop(): Promise<void> {
-      return new Promise<void>((resolve) => {
-        if (mqttClient) {
-          mqttClient.end(false, {}, () => resolve())
-        } else {
-          resolve()
-        }
-      })
-    },
-
+    stop: () => endBroker(mqttClient),
     latest: () => latestSnapshot,
-
-    health(): ModuleHealth {
-      if (!latestSnapshot) return 'unavailable'
-      return Date.now() - latestSnapshot.timestamp.getTime() < opts.staleAfterSec * 1000
-        ? 'ok'
-        : 'degraded'
-    },
+    health: () => meterHealth(latestSnapshot, opts.staleAfterSec),
   }
 }

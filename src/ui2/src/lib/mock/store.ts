@@ -10,7 +10,7 @@ export type Mode = "off" | "smart" | "fast";
 // Demo mirror of the backend's GET /api/vehicle-types (which the demo can't fetch — no backend). Live
 // mode replaces this via setVehicleTypes on startup. Kept in step with the skoda/manual descriptors in
 // src/modules/vehicle-*/index.ts — same shape the real endpoint returns, so <VehicleForm> is identical.
-export const DEMO_VEHICLE_TYPES: VehicleTypeDto[] = [
+const DEMO_VEHICLE_TYPES: VehicleTypeDto[] = [
   {
     type: "skoda",
     label: "Škoda / VW group (app login)",
@@ -85,6 +85,9 @@ export interface Plan {
 export interface Charger {
   id: string;
   name: string;
+  // The backend charger's own config name — the key for PUT /api/chargers/:name and for health. It can
+  // differ from `id` (the LOADPOINT name); absent in demo, where the two coincide.
+  chargerName?: string;
   maxAmps: number;
   mode: Mode;
   status: ChargerRuntimeStatus;
@@ -138,7 +141,7 @@ export interface ModuleHealth {
   type?: ModuleType; // category for the status page (derived from /api/site in live mode)
 }
 
-export interface PendingCharger {
+interface PendingCharger {
   id: string;
   stationId: string;
   connectedAt: number;
@@ -147,7 +150,7 @@ export interface PendingCharger {
 export interface Config {
   isConfigured: boolean;
   onboardingStep: number;
-  // Home / installation display name (site.name; shows in backups + Home Assistant). Editable in
+  // Home / installation display name (site.name; shows in backups + the About page). Editable in
   // Settings → House via setSiteName → PUT /api/site {name}.
   homeName?: string;
   region: string;
@@ -158,6 +161,9 @@ export interface Config {
   houseUsageKw: number;
   currencySymbol: string;
   tariffName?: string; // primary tariff name — target for region writes (PUT /api/tariffs/:name)
+  // Primary balancer — the breaker write target (PUT /api/balancers/:name): a balancer circuit sizes
+  // from ITS mainBreakerA, not site.mainBreakerA. Unset = bare site → PUT /api/site.
+  balancerName?: string;
   // Static-fallback margins (from /api/site.smartCharging): night cap = breaker − nightMarginA,
   // day cap = breaker × daytimeFraction; reserveA is headroom off the top. Edited via setSmartCharging.
   nightMarginA?: number;
@@ -245,7 +251,7 @@ interface OscState {
   _tick: () => void;
 }
 
-export interface PowerSample {
+interface PowerSample {
   t: number; // epoch ms
   total: number; // whole-house draw (W)
   ev: number; // car charging (W) — a subset of total

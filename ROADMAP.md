@@ -2,7 +2,7 @@
 
 Each milestone is independently shippable — M0 gives you docs and a typed skeleton; M1 gives you a working OCPP server; M2 adds pricing; and so on. You do not need all milestones for a useful system.
 
-> **Next up:** the [v0.2.0 UX vision & backend roadmap](docs/vision-0.2.0.md) — a mobile-first redesign (onboarding, recurring plans, km/% targets) and the backend work (config-as-data, charger pairing) it requires.
+> **Status:** the [v0.2.0 UX vision](docs/vision-0.2.0.md) has shipped (0.2.x). What is left is listed under "Remaining / nice-to-have" and "Charge-plan UX — future" at the end of this file.
 
 ## Milestone 0 — Foundation (shipped)
 
@@ -53,7 +53,7 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 - [x] Health: `ok` → `degraded` (past publish window, no tomorrow data) → `unavailable` (no future slots cached)
 - [x] `GET /api/tariffs/:name/prices?from=&to=` endpoint — returns `TariffSlot[]` in EUR/kWh
 - [x] `osc/tariffs/<name>/now` MQTT (retained) — re-published on new data and at the top of each hour
-- [x] `ctx.fetch` in `ModuleCtx` — drop-in `fetch()` replacement with 0–120 s jitter for thundering-herd prevention
+- [x] ~~`ctx.fetch` in `ModuleCtx` — drop-in `fetch()` replacement with 0–120 s jitter~~ — **removed in the 0.2.x cleanup**: a jittered request primitive silently broke every caller's timeout signal; the herd-spreading jitter now lives in the Nord Pool fetch *schedule* (`src/sdk/nordpool-tariff.ts`)
 
 **Verification:**
 1. Normal fetch: prices for today appear in `/api/tariffs/home/prices`.
@@ -137,7 +137,7 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 
 **Goal:** Full control UI served by the backend (React 19 + Vite).
 
-- [x] `src/ui/` — Vite-bundled React app, served as static files by the backend in production
+- [x] `src/ui/` — Vite-bundled React app, served as static files by the backend in production *(replaced by `src/ui2/` in 0.2.x)*
 - [x] Live loadpoint cards (SSE) with mode selector, SoC/time target editor
 - [x] Day-ahead price chart per tariff zone (Recharts BarChart, current slot highlighted)
 - [x] Balancer allocation view per circuit (freeAmps + per-loadpoint bar chart)
@@ -145,7 +145,7 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 - [x] Module health panel with color-coded status; Nav health badge
 - [x] Send OCPP commands (RemoteStart/Stop, SetChargingProfile one-shot manual override)
 - [x] `npm run dev:all` — single command starts backend + Vite HMR with prefixed logs
-- [x] Playwright smoke tests for all 6 pages
+- [x] Playwright smoke tests for all 6 pages *(removed together with the old UI)*
 
 ---
 
@@ -222,14 +222,14 @@ Smart mode now works with **any subset of dependencies degraded**, via pure reso
   `site.timezone`) drives planning, while tariff providers keep the Nord Pool market tz.
 - [x] **minSoc safety floor**: per-loadpoint minimum SoC; smart mode force-charges below it (respects Off + warns).
 
-Unblocks ui2's plan UI. Remaining ui2-side wiring (that agent): `mapPlan`, plan commands, hydrate `plans`
-in `useLiveSync`, subscribe `loadpoint.plans` + `settings.changed`, setup timezone auto-detect, a minSoc control.
+Unblocks ui2's plan UI — the ui2-side wiring (`mapPlan`, plan commands, `plans` hydration, the
+`loadpoint.plans` + `settings.changed` subscriptions, timezone auto-detect, a minSoc control) shipped in 0.2.x.
 
 ### Remaining / nice-to-have
 
-- [ ] Exclude `*.test.ts` + `mock-charger.ts` from the production build (they currently compile into `dist/` — harmless dead weight). Add to `tsconfig.json`/build config.
+- [x] Exclude `*.test.ts` + `mock-charger.ts` from the production build — done: `tsconfig.build.json` excludes them.
 - [ ] Unify the typed test **mock charger** (`src/modules/charger-ocpp16/mock-charger.ts`) with the `.mjs` sim (`scripts/lib/fake-charger.mjs`) to remove transport duplication.
-- [ ] `powerW` is on `ChargerStatus` but not surfaced on `LoadpointState`/UI — add a field + bridge if a power readout is wanted.
+- [x] `powerW` is on `ChargerStatus` but not surfaced on `LoadpointState`/UI — done: `LoadpointState.powerW` feeds the Home power chart.
 - [x] Surface each loadpoint's resolver `sources` (energy/price/current rung) for UI observability — **done in 0.2.2**: `loadpoint.resolve` SSE + `resolve` on the site/loadpoint DTO, shown as a plain-language "why" badge on the charger detail.
 - [ ] **Charger delete + pending-claim from Settings in live mode** (0.2.2 deferral). Charger rename + max-amps are live-editable; `DELETE /api/chargers/:name` (409s on an active session) and the pending-claim wizard exist but are only wired in *demo* on the Settings page. Deleting a charger is a destructive config mutation, and claiming a new one already lives in onboarding — so wire both into Settings → Chargers with a live-safe confirm (no optimistic undo, since a live delete isn't trivially reversible).
 

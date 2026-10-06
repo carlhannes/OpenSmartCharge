@@ -195,10 +195,14 @@ export async function setRegion(zone: string): Promise<void> {
   if (isLive() && tariffName) await api.setTariffZone(tariffName, zone);
 }
 
-/** Main breaker (site-level): optimistic; PUT /api/site when live. */
+/** Main breaker: optimistic; live → the balancer's mainBreakerA when the site has one (a balancer
+ *  circuit sizes from THAT value, not site.mainBreakerA), else site.mainBreakerA (bare loadpoints). */
 export async function setBreaker(amps: number): Promise<void> {
-  useOsc.getState().setConfig({ breakerAmps: amps });
-  if (isLive()) await api.setSiteBreaker(amps);
+  const { setConfig, config } = useOsc.getState();
+  setConfig({ breakerAmps: amps });
+  if (!isLive()) return;
+  if (config.balancerName) await api.updateBalancer(config.balancerName, { mainBreakerA: amps });
+  else await api.setSiteBreaker(amps);
 }
 
 /** Home / installation name (site-level): optimistic local; PUT /api/site {name} when live. */
@@ -218,10 +222,15 @@ export async function setSmartCharging(patch: {
   if (isLive()) await api.updateSmartCharging(patch);
 }
 
-/** Charger max current: optimistic; PUT /api/chargers/:name when live (charger id == charger name). */
+// The UI charger id is the LOADPOINT name; PUT /api/chargers/:name wants the charger's config name.
+function chargerNameFor(chargerId: string): string {
+  return useOsc.getState().chargers.find((c) => c.id === chargerId)?.chargerName ?? chargerId;
+}
+
+/** Charger max current: optimistic; PUT /api/chargers/:name when live. */
 export async function setChargerMaxAmps(chargerId: string, maxA: number): Promise<void> {
   useOsc.getState().setChargerMaxAmps(chargerId, maxA);
-  if (isLive()) await api.updateChargerApi(chargerId, { maxA });
+  if (isLive()) await api.updateChargerApi(chargerNameFor(chargerId), { maxA });
 }
 
 /** Per-loadpoint "auto-revert Fast → Smart on unplug": optimistic patch; PUT /api/loadpoints/:name
@@ -234,7 +243,7 @@ export async function setAutoRevert(chargerId: string, enabled: boolean): Promis
 /** Charger display label (rename): optimistic; PUT /api/chargers/:name {label} when live. */
 export async function renameCharger(chargerId: string, label: string): Promise<void> {
   useOsc.getState().renameCharger(chargerId, label);
-  if (isLive()) await api.updateChargerApi(chargerId, { label });
+  if (isLive()) await api.updateChargerApi(chargerNameFor(chargerId), { label });
 }
 
 /** Claim a pending OCPP station as a charger (+ its loadpoint). Live: POST /api/chargers (the

@@ -33,9 +33,7 @@ test('multi-candidate: a single positive app-claim identifies the car', () => {
 })
 
 test('multi-candidate: no claim, no override → guest (never guess among several)', () => {
-  expect(
-    resolveActiveVehicle({ ...base, candidates: ['enyaq', 'vw'], readings: R({}) }),
-  ).toBeNull()
+  expect(resolveActiveVehicle({ ...base, candidates: ['enyaq', 'vw'], readings: R({}) })).toBeNull()
 })
 
 test('a single positive claim SUPERSEDES a sticky override (auto-detected another car)', () => {
@@ -60,7 +58,9 @@ test('sticky override honored when there is no positive claim', () => {
     }),
   ).toBe('opel')
   // forced Guest → null even with unknown plug state
-  expect(resolveActiveVehicle({ ...base, override: GUEST, readings: R({ enyaq: undefined }) })).toBeNull()
+  expect(
+    resolveActiveVehicle({ ...base, override: GUEST, readings: R({ enyaq: undefined }) }),
+  ).toBeNull()
   // override naming a non-candidate → guest (defensive)
   expect(resolveActiveVehicle({ ...base, override: 'ghost' })).toBeNull()
 })
@@ -75,10 +75,20 @@ test('ambiguous (≥2 claim): keep the latched claimant, else guest', () => {
 test('multi-candidate latch holds until the latched car positively leaves', () => {
   const cand = ['enyaq', 'vw']
   expect(
-    resolveActiveVehicle({ ...base, candidates: cand, readings: R({ enyaq: undefined }), latched: 'enyaq' }),
+    resolveActiveVehicle({
+      ...base,
+      candidates: cand,
+      readings: R({ enyaq: undefined }),
+      latched: 'enyaq',
+    }),
   ).toBe('enyaq')
   expect(
-    resolveActiveVehicle({ ...base, candidates: cand, readings: R({ enyaq: false }), latched: 'enyaq' }),
+    resolveActiveVehicle({
+      ...base,
+      candidates: cand,
+      readings: R({ enyaq: false }),
+      latched: 'enyaq',
+    }),
   ).toBeNull()
 })
 

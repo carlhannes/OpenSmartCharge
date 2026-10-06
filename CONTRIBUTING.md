@@ -17,8 +17,9 @@ Before opening a pull request for anything else:
 3. **Follow the conventions.** See [AGENTS.md](AGENTS.md) for the full list — the short version: functional TypeScript (no classes), no speculative abstractions, no early optimization.
 4. **Run the tools before pushing:**
    ```bash
-   npm run format && npm run typecheck && npm run lint
+   npm run format && npm run typecheck && npm run lint && npm test
    ```
+   (These cover the UI in `src/ui2` as well — install its dependencies once with `npm --prefix src/ui2 install`.)
 5. **Update docs** if your change affects any documented behavior.
 
 ## Bug reports

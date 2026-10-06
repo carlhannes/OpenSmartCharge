@@ -26,7 +26,7 @@ import { getEffectiveConfig } from './config-overrides.js'
 // observed state is re-reported by hardware on reconnect (see AGENTS.md → declarative modules).
 
 export interface ReconcileDeps {
-  /** Parsed osc.yaml (the seed), for recomputing the effective config on each change. */
+  /** The defaults base (`configSchema.parse({})`), for recomputing the effective config on each change. */
   base: Config
   /** The live effective config — mutated IN PLACE so all by-reference holders see changes. */
   config: Config
@@ -105,7 +105,7 @@ export function createReconciler(d: ReconcileDeps): Reconciler {
       syncEntity('balancers', cfg)
       d.balancers.set(name, b)
       updateHealth(d.health, name, b.health())
-      if (old) await old.stop() // stop() unwires its meter listener + ends its MQTT client
+      if (old) await old.stop() // a pure splitter holds no connections — stop() is the shared convention
       d.events.emit('config.changed', { kind: 'balancer', name })
     },
 

@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest'
 import { estimateSoc, estimateSocSinceAnchor, observedEfficiency } from './estimator.js'
-import { DEFAULT_CHARGING_EFFICIENCY } from './electrical.js'
+import { DEFAULT_CHARGING_EFFICIENCY } from '../sdk/electrical.js'
 
 // estimateSoc is the Tier-2 degradation path: it estimates SoC from delivered
 // session energy when the live vehicle API is unavailable.

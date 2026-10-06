@@ -17,3 +17,9 @@ export const DUTY_CYCLE_FALLBACK = 0.4
 export function chargeRateKW(maxCurrentA: number, phases: number): number {
   return (maxCurrentA * phases * GRID_VOLTAGE_V) / 1000
 }
+
+/**
+ * IEC 61851 minimum charge current (A). A budget or allocation below this resolves to 0 — never
+ * rounded up — because offering 6 A when only 5 A is safe exceeds the budget and risks the breaker.
+ */
+export const IEC_MIN_CURRENT_A = 6

@@ -5,6 +5,9 @@
 // their MARKET timezone (Europe/Stockholm) — publish windows + per-day price files follow the
 // price market, not where the user lives.
 
+/** Wall-clock "HH:MM" as users type it (targets, plan ready-by) — shared by config + API validation. */
+export const HHMM_RE = /^\d{2}:\d{2}$/
+
 export interface LocalParts {
   year: number
   month: number
@@ -67,11 +70,15 @@ export function localDateKey(d: Date, tz: string): string {
 }
 
 /**
- * True when the local hour in `tz` is within the night window [startHour, endHour).
- * A window with startHour > endHour wraps midnight, e.g. isNight(d, 23, 5, tz) covers
- * 23:00–04:59 local.
+ * True when the local hour in `tz` is within [startHour, endHour). A window with startHour > endHour
+ * wraps midnight: (d, 23, 5, tz) is the 23:00–04:59 night window; (d, 6, 22, tz) a daytime window.
  */
-export function isNight(d: Date, startHour: number, endHour: number, tz: string): boolean {
+export function inLocalHourWindow(
+  d: Date,
+  startHour: number,
+  endHour: number,
+  tz: string,
+): boolean {
   const h = localHour(d, tz)
   return startHour <= endHour ? h >= startHour && h < endHour : h >= startHour || h < endHour
 }
@@ -101,9 +108,10 @@ export function msUntilLocalTime(now: Date, hour: number, minute: number, tz: st
   return target.getTime() + 24 * 3600_000 - now.getTime()
 }
 
-/** Ms until 00:00 local (`tz`) on the next day. */
-export function msUntilLocalMidnight(now: Date, tz: string): number {
-  return msUntilLocalTime(now, 0, 0, tz)
+/** The next occurrence of "HH:MM" in `tz` — today if still ahead, else tomorrow — as an instant. */
+export function nextLocalTime(hhmm: string, now: Date, tz: string): Date {
+  const [h, m] = hhmm.split(':').map(Number)
+  return new Date(now.getTime() + msUntilLocalTime(now, h, m, tz))
 }
 
 /** True if `tz` is an IANA timezone the runtime accepts (used to validate config/API input). */

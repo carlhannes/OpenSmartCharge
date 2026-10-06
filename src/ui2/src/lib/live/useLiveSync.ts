@@ -13,6 +13,7 @@ import {
   mapTransactions,
   deriveStatus,
   currencySymbol,
+  mapMode,
 } from "./map";
 
 const HEALTH_POLL_MS = 15_000;
@@ -85,6 +86,7 @@ async function rehydrateSite(
       ...(site.site.name ? { homeName: site.site.name } : {}),
       ...(zone ? { region: zone } : {}),
       ...(tariffName ? { tariffName } : {}),
+      balancerName: site.balancers[0]?.name,
       ...(siteBreaker != null ? { breakerAmps: siteBreaker } : {}),
       ...(sitePhases != null ? { phases: sitePhases } : {}),
       // Meter source reflects the actual reader type — NOT "static" just because there's no balancer.
@@ -310,7 +312,7 @@ export function useLiveSync() {
         }),
         subscribe("loadpoint.mode", (d) => {
           const e = d as { name: string; mode: api.ChargeMode };
-          const mode: Charger["mode"] = e.mode === "disabled" ? "off" : e.mode;
+          const mode = mapMode(e.mode);
           const cur = useOsc.getState().chargers.find((c) => c.id === e.name);
           const patch: Partial<Charger> = { mode };
           // Recompute status from the current raw inputs so a mode change doesn't clobber "ready"

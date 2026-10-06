@@ -4,14 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { openDb } from './db.js'
-import {
-  getSetting,
-  setSetting,
-  getTimezone,
-  setTimezone,
-  seedSettings,
-  applyConfigSettings,
-} from './settings.js'
+import { getSetting, setSetting, getTimezone, setTimezone, seedSettings } from './settings.js'
 import type { Config } from './config.js'
 
 const dirs: string[] = []
@@ -54,11 +47,4 @@ test('seedSettings seeds a fresh DB but does NOT override an existing (runtime) 
   // A later boot with different config must not clobber the persisted value (persist-wins).
   seedSettings(db, cfg('Asia/Tokyo'))
   expect(getTimezone(db)).toBe('America/New_York')
-})
-
-test('applyConfigSettings declaratively overwrites (config:apply)', () => {
-  const db = freshDb()
-  seedSettings(db, cfg('America/New_York'))
-  applyConfigSettings(db, cfg('Asia/Tokyo'))
-  expect(getTimezone(db)).toBe('Asia/Tokyo')
 })

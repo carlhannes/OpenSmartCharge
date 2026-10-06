@@ -86,7 +86,9 @@ test('closeOpenTransaction finalizes an abandoned open tx (stamps energy, stops 
     meterValue: [
       {
         timestamp: '2026-07-04T10:05:00Z',
-        sampledValue: [{ value: '1003000', measurand: 'Energy.Active.Import.Register', unit: 'Wh' }],
+        sampledValue: [
+          { value: '1003000', measurand: 'Energy.Active.Import.Register', unit: 'Wh' },
+        ],
       },
     ],
   })
@@ -107,7 +109,11 @@ test('closeOpenTransaction is a no-op on an already-closed tx and on an unknown 
   const db = freshDb()
   const id = allocateTransactionId(db)
   insertTransaction(db, 'lp1', 'STN1', id, start(0, '2026-07-04T10:00:00Z'))
-  finishTransaction(db, id, { transactionId: id, meterStop: 7000, timestamp: '2026-07-04T11:00:00Z' })
+  finishTransaction(db, id, {
+    transactionId: id,
+    meterStop: 7000,
+    timestamp: '2026-07-04T11:00:00Z',
+  })
   const before = db.prepare('SELECT end_time, energy_kwh FROM transactions WHERE id = ?').get(id)
   closeOpenTransaction(db, id) // already closed → must not overwrite the real stop data
   const after = db.prepare('SELECT end_time, energy_kwh FROM transactions WHERE id = ?').get(id)

@@ -2,6 +2,7 @@ import type { ChargeMode, Config, LoadpointConfig } from './config.js'
 import type { ModuleHealth } from '../sdk/types.js'
 import type { MeterSnapshot } from '../sdk/meter-reader.js'
 import { shouldWrite } from './smart-charging/decide.js'
+import { IEC_MIN_CURRENT_A } from '../sdk/electrical.js'
 
 /** The slice of a MeterReader the current-budget resolver needs: its freshness + last frame. */
 type MeterReaderLike = { health(): ModuleHealth; latest(): MeterSnapshot | null }
@@ -78,7 +79,11 @@ export const FAST_BOOST_UNPLUG_GRACE_MS = 5 * 60_000
  * when already drawing (prev ≥ minA) or the target is already ≤ minA. This shrinks overshoot
  * MAGNITUDE without adding steering FREQUENCY (same 30 s cadence). Pure.
  */
-export function softStartLimit(targetA: number, prevCommandedA: number, minA = 6): number {
+export function softStartLimit(
+  targetA: number,
+  prevCommandedA: number,
+  minA = IEC_MIN_CURRENT_A,
+): number {
   if (prevCommandedA >= minA || targetA <= minA) return targetA
   return Math.max(minA, Math.floor(targetA / 2))
 }

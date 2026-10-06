@@ -86,7 +86,7 @@ function runMigrations(db: DatabaseSync): void {
       value TEXT NOT NULL
     );
 
-    -- Hourly-max rollup of household load (max phase current), keyed by Stockholm-local
+    -- Hourly-max rollup of household load (max phase current), keyed by site-local
     -- calendar day + hour. Feeds the "worst-case current over the last N days" charging
     -- fallback. One row per (date, hour) — bounded at 24 rows/day regardless of meter
     -- cadence, and DST-safe (a repeated local hour collapses via the max() upsert).

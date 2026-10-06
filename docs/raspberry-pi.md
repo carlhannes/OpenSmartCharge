@@ -4,10 +4,10 @@ OSC runs well on a Raspberry Pi 4 or 5 with at least 1 GB RAM. This page covers 
 
 ## Why clock accuracy matters
 
-OSC buckets electricity prices into 15-minute UTC windows and runs the balancer control loop every 15 seconds. If the system clock drifts by more than ~30 seconds, the following breaks silently:
+OSC plans charging in 15-minute price slots and runs its control loop every 30 seconds (`smartCharging.controlIntervalSec`). If the system clock drifts by more than ~30 seconds, the following breaks silently:
 
 - Tariff slots land in the wrong bucket — the planner may charge at the wrong hour.
-- The balancer's "should charge now?" decision uses the wrong slot.
+- The control loop's "should charge now?" decision uses the wrong slot.
 - SSE event timestamps in the UI are wrong.
 
 ## Verify your clock is synchronized

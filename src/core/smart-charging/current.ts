@@ -1,7 +1,6 @@
-import { isNight } from '../../sdk/local-time.js'
+import { inLocalHourWindow } from '../../sdk/local-time.js'
+import { IEC_MIN_CURRENT_A } from '../../sdk/electrical.js'
 import type { Resolved, CurrentRung, NightWindow } from './types.js'
-
-const IEC_MIN_A = 6
 
 export interface CurrentInputs {
   now: Date
@@ -19,10 +18,8 @@ export interface CurrentInputs {
    *  Shrinks overshoot magnitude + keeps steady state off the fuse without steering faster. */
   reserveA?: number
   nightWindow: NightWindow
-  nightMarginA?: number
-  daytimeFraction?: number
-  /** IEC minimum charge current; a budget below this resolves to 0 (never rounded up). */
-  minCurrentA?: number
+  nightMarginA: number
+  daytimeFraction: number
   /** Site timezone for the night-window check. */
   tz: string
 }
@@ -46,11 +43,10 @@ export interface CurrentInputs {
  * becomes 0 (charging at 6 A when only 5 A is safe would exceed the budget and risk the breaker).
  */
 export function resolveCurrentBudget(i: CurrentInputs): Resolved<number, CurrentRung> {
-  const minA = i.minCurrentA ?? IEC_MIN_A
   const reserveA = i.reserveA ?? 0
   const settle = (amps: number): number => {
     const capped = Math.max(0, Math.min(amps, i.maxCurrentA))
-    return capped < minA ? 0 : capped
+    return capped < IEC_MIN_CURRENT_A ? 0 : capped
   }
 
   if (i.mainBreakerA != null && i.liveMaxPhaseA != null) {
@@ -67,10 +63,8 @@ export function resolveCurrentBudget(i: CurrentInputs): Resolved<number, Current
   }
 
   if (i.mainBreakerA != null) {
-    const night = isNight(i.now, i.nightWindow.startHour, i.nightWindow.endHour, i.tz)
-    const budget = night
-      ? i.mainBreakerA - (i.nightMarginA ?? 3)
-      : i.mainBreakerA * (i.daytimeFraction ?? 0.5)
+    const night = inLocalHourWindow(i.now, i.nightWindow.startHour, i.nightWindow.endHour, i.tz)
+    const budget = night ? i.mainBreakerA - i.nightMarginA : i.mainBreakerA * i.daytimeFraction
     return { value: settle(budget), source: 'static-tod', degraded: true }
   }
 

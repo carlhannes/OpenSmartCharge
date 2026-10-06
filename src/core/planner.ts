@@ -1,6 +1,6 @@
 import type { TariffSlot } from '../sdk/tariff.js'
 import type { ChargeMode } from './config.js'
-import { chargeRateKW } from './electrical.js'
+import { chargeRateKW } from '../sdk/electrical.js'
 
 export interface PlannerInput {
   requiredKWh: number

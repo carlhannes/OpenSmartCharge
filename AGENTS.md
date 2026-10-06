@@ -27,7 +27,7 @@ These were established at project start and apply to all changes:
 7. **Rationale first** — state assumptions and rationale before making changes.
 8. **No comments that describe what** — code names should do that. Comments only for *why* (a hidden constraint, a subtle invariant, a workaround).
 9. **Update docs** — when changing something that's documented, update the docs in the same commit.
-10. **Run the tools** — after file edits, run `npm run format && npm run typecheck && npm run lint` and fix all errors before reporting done.
+10. **Run the tools** — after file edits, run `npm run format && npm run typecheck && npm run lint && npm test` and fix all errors before reporting done. (The root `lint`/`format`/`typecheck` scripts cover `src/ui2` too.)
 11. **Sanity-check** — after completing a task, randomly pick one modified file and re-read it as a stranger would. State what you find.
 
 ---
@@ -40,7 +40,9 @@ These were established at project start and apply to all changes:
 src/
   core/       — config, registry, plugin-loader, events, db, logger,
                 loadpoint, planner, estimator, health, lifecycle
-  sdk/        — TypeScript interfaces for all four module types + ModuleCtx
+  sdk/        — TypeScript interfaces for the five module types + ModuleCtx, plus the shared
+                helpers modules may import (local-time, broker, nordpool-tariff, electrical,
+                source-reconciler)
   modules/    — first-party reference modules
     charger-ocpp16/
     tariff-elering/          (EE/FI/LV/LT)
@@ -48,15 +50,16 @@ src/
     tariff-fixed/            (flat rate, no network)
     balancer-mqtt-circuit/
     vehicle-skoda/
+    vehicle-manual/          (no API — kWh-only targets, never polled)
     meter-tibber-pulse/
     meter-mqtt-phase/        (raw <prefix>/i{1,2,3}_a feed)
   server/     — Express HTTP + SSE + MQTT bridge
-  ui/         — React 19 + Vite admin app
+  ui2/        — React 19 + Vite (TanStack Start, built as a static SPA) admin app
 plugins/      — third-party modules (auto-loaded at startup, gitignored)
 docs/         — architecture, module authoring, config reference
 ```
 
-### The four module types
+### The five module types
 
 | Interface | File | What it provides |
 |---|---|---|
@@ -64,8 +67,9 @@ docs/         — architecture, module authoring, config reference
 | `TariffModule` / `Tariff` | `src/sdk/tariff.ts` | 15-min price slots (`prices(from, to)`) |
 | `BalancerModule` / `Balancer` | `src/sdk/balancer.ts` | Per-tick current allocation (`tick(input)`) |
 | `VehicleModule` / `Vehicle` | `src/sdk/vehicle.ts` | SoC/range/target/plug/climate, on demand (`refresh()`); no timer — the lifecycle drives polling |
+| `MeterReaderModule` / `MeterReader` | `src/sdk/meter-reader.ts` | Live household current (`latest()`); its `health()` is the one staleness authority |
 
-All module factories receive a `ModuleCtx` (from `src/sdk/index.ts`) that gives them access to the logger, SQLite, and the internal event bus. **Modules must not import from `src/core/` directly — only from `src/sdk/`.**
+All module factories receive a `ModuleCtx` (from `src/sdk/types.ts`) that gives them access to the logger, SQLite, and the internal event bus. **Modules must not import from `src/core/` directly — only from `src/sdk/`.**
 
 ### Loadpoint (core concept, not a module)
 
@@ -98,8 +102,9 @@ planning indefinitely).
 a charger/car takes 15–30 s to react) resolves every loadpoint and commands its charger through a
 deadband. Loadpoints group into **circuits** — those sharing a balancer coordinate through `allocate()`;
 a balancer-less loadpoint is its own circuit and takes the resolved current budget directly. **Smart mode
-therefore works with or without a balancer.** Wall-clock reasoning (night window, price hour-of-day) uses
-Europe/Stockholm via `src/sdk/stockholm-time.ts`.
+therefore works with or without a balancer.** Wall-clock reasoning (night window, price hour-of-day, plan
+ready-by) uses the configurable **site** timezone (`getTimezone(db)`, default Europe/Stockholm) through the
+helpers in `src/sdk/local-time.ts`.
 
 ### Modules vs. the lifecycle: who owns what
 
@@ -112,13 +117,17 @@ no polling cadence, no decisions about *when* it runs or how its data combines w
 `charger-ocpp16`, `tariff-elprisetjustnu`, `tariff-elering`, `vehicle-skoda`, `meter-tibber-pulse`,
 and `meter-mqtt-phase` all follow this: each is a thin translation layer over one protocol/API.
 (`balancer-mqtt-circuit` is the boundary's limiting case — it maps *no* external service at all; it's
-pure allocation math with no meter and no timer. See Balancing below.)
+pure allocation math with no meter and no timer. See Balancing below.) The one deliberate timer
+exception: Nord Pool prices publish at a fixed market time, and that publish-window refetch (plus its
+retry backoff and a random herd-spreading offset) lives in the **shared** `src/sdk/nordpool-tariff.ts`
+factory — a provider module is just its `fetchSlots` function.
 
 **The lifecycle owns orchestration** (`src/core/lifecycle.ts` + the pure helpers in
 `src/core/smart-charging/`): the control-loop tick, *when* to poll a vehicle, the resolver ladders,
 the smart-mode force signals (`minSoc` floor + climate/preconditioning → force-charge, overriding
-price and a reached target — climate at just the 6 A IEC minimum), the resume-nudge (RemoteStop+RemoteStart when a car wants charge but a
-latched open session draws ~0 A — some VW-group cars won't resume on a limit change alone), mode/target
+price and a reached target — climate at just the 6 A IEC minimum), the SessionReconciler
+(`core/session-reconciler.ts`: level-triggered recovery when a car wants charge but a latched open session
+draws ~0 A — some VW-group cars won't resume on a limit change alone), mode/target
 transitions — and, in 0.3.0, car identification and **car↔charger association** (which is
 *runtime state*, not static config; see the 0.2.0 vision).
 
@@ -142,10 +151,12 @@ module — stop. That belongs in the lifecycle. The module should just expose a 
 
 ### Declarative config & soft-reload (modules must survive a reboot)
 
-OSC is **declarative**: the effective config = `osc.yaml` (the seed) + runtime DB overrides
-(`config_overrides`, persist-wins) — see `core/config-overrides.ts`. The lifecycle runs on that
-effective config; an API write (region, breaker, a claimed charger, an added vehicle) persists an
-override, and the **reconcile seam** (`core/reconcile.ts`) applies it live: it mutates the in-memory
+OSC is **declarative**: the effective config = schema defaults ⊕ the DB config store (`config_overrides`
++ `settings` + `loadpoint_state`) — see `core/config-overrides.ts`. `osc.yaml` is an *import format*: a
+fresh database materializes it once (`core/config-io.ts`), after which the file is inert and the DB is
+the source of truth (re-import with `npm run config:apply` or `POST /api/config/import`). The lifecycle
+runs on that effective config; an API write (region, breaker, a claimed charger, an added vehicle)
+persists an override, and the **reconcile seam** (`core/reconcile.ts`) applies it live: it mutates the in-memory
 config in place *and* **rebuilds the affected module** from the new config, swaps it in the Map, and
 re-wires listeners — no process restart.
 
@@ -195,14 +206,14 @@ balancer, a tariff, nor a vehicle — each is an enhancement, not a prerequisite
 
 ```yaml
 tariffs:    [{name, type: elering|elprisetjustnu|fixed, zone|pricePerKWh, ...}]   # elprisetjustnu=SE1–SE4; elering=EE/FI/LV/LT; fixed=flat rate
-balancers:  [{name, type, mainBreakerA, phases, meterReader?, nightMarginA?, daytimeFraction?}]  # pure splitter; meterReader → the live-current SSoT
-meterReaders: [{name, type: tibber-pulse|mqtt-phase, ...}]     # live household current + its staleness authority
-vehicles:   [{name, type, ...}]
+balancers:  [{name, type, mainBreakerA, phases, meterReader?, nightMarginA?, daytimeFraction?, reserveA?}]  # pure splitter; meterReader → the live-current SSoT
+meterReaders: [{name, type: tibber-pulse|mqtt-phase, broker: {host, port, user?, password?}, ...}]  # live household current + its staleness authority; each listens on its OWN broker
+vehicles:   [{name, type: skoda|manual, ...}]
 chargers:   [{name, type, stationId, maxA, phases}]
-loadpoints: [{name, charger, vehicle?, tariff?, balancer?, defaultMode, targetSoc?, targetTime?, targetKWh?, minSoc?}]
-mqtt:       {host, port, topicPrefix, homeAssistantDiscovery}
+loadpoints: [{name, charger, vehicle?, tariff?, balancer?, defaultMode, autoRevertToSmart?, targetSoc?, targetTime?, targetKWh?, minSoc?}]
+mqttBridge: {broker: {host, port, user?, password?}, topicPrefix, homeAssistantDiscovery}   # OSC's OUTBOUND publishing; optional
 site:       {name, port, mainBreakerA?, timezone?}               # timezone: site/user tz (default Europe/Stockholm); mainBreakerA = fallback fuse
-smartCharging: {controlIntervalSec, deadbandA, nightWindow, nightMarginA, daytimeFraction, historicalDays, vehiclePollIntervalSec, vehicleIdlePollIntervalSec, vehicleIdlePollDayWindow, chargingEfficiency}
+smartCharging: {controlIntervalSec, deadbandA, nightWindow, nightMarginA, daytimeFraction, reserveA, historicalDays, vehiclePollIntervalSec, vehicleIdlePollIntervalSec, vehicleIdlePollDayWindow, chargingEfficiency}
 ```
 
 Name references enable multiplicity: multiple tariff zones, circuits, and chargers are just more list entries — no code changes required.
@@ -230,7 +241,7 @@ Commands (not retained, subscribed by OSC):
 - `osc/loadpoints/<name>/cmd/mode`
 - `osc/loadpoints/<name>/cmd/target`
 
-HA discovery: `homeassistant/select/<lp>_mode/config` etc.
+HA discovery: `homeassistant/select/osc_<lp>_mode/config` etc. (device `OSC <lp>`).
 
 ---
 
@@ -242,7 +253,7 @@ HA discovery: `homeassistant/select/<lp>_mode/config` etc.
 - Do not add error handling for impossible scenarios. Validate at system boundaries (config load, API calls), not internally.
 - Do not use classes in TypeScript. Use functions and plain objects.
 - Do not add caches unless the task explicitly requires them.
-- Do not use the jittered `ctx.fetch` for time-sensitive or demand-driven calls (vehicle reads, auth, car↔charger detection) — it sleeps up to 120 s. It is ONLY for public, non-urgent *scheduled* data (tariffs). Use the plain global `fetch` for everything else. (Definition: `ModuleCtx.fetch` JSDoc in `src/sdk/types.ts`.)
+- Do not put timing inside a request primitive. Jitter, backoff and cadence are *scheduling* concerns and live where the schedule is decided — the lifecycle for vehicle polls, the shared Nord Pool factory for the publish-window refetch. Modules call the plain global `fetch` with a per-request `AbortSignal.timeout`. (A jittered `ctx.fetch` once existed; it silently broke every caller's timeout signal and was removed.)
 - Do not push to remote without explicit user request.
 - Do not assume the internet is available — all code paths must handle its absence gracefully.
 

@@ -23,7 +23,10 @@ function main(): void {
     // currentEffective = empty defaults: a replace validates against defaults and only uses it to
     // de-redact secrets (osc.yaml carries plaintext), and a pre-flip DB's partial overrides wouldn't
     // validate over defaults anyway. See materializeConfigOnce.
-    const result = importConfig(db, doc, { mode: 'replace', currentEffective: configSchema.parse({}) })
+    const result = importConfig(db, doc, {
+      mode: 'replace',
+      currentEffective: configSchema.parse({}),
+    })
     setConfigMaterialized(db)
     console.log(`Imported ${CONFIG_PATH} → ${DATA_DIR} (replace, clears prior config):`)
     console.log(`  sections: ${result.sections.join(', ') || '(none)'}`)

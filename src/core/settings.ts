@@ -1,12 +1,10 @@
 import type { DatabaseSync } from 'node:sqlite'
-import type { Config } from './config.js'
+import { DEFAULT_TIMEZONE, type Config } from './config.js'
 import { isValidTimeZone } from '../sdk/local-time.js'
 
 // System-wide settings live in the `settings` KV table. Same seed→DB-wins→config:apply model as
 // loadpoint state: osc.yaml `site.*` seeds a fresh DB; runtime writes (e.g. the UI setup flow
 // auto-detecting the browser timezone) win thereafter; `npm run config:apply` re-asserts config.
-
-const DEFAULT_TIMEZONE = 'Europe/Stockholm'
 
 export function getSetting(db: DatabaseSync, key: string): string | undefined {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
@@ -43,7 +41,7 @@ export function setTimezone(db: DatabaseSync, tz: string): void {
   setSetting(db, 'timezone', tz)
 }
 
-const DEFAULT_LOG_RETENTION_DAYS = 3
+export const DEFAULT_LOG_RETENTION_DAYS = 3
 
 /**
  * How many days of runtime logs to keep before auto-rotation drops them (default 3). Pure runtime — a
@@ -69,9 +67,4 @@ export function seedSettings(db: DatabaseSync, config: Config): void {
     'timezone',
     config.site.timezone,
   )
-}
-
-/** Declaratively overwrite settings from config (config:apply) — never on boot. */
-export function applyConfigSettings(db: DatabaseSync, config: Config): void {
-  setSetting(db, 'timezone', config.site.timezone)
 }

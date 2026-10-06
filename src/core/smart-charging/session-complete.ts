@@ -1,4 +1,3 @@
-
 // Pure decision: has the current plug-in session COMPLETED? A session is "done" when the car has
 // stopped taking charge for a real reason — a genuine target was reached, or the car itself refuses
 // more current after we've delivered something — as opposed to a transient pause (cheap-window wait,

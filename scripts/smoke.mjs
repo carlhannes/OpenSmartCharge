@@ -12,7 +12,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
 import { resolve } from 'node:path'
 import mqtt from 'mqtt'
 import { createFakeCharger } from './lib/fake-charger.mjs'
@@ -67,15 +67,18 @@ async function post(path, data) {
 
 // ─── smoke config (written fresh each run) ───────────────────────────────────
 
+// osc.yaml is imported into the DB once (first boot), so a stale data dir would ignore config changes.
+rmSync(SMOKE_DATA_DIR, { recursive: true, force: true })
 mkdirSync(SMOKE_DATA_DIR, { recursive: true })
 writeFileSync(SMOKE_CONFIG, [
   `site:`,
   `  name: "Smoke Test"`,
   `  port: ${PORT}`,
   ``,
-  `mqtt:`,
-  `  host: localhost`,
-  `  port: 1883`,
+  `mqttBridge:`,
+  `  broker:`,
+  `    host: localhost`,
+  `    port: 1883`,
   `  topicPrefix: ${TOPIC_PREFIX}`,
   `  homeAssistantDiscovery: false`,
   ``,
@@ -124,7 +127,7 @@ async function run() {
   oscProcess.stdout.on('data', d => oscLogs.push(d.toString()))
   oscProcess.stderr.on('data', d => oscLogs.push(d.toString()))
   oscProcess.on('exit', (code) => {
-    if (code !== null && code !== 0 && code !== null) {
+    if (code !== null && code !== 0) {
       console.error(`\nOSC exited unexpectedly (code ${code})`)
     }
   })

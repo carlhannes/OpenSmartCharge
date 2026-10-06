@@ -32,7 +32,7 @@ smartCharging:
     30 # control-loop tick interval (5–60 s). Kept slow because a charger/car
     # takes 15–30 s to act on a new limit; ticking faster just oscillates.
   deadbandA: 1 # only re-command the charger when the target moves ≥ this many amps
-  nightWindow: # assumed-cheap window (local Stockholm hours), used by the price and
+  nightWindow: # assumed-cheap window (site-local hours), used by the price and
     startHour: 23 # current fallbacks when no live/historical data is available
     endHour: 5
   nightMarginA: 3 # static night current = mainBreakerA − nightMarginA
@@ -78,7 +78,7 @@ mqttBridge:
   homeAssistantDiscovery: true # publish HA discovery payloads on startup
 ```
 
-> **Migration.** The old combined top-level `mqtt:` block is gone (a boot WARNING fires if it's still present, and it's ignored). Inbound (a meter listening) moved onto `meterReaders[].broker`; outbound is `mqttBridge:`. Each carries its own `broker`, so reading a meter and publishing to a broker are fully independent.
+> **Migration.** The old combined top-level `mqtt:` block is gone — it is not part of the schema and is silently ignored on import. Inbound (a meter listening) moved onto `meterReaders[].broker`; outbound is `mqttBridge:`. Each carries its own `broker`, so reading a meter and publishing to a broker are fully independent.
 
 ### `tariffs[]`
 
@@ -123,7 +123,7 @@ tariffs:
 **Shared fetch schedule (`elprisetjustnu` + `elering`):**
 
 - Nordpool publishes next-day prices around 13:00 CET. OSC waits until **13:15 Europe/Stockholm** before fetching tomorrow's data. On failure it retries with **exponential backoff — 10 min → 20 → 40, capped at hourly** — and keeps retrying (it never backs off past midnight, so a transient blip can't strand prices for a day). `health` is `degraded` from the 13:15 window until tomorrow's data lands; before 13:15, having only today's data is fine.
-- Scheduled fetches use `ctx.fetch` (0–120 s random jitter) so multiple OSC instances don't hit the API at the same millisecond.
+- The fetch _schedule_ carries a random 0–120 s offset so many OSC instances don't hit the API at the same instant after the publish; each request itself uses the plain `fetch` with a 15 s timeout.
 - The Nord Pool schedule, `tariff_slots` persistence, and health logic are shared in `src/sdk/nordpool-tariff.ts`; each provider module only supplies its HTTP fetch+parse.
 
 ### `balancers[]`
@@ -163,11 +163,11 @@ vehicles:
     vin: TMBABCDEF12345678 # 17-char VIN (uppercase)
 ```
 
-**Built-in types:** `skoda`
+**Built-in types:** `skoda` (MySkoda cloud API), `manual` (a car with no app/API — kWh-only targets, never polled, never auto-identified)
 
 **What it exposes:** State of Charge (%), estimated range, the target SoC set in the car, the car's own plugged-in state (a cross-check of the OCPP status), and whether remote climate/preconditioning is running.
 
-**Polling is demand-driven — the module owns no timer.** The lifecycle refreshes a vehicle **only when its charger reports connected** (strictly per-car), on two cadences while plugged in: once on connect (to anchor SoC/range), then `smartCharging.vehiclePollIntervalSec` (default 15 min) while actively drawing current, and the faster `vehicleIdlePollIntervalSec` (default 10 min) while connected-but-idle **during the day window** — so remote climate/plug changes are caught promptly. Outside the day window the idle rate falls back to the 15-min cadence, and it is **never polled while unplugged** — polling MySkoda too often can wake and slowly drain a parked car, and hammering the account risks a server-side lockout. Between polls, SoC is estimated by carrying the last real reading forward by delivered energy — at the efficiency **observed this session** (measured from two real readings) when available, else `chargingEfficiency` — so a mid-session API dropout still tracks accurately. The module honours `429`/`Retry-After` rate-limit responses.
+**Polling is demand-driven — the module owns no timer.** The lifecycle refreshes a vehicle **only when its charger reports connected** (strictly per-car), on two cadences while plugged in: once on connect (to anchor SoC/range), then `smartCharging.vehiclePollIntervalSec` (default 15 min) while actively drawing current, and the faster `vehicleIdlePollIntervalSec` (default 10 min) while connected-but-idle **during the day window** — so remote climate/plug changes are caught promptly. Outside the day window the idle rate falls back to the 15-min cadence, and it is **never polled while unplugged** — polling MySkoda too often can wake and slowly drain a parked car, and hammering the account risks a server-side lockout. Between polls, SoC is estimated by carrying the last real reading forward by delivered energy — at the efficiency **observed this session** (measured from two real readings) when available, else `chargingEfficiency` — so a mid-session API dropout still tracks accurately. A `429`/`430` rate-limit response is surfaced as a distinct error; retries follow the lifecycle's per-vehicle backoff.
 
 **Finding the VIN:** it's on the MySkoda app vehicle page, the physical car (windscreen / door pillar), or the registration document. It must be the full 17 characters, uppercase.
 
@@ -224,7 +224,7 @@ chargers:
 
 **Built-in types:** `ocpp16`
 
-`maxA` is the ceiling used by the loadpoint when issuing `SetChargingProfile`. The balancer (M3) may set a lower value based on circuit headroom, but it will never exceed `maxA`.
+`maxA` is the ceiling used by the loadpoint when issuing `SetChargingProfile`. The circuit budget (and a balancer's split of it) may set a lower value based on household headroom, but it will never exceed `maxA`.
 
 `autoStartTransaction` (default `true`) makes OSC send `RemoteStartTransaction` as soon as a car plugs in (the charger reports `Preparing`) — on by default because many chargers/cars won't open a transaction on their own. Set it `false` to require an app/RFID start on the charger.
 
@@ -294,7 +294,7 @@ So the API is the **complete editing surface** — every `osc.yaml` section has 
 | `balancers[]`                      | `POST /api/balancers`, `PUT /api/balancers/:name`          | live        |
 | `meterReaders[]`                   | `POST` / `PUT` / `DELETE /api/meters`                      | live        |
 | `chargers[]`                       | `POST` / `PUT` / `DELETE /api/chargers`, `GET .../pending` | live        |
-| `vehicles[]`                       | `POST` / `DELETE /api/vehicles`                            | live        |
+| `vehicles[]`                       | `POST` / `PUT` / `DELETE /api/vehicles`                    | live        |
 | `loadpoints[]` bindings            | `PUT /api/loadpoints/:name`                                | live        |
 | loadpoint mode / targets           | `POST /api/loadpoints/:name/mode`, `.../target`            | live        |
 
@@ -325,11 +325,11 @@ Credentials in `config_overrides` / `osc.yaml` are **plaintext at rest** (unchan
 
 Recurring, per-charger plans are the primary way to express intent — _"ready by 07:00 at 80% on weekdays."_ Unlike the single ad-hoc target above, plans are **managed at runtime via the UI/API**, not `osc.yaml`, and live in the database (they're edited often, so they're not config).
 
-Each plan has a weekday set (mon–sun), a **ready-by** time (site-local `HH:MM`), a **target** + unit (`pct` %, `km` range, or `kwh`), and an enabled toggle. A charger can have zero or several.
+Each plan has a weekday set (mon–sun), a **ready-by** time (site-local `HH:MM`), a **target** + unit (`pct` %, `km` range, or `kwh`), an enabled toggle, an optional **vehicle scope** (`vehicles`: a list of vehicle names and/or `"guest"`; empty = any car), and **`pauseOnTarget`** (default on — stop charging once the target is reached; turn it off for a Guest "just charge" plan). A charger can have zero or several.
 
-**Which plan governs now:** among _enabled_ plans whose days include **today** with a **ready-by still later today**, the earliest ready-by wins. If none qualifies (wrong day, all passed, or no plans), OSC falls back to the loadpoint's ad-hoc `targetSoc`/`targetKWh`. A `km` target is converted to % via the car's live range/SoC ratio (needs a connected car; degrades gracefully without one).
+**Which plan governs now:** among _enabled_ plans that **apply to the loadpoint's active vehicle** (empty `vehicles`, or one that contains it — a guest car matches `"guest"`), whose days include **today** with a **ready-by still later today**, the earliest ready-by wins. If none qualifies (wrong day, all passed, wrong car, or no plans), OSC falls back to the loadpoint's ad-hoc `targetSoc`/`targetKWh`. A `km` target is converted to % via the car's live range/SoC ratio (needs a connected car; degrades gracefully without one).
 
-Manage plans via REST under `/api/loadpoints/:name/plans` — `GET` (list), `POST` (create), `PUT /:id` (partial update), `DELETE /:id`. A plan body: `{ "days": ["mon","fri"], "readyBy": "07:00", "target": 80, "unit": "pct", "enabled": true }`.
+Manage plans via REST under `/api/loadpoints/:name/plans` — `GET` (list), `POST` (create), `PUT /:id` (partial update), `DELETE /:id`; `GET /api/plans` lists every plan across all loadpoints (what the app uses). A plan body: `{ "days": ["mon","fri"], "readyBy": "07:00", "target": 80, "unit": "pct", "enabled": true, "vehicles": ["enyaq"], "pauseOnTarget": true }`.
 
 Each returned plan also carries **`resolvedSoc`** — the backend-computed display SoC% (`pct`→value; `km`→via the car's range/SoC ratio; `kwh` or no car → `null`) — so clients display it rather than recompute the km→% conversion. `GET /api/loadpoints` exposes **`availableTargetUnits`** per loadpoint (which units the loadpoint's data can back right now: `kwh` always, `pct` with SoC + capacity, `km` also with range), so a client only offers a unit it can actually charge to.
 
@@ -340,19 +340,21 @@ All sections are lists. Add more entries to support multiple tariff zones, circu
 ```yaml
 tariffs:
   - name: home
-    type: elering
+    type: elprisetjustnu
     zone: SE3
   - name: cabin
-    type: elering
+    type: elprisetjustnu
     zone: SE2
 
 meterReaders:
   - name: house-phase
     type: mqtt-phase
     topicPrefix: house
+    broker: { host: localhost }
   - name: garage-phase
     type: mqtt-phase
     topicPrefix: garage
+    broker: { host: localhost }
 
 balancers:
   - name: house-main

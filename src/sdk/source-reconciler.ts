@@ -1,4 +1,4 @@
-import type { ModuleHealth } from '../sdk/types.js'
+import type { ModuleHealth } from './types.js'
 
 // ── Shared resilience primitives for data sources (vehicle polls, tariff fetches, …) ───────────
 //

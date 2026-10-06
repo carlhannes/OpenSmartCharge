@@ -2,7 +2,7 @@
 // The whole app funnels through one pino instance (createLogger, passed to every module via ctx.log),
 // so a single capture stream on it persists core + lifecycle + all modules with structure. A console
 // tee is the safety net for plugins that ignore ctx.log and just console.log. Mirrors the transactions
-// pattern (persist like insertMeterValues; query like GET /api/transactions). See docs/ui2-logs-handoff.md.
+// pattern (persist like insertMeterValues; query like GET /api/transactions). API: README.md → "REST API".
 import type { DatabaseSync } from 'node:sqlite'
 import { Writable } from 'node:stream'
 import { format as formatArgs } from 'node:util'

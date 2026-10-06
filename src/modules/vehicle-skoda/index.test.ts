@@ -12,9 +12,8 @@ import { saveRefreshToken } from './persistence.js'
 import type { ModuleCtx } from '../../sdk/types.js'
 
 // End-to-end module contract: refresh() runs auth (via a seeded refresh token) → the api layer →
-// maps MySkoda's shape into VehicleData → writes the cache. The module uses the prompt global
-// `fetch` for BOTH auth and data (a time-sensitive poll), so we stub global fetch to serve
-// everything and make ctx.fetch throw — asserting the jittered ctx.fetch is never used here.
+// maps MySkoda's shape into VehicleData → writes the cache. The module uses the global `fetch` for
+// BOTH auth and data, so we stub global fetch to serve everything.
 
 const log = pino({ level: 'silent' })
 const VIN = 'TMBABABABABABABAB' // 17 chars
@@ -62,12 +61,8 @@ function stubFetch(bodies: { charging?: unknown; aircon?: unknown; details?: unk
   }) as unknown as typeof globalThis.fetch
 }
 
-// ctx.fetch is the jittered fetch — it must NOT be used for time-sensitive vehicle reads.
 function makeCtx(db: DatabaseSync): ModuleCtx {
-  const noFetch = (() => {
-    throw new Error('vehicle module must use the prompt global fetch, not the jittered ctx.fetch')
-  }) as unknown as typeof globalThis.fetch
-  return { db, events: new EventEmitter(), log, fetch: noFetch }
+  return { db, events: new EventEmitter(), log }
 }
 
 function makeVehicle(db: DatabaseSync) {

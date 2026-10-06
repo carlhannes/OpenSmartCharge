@@ -5,8 +5,8 @@
 // OcppServer sends, tracks a profile stack + composite limit, and records inbound commands
 // for assertions. Tests drive status/transactions/meter values explicitly for determinism.
 //
-// NOTE: this lives under src/ (so tests import it without .mjs typing friction) — it's test
-// support, not shipped runtime. See ROADMAP: exclude *.test.ts + test support from `dist`.
+// NOTE: this lives under src/ (so tests import it without .mjs typing friction) — it is test
+// support, not shipped runtime: tsconfig.build.json excludes it from dist/.
 
 import { RPCClient } from 'ocpp-rpc'
 

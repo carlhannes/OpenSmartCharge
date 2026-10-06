@@ -1,4 +1,8 @@
-import { chargeRateKW, DEFAULT_CHARGING_EFFICIENCY, DUTY_CYCLE_FALLBACK } from '../electrical.js'
+import {
+  chargeRateKW,
+  DEFAULT_CHARGING_EFFICIENCY,
+  DUTY_CYCLE_FALLBACK,
+} from '../../sdk/electrical.js'
 import type { PlanUnit } from '../plans.js'
 import type { Resolved, EnergyRung } from './types.js'
 import type { VehicleCapabilities } from '../../sdk/vehicle.js'
@@ -56,11 +60,6 @@ export function targetUnitsFor(caps: VehicleCapabilities): PlanUnit[] {
   return units
 }
 
-/** A vehicle is eligible for identify-on-plug iff it reports cable presence (its own pluggedIn). */
-export function autoIdentifiable(caps: VehicleCapabilities): boolean {
-  return caps.presence
-}
-
 export interface EnergyInputs {
   /** Estimated SoC now (%) — from estimateSoc(cachedSoc, sessionEnergyKWh, capacity). */
   estimatedSocPct?: number
@@ -74,7 +73,6 @@ export interface EnergyInputs {
   maxCurrentA: number
   phases: number
   efficiency?: number
-  dutyCycle?: number
 }
 
 /**
@@ -101,7 +99,7 @@ export function resolveEnergyTarget(i: EnergyInputs): Resolved<number, EnergyRun
   }
 
   const rateKW = chargeRateKW(i.maxCurrentA, i.phases)
-  const dutyCycle = i.dutyCycle ?? DUTY_CYCLE_FALLBACK
+  const dutyCycle = DUTY_CYCLE_FALLBACK
   return {
     value: Math.max(1, i.hoursUntilTarget * rateKW * dutyCycle),
     source: 'duty-cycle',
@@ -118,7 +116,6 @@ export interface TargetContext extends EnergyReading {
   maxCurrentA: number
   phases: number
   efficiency?: number
-  dutyCycle?: number
 }
 
 export interface ResolvedTarget {
@@ -148,7 +145,6 @@ export function resolveTarget(target: Target | null, ctx: TargetContext): Resolv
     maxCurrentA: ctx.maxCurrentA,
     phases: ctx.phases,
     efficiency: ctx.efficiency,
-    dutyCycle: ctx.dutyCycle,
   })
   return {
     requiredKWh: energy.value,

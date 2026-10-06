@@ -2,6 +2,38 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { ChargeMode, Config } from './config.js'
 import type { ChargerStatus } from '../sdk/charger.js'
 import type { PlannedSlot } from './planner.js'
+import { HHMM_RE } from '../sdk/local-time.js'
+
+/** A validated partial target update — REST and MQTT share it. `kwh: null` clears the kWh cap. */
+export interface TargetPatch {
+  soc?: number
+  time?: string
+  kwh?: number | null
+  minSoc?: number
+}
+
+/**
+ * Validate a raw target body. Absent or wrong-typed fields mean "leave unchanged" (lenient on shape);
+ * out-of-range values are rejected (strict on safety) so no command surface can persist them.
+ */
+export function parseTargetPatch(
+  body: unknown,
+): { ok: true; patch: TargetPatch } | { ok: false; error: string } {
+  const b = (body ?? {}) as Record<string, unknown>
+  const soc = typeof b.soc === 'number' ? b.soc : undefined
+  const time = typeof b.time === 'string' ? b.time : undefined
+  const kwh = b.kwh === null ? null : typeof b.kwh === 'number' ? b.kwh : undefined
+  const minSoc = typeof b.minSoc === 'number' ? b.minSoc : undefined
+  if (soc !== undefined && (soc < 0 || soc > 100)) return { ok: false, error: 'soc must be 0–100' }
+  if (time !== undefined && !HHMM_RE.test(time)) return { ok: false, error: 'time must be HH:MM' }
+  if (typeof kwh === 'number' && (kwh < 1 || kwh > 100)) {
+    return { ok: false, error: 'kwh must be 1–100' }
+  }
+  if (minSoc !== undefined && (minSoc < 0 || minSoc > 100)) {
+    return { ok: false, error: 'minSoc must be 0–100' }
+  }
+  return { ok: true, patch: { soc, time, kwh, minSoc } }
+}
 
 export interface LoadpointState {
   name: string
@@ -173,7 +205,8 @@ export function configToLoadpointInits(config: Config): LoadpointInit[] {
 // Declaratively push config defaults (mode + targets) into loadpoint_state, OVERWRITING the
 // persisted values. This is the deliberate escape hatch for the persist-wins boot semantics
 // (loadLoadpointStates leaves existing rows untouched): the DB is the runtime source of truth, and
-// this is how you re-assert osc.yaml onto it — run via the `config:apply` CLI, never on boot.
+// this is how a config document is asserted onto it — run by importConfig (config:apply, the API import,
+// and the one-time first-boot materialization), never by the plain boot path.
 // Declarative: a target omitted in config is cleared (set to NULL), so the DB matches the file.
 export function applyConfigToLoadpoints(db: DatabaseSync, inits: LoadpointInit[]): void {
   const upsert = db.prepare(

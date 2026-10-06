@@ -3,7 +3,7 @@ import { fmtDate } from "@/lib/format";
 import type { LogEntry, LogLevel } from "@/lib/api/rest";
 
 export const LEVELS: LogLevel[] = ["debug", "info", "warn", "error"];
-export const levelRank = (l: LogLevel) => LEVELS.indexOf(l);
+const levelRank = (l: LogLevel) => LEVELS.indexOf(l);
 
 // Level → color, from the app's status/brand tokens. Shape (icon) + color together, so it reads without
 // relying on color alone: error→red, warn→amber, info→sage, debug→grey.
@@ -50,7 +50,7 @@ export function groupByDay(entries: LogEntry[]): { label: string; entries: LogEn
   return groups;
 }
 
-export interface LogRange {
+interface LogRange {
   key: string;
   label: string;
   ms?: number; // window length back from now

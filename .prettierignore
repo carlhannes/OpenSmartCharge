@@ -1,2 +1,2 @@
-# Second UI (imported from smart-charge-flow) keeps its own formatting for now.
+# ui2 has its own Prettier config (src/ui2/.prettierrc); the root format script delegates to it.
 src/ui2/

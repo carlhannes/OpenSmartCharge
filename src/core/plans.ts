@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import { localParts, msUntilLocalTime } from '../sdk/local-time.js'
+import { localParts, nextLocalTime } from '../sdk/local-time.js'
 
 // Recurring, per-loadpoint charging plans. A resolution layer in front of the existing planner:
 // the lifecycle picks the governing plan each tick (selectActivePlan) and turns it into the single
@@ -210,8 +210,7 @@ export function selectActivePlan(
 
 /** The plan's ready-by as an absolute instant today (site-local). Call for the active plan only. */
 export function planTargetTime(plan: Plan, now: Date, tz: string): Date {
-  const [h, m] = plan.readyBy.split(':').map(Number)
-  return new Date(now.getTime() + msUntilLocalTime(now, h, m, tz))
+  return nextLocalTime(plan.readyBy, now, tz)
 }
 
 // A plan's target → charging value + display SoC now lives in ONE place: `resolveTarget` /

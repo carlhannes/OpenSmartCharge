@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { configSchema, type Config } from './config.js'
 
-// Runtime overrides of STRUCTURAL config, layered over the parsed osc.yaml to form the EFFECTIVE
+// Runtime overrides of STRUCTURAL config, layered over the schema defaults to form the EFFECTIVE
 // config the lifecycle runs on. Same seed → DB-wins → config:apply model as settings.ts, but for
 // module topology (entity field edits + runtime-added entities) rather than site scalars. The
 // reconcile seam (core/reconcile.ts) rebuilds the affected module whenever an override changes.

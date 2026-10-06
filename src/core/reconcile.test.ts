@@ -81,7 +81,7 @@ function setup(base: Config) {
     base,
     config,
     db,
-    ctx: { db, events, log: fakeLog, fetch: globalThis.fetch } as unknown as ModuleCtx,
+    ctx: { db, events, log: fakeLog } as unknown as ModuleCtx,
     events,
     health: new Map(),
     chargers: new Map(),

@@ -1,7 +1,7 @@
 import type { Request, Response, Router } from 'express'
 import { Router as createRouter } from 'express'
 import type { DatabaseSync } from 'node:sqlite'
-import type { LoadpointState } from '../core/loadpoint.js'
+import { parseTargetPatch, type LoadpointState } from '../core/loadpoint.js'
 import type { PowerSample } from '../core/power-history.js'
 import type { EventBus } from '../core/events.js'
 import { getHealthSummary } from '../core/health.js'
@@ -30,7 +30,7 @@ import {
   REDACTED,
 } from '../core/config-io.js'
 import { getOcppServer } from '../modules/charger-ocpp16/index.js'
-import { isValidTimeZone } from '../sdk/local-time.js'
+import { isValidTimeZone, HHMM_RE } from '../sdk/local-time.js'
 import {
   listPlans,
   listAllPlans,
@@ -115,7 +115,6 @@ export interface ApiDeps {
   requestRestart(): void
 }
 
-const HHMM = /^\d{2}:\d{2}$/
 const DAY_SET = new Set<string>(DAY_KEYS)
 
 function parsePlanDays(v: unknown): DayKey[] | null {
@@ -152,6 +151,11 @@ function toPlanDto(p: Plan, reading: EnergyReading) {
 
 export function createApiRouter(deps: ApiDeps): Router {
   const router = createRouter()
+  // Express 5 leaves req.body undefined when a request carries no JSON body; routes read fields off it.
+  router.use((req, _res, next) => {
+    req.body ??= {}
+    next()
+  })
 
   // Resolve the charger for a loadpoint route param. The `chargers` map is keyed by CHARGER
   // name, not loadpoint name, so look up the loadpoint's `charger` ref first — otherwise these
@@ -307,7 +311,7 @@ export function createApiRouter(deps: ApiDeps): Router {
   })
 
   // PUT /api/mqtt-bridge — OSC's outbound MQTT/Home-Assistant bridge. Persists as an override but is
-  // NOT live-reloadable yet (the bridge is started once at boot with no teardown handle) → always
+  // NOT live-reloadable yet (the bridge is started once at boot; no reload seam is wired) → always
   // restart-required. Send the full block (broker{host[,port,user,password]}, topicPrefix?,
   // homeAssistantDiscovery?).
   router.put('/mqtt-bridge', (req: Request, res: Response) => {
@@ -598,7 +602,7 @@ export function createApiRouter(deps: ApiDeps): Router {
   })
 
   // DELETE /api/chargers/:name — remove the charger + its loadpoint(s). The WS (if open) reverts to
-  // pending so it can be re-claimed. (A charger defined in osc.yaml returns on the next reboot.)
+  // pending so it can be re-claimed.
   router.delete('/chargers/:name', async (req: Request, res: Response) => {
     const name = String(req.params.name)
     const chargerCfg = deps.config.chargers.find((c) => c.name === name)
@@ -784,7 +788,9 @@ export function createApiRouter(deps: ApiDeps): Router {
       patch.autoRevertToSmart = b.autoRevertToSmart
     }
     if (Object.keys(patch).length === 0) {
-      res.status(400).json({ error: 'nothing to update (vehicle/tariff/balancer/autoRevertToSmart)' })
+      res
+        .status(400)
+        .json({ error: 'nothing to update (vehicle/tariff/balancer/autoRevertToSmart)' })
       return
     }
     setOverride(deps.db, 'loadpoint', name, patch)
@@ -856,7 +862,7 @@ export function createApiRouter(deps: ApiDeps): Router {
     }
     const days = parsePlanDays(b.days)
     const unit = parsePlanUnit(b.unit)
-    const readyBy = typeof b.readyBy === 'string' && HHMM.test(b.readyBy) ? b.readyBy : null
+    const readyBy = typeof b.readyBy === 'string' && HHMM_RE.test(b.readyBy) ? b.readyBy : null
     const target = typeof b.target === 'number' ? b.target : null
     if (!days || !unit || !readyBy || target === null || !validPlanTarget(unit, target)) {
       res.status(400).json({
@@ -866,7 +872,9 @@ export function createApiRouter(deps: ApiDeps): Router {
     }
     const vehicles = parsePlanVehicles(b.vehicles)
     if (vehicles === null) {
-      res.status(400).json({ error: 'vehicles must be an array of configured vehicle names or "guest"' })
+      res
+        .status(400)
+        .json({ error: 'vehicles must be an array of configured vehicle names or "guest"' })
       return
     }
     const enabled = typeof b.enabled === 'boolean' ? b.enabled : true
@@ -910,7 +918,9 @@ export function createApiRouter(deps: ApiDeps): Router {
     if (b.vehicles !== undefined) {
       const vs = parsePlanVehicles(b.vehicles)
       if (vs === null) {
-        res.status(400).json({ error: 'vehicles must be an array of configured vehicle names or "guest"' })
+        res
+          .status(400)
+          .json({ error: 'vehicles must be an array of configured vehicle names or "guest"' })
         return
       }
       patch.vehicles = vs
@@ -931,7 +941,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       patch.days = d
     }
     if (b.readyBy !== undefined) {
-      if (typeof b.readyBy !== 'string' || !HHMM.test(b.readyBy)) {
+      if (typeof b.readyBy !== 'string' || !HHMM_RE.test(b.readyBy)) {
         res.status(400).json({ error: 'readyBy must be "HH:MM"' })
         return
       }
@@ -1021,30 +1031,13 @@ export function createApiRouter(deps: ApiDeps): Router {
       return
     }
 
-    const body = req.body as { soc?: unknown; time?: unknown; kwh?: unknown; minSoc?: unknown }
-    const soc = typeof body.soc === 'number' ? body.soc : undefined
-    const time = typeof body.time === 'string' ? body.time : undefined
     // `kwh: null` is an explicit CLEAR (guest "just charge" — no cap); absent = leave unchanged.
-    const kwh = body.kwh === null ? null : typeof body.kwh === 'number' ? body.kwh : undefined
-    const minSoc = typeof body.minSoc === 'number' ? body.minSoc : undefined
-
-    if (soc !== undefined && (soc < 0 || soc > 100)) {
-      res.status(400).json({ error: 'soc must be 0–100' })
+    const parsed = parseTargetPatch(req.body)
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error })
       return
     }
-    if (time !== undefined && !/^\d{2}:\d{2}$/.test(time)) {
-      res.status(400).json({ error: 'time must be HH:MM' })
-      return
-    }
-    if (typeof kwh === 'number' && (kwh < 1 || kwh > 100)) {
-      res.status(400).json({ error: 'kwh must be 1–100' })
-      return
-    }
-    if (minSoc !== undefined && (minSoc < 0 || minSoc > 100)) {
-      res.status(400).json({ error: 'minSoc must be 0–100' })
-      return
-    }
-
+    const { soc, time, kwh, minSoc } = parsed.patch
     await deps.onTargetChange(name, soc, time, kwh, minSoc)
     res.json(deps.loadpoints.get(name))
   })
@@ -1062,13 +1055,19 @@ export function createApiRouter(deps: ApiDeps): Router {
     }
     const v = (req.body as { vehicle?: unknown }).vehicle
     if (v !== null && typeof v !== 'string') {
-      res.status(400).json({ error: 'vehicle must be a string (a vehicle name or "guest") or null (auto)' })
-      return
-    }
-    if (typeof v === 'string' && v !== 'guest' && !deps.config.vehicles.some((veh) => veh.name === v)) {
       res
         .status(400)
-        .json({ error: `unknown vehicle "${v}" — must be a configured vehicle, "guest", or null (auto)` })
+        .json({ error: 'vehicle must be a string (a vehicle name or "guest") or null (auto)' })
+      return
+    }
+    if (
+      typeof v === 'string' &&
+      v !== 'guest' &&
+      !deps.config.vehicles.some((veh) => veh.name === v)
+    ) {
+      res.status(400).json({
+        error: `unknown vehicle "${v}" — must be a configured vehicle, "guest", or null (auto)`,
+      })
       return
     }
     await deps.onVehicleOverride(name, v)
@@ -1563,6 +1562,9 @@ export function createApiRouter(deps: ApiDeps): Router {
     pruneLogs(deps.db, days)
     res.json({ retentionDays: days })
   })
+
+  // Unknown /api paths must not fall through to the SPA shell (a 200 + index.html hides typos).
+  router.use((_req, res) => res.status(404).json({ error: 'not found' }))
 
   return router
 }

@@ -1,14 +1,14 @@
 import mqtt from 'mqtt'
 import type { Logger } from 'pino'
 import type { EventBus } from '../core/events.js'
-import type { LoadpointState } from '../core/loadpoint.js'
+import { parseTargetPatch, type LoadpointState } from '../core/loadpoint.js'
 import type { HealthMap } from '../core/health.js'
 import type { ChargeMode } from '../core/config.js'
 import type { Tariff } from '../sdk/tariff.js'
 import type { Balancer } from '../sdk/balancer.js'
 import type { Vehicle } from '../sdk/vehicle.js'
 import { publishHaDiscovery } from './ha-discovery.js'
-import type { Broker } from '../sdk/broker.js'
+import { connectBroker, endBroker, type Broker } from '../sdk/broker.js'
 
 // OSC's OUTBOUND bridge config (config.mqttBridge) — carries its own broker, separate from meter readers.
 interface MqttBridgeConfig {
@@ -25,7 +25,13 @@ export interface MqttBridgeDeps {
   vehicles: Map<string, Vehicle>
   health: HealthMap
   onModeChange(name: string, mode: ChargeMode): Promise<void>
-  onTargetChange(name: string, soc?: number, time?: string, kwh?: number): Promise<void>
+  onTargetChange(
+    name: string,
+    soc?: number,
+    time?: string,
+    kwh?: number | null,
+    minSoc?: number,
+  ): Promise<void>
 }
 
 export function startMqttBridge(
@@ -33,14 +39,7 @@ export function startMqttBridge(
   deps: MqttBridgeDeps,
   log: Logger,
 ): { stop: () => Promise<void> } {
-  const client = mqtt.connect({
-    host: config.broker.host,
-    port: config.broker.port,
-    username: config.broker.user,
-    password: config.broker.password,
-    clientId: `osc-bridge-${Math.random().toString(16).slice(2, 8)}`,
-    clean: true,
-  })
+  const client = connectBroker(config.broker, 'osc-bridge')
 
   const prefix = config.topicPrefix
 
@@ -86,9 +85,9 @@ export function startMqttBridge(
     }
 
     // Publish current slot prices for all configured tariffs
-    void publishTariffNow(client, prefix, deps.tariffs)
+    void publishTariffNow(client, prefix, deps.tariffs, log)
     tariffSchedule?.clear() // a reconnect re-runs this handler — drop the previous schedule first
-    tariffSchedule = scheduleHourlyTariffPublish(client, prefix, deps.tariffs)
+    tariffSchedule = scheduleHourlyTariffPublish(client, prefix, deps.tariffs, log)
   })
 
   client.on('error', (err) => {
@@ -113,15 +112,29 @@ export function startMqttBridge(
         .onModeChange(name, str as ChargeMode)
         .catch((err) => log.warn({ err }, 'MQTT mode change error'))
     } else if (command === 'target') {
+      let body: unknown
       try {
-        const body = JSON.parse(str) as { soc?: number; time?: string; kwh?: number }
-        deps
-          .onTargetChange(name, body.soc, body.time, body.kwh)
-          .catch((err) => log.warn({ err }, 'MQTT target change error'))
+        body = JSON.parse(str)
       } catch {
         log.warn({ topic, str }, 'invalid target JSON')
+        return
       }
+      const parsed = parseTargetPatch(body)
+      if (!parsed.ok) {
+        log.warn({ topic, str, error: parsed.error }, 'invalid target command')
+        return
+      }
+      const { soc, time, kwh, minSoc } = parsed.patch
+      deps
+        .onTargetChange(name, soc, time, kwh, minSoc)
+        .catch((err) => log.warn({ err }, 'MQTT target change error'))
     }
+  })
+
+  // Keep the retained health mirror live — the connect-time publish is only the initial state.
+  deps.events.on('health.changed', (payload) => {
+    const p = payload as { id: string; health: string }
+    client.publish(`${prefix}/health/${p.id}`, p.health, { retain: true })
   })
 
   // Mirror balancer tick results to MQTT
@@ -143,7 +156,7 @@ export function startMqttBridge(
   deps.events.on('tariff.updated', (payload) => {
     const p = payload as { name: string }
     const tariff = deps.tariffs.get(p.name)
-    if (tariff) void publishOneTariffNow(client, prefix, p.name, tariff)
+    if (tariff) void publishOneTariffNow(client, prefix, p.name, tariff, log)
   })
 
   // Publish vehicle SoC + health whenever a poll succeeds
@@ -163,8 +176,7 @@ export function startMqttBridge(
   })
 
   deps.events.on('loadpoint.mode', (payload) => {
-    const p = payload as { name: string; mode: string }
-    client.publish(`${prefix}/loadpoints/${p.name}/mode`, p.mode, { retain: true })
+    const p = payload as { name: string }
     const state = deps.loadpoints.get(p.name)
     if (state) publishState(client, prefix, state)
   })
@@ -191,11 +203,10 @@ export function startMqttBridge(
   // DISCONNECT). Event listeners aren't removed — the process exits right after, and publishing on an
   // ended client is a harmless no-op.
   return {
-    stop: () =>
-      new Promise<void>((resolve) => {
-        tariffSchedule?.clear()
-        client.end(false, {}, () => resolve())
-      }),
+    stop: () => {
+      tariffSchedule?.clear()
+      return endBroker(client)
+    },
   }
 }
 
@@ -216,17 +227,24 @@ function clearState(client: mqtt.MqttClient, prefix: string, name: string): void
   }
 }
 
+// Never rejects: the bridge is a fail-safe mirror, so a tariff whose prices() throws must not become
+// an unhandled rejection (which would take the process down) — log and carry on.
 async function publishOneTariffNow(
   client: mqtt.MqttClient,
   prefix: string,
   name: string,
   tariff: Tariff,
+  log: Logger,
 ): Promise<void> {
-  const now = new Date()
-  const slots = await tariff.prices(now, new Date(now.getTime() + 3600_000))
-  const price = slots[0]?.pricePerKWh
-  if (price !== undefined) {
-    client.publish(`${prefix}/tariffs/${name}/now`, String(price), { retain: true })
+  try {
+    const now = new Date()
+    const slots = await tariff.prices(now, new Date(now.getTime() + 3600_000))
+    const price = slots[0]?.pricePerKWh
+    if (price !== undefined) {
+      client.publish(`${prefix}/tariffs/${name}/now`, String(price), { retain: true })
+    }
+  } catch (err) {
+    log.warn({ err, tariff: name }, 'MQTT tariff publish failed')
   }
 }
 
@@ -234,9 +252,10 @@ async function publishTariffNow(
   client: mqtt.MqttClient,
   prefix: string,
   tariffs: Map<string, Tariff>,
+  log: Logger,
 ): Promise<void> {
   for (const [name, tariff] of tariffs) {
-    await publishOneTariffNow(client, prefix, name, tariff)
+    await publishOneTariffNow(client, prefix, name, tariff, log)
   }
 }
 
@@ -244,13 +263,14 @@ function scheduleHourlyTariffPublish(
   client: mqtt.MqttClient,
   prefix: string,
   tariffs: Map<string, Tariff>,
+  log: Logger,
 ): { clear: () => void } {
   // Re-publish at the top of each hour as the "now" slot advances
   const msUntilNextHour = 3600_000 - (Date.now() % 3600_000)
   let interval: ReturnType<typeof setInterval> | undefined
   const timeout = setTimeout(() => {
-    void publishTariffNow(client, prefix, tariffs)
-    interval = setInterval(() => void publishTariffNow(client, prefix, tariffs), 3600_000)
+    void publishTariffNow(client, prefix, tariffs, log)
+    interval = setInterval(() => void publishTariffNow(client, prefix, tariffs, log), 3600_000)
   }, msUntilNextHour)
   return {
     clear: () => {

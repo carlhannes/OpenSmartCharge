@@ -1,8 +1,7 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Outlet,
   Link,
-  createRootRouteWithContext,
+  createRootRoute,
   useRouter,
   useRouterState,
   HeadContent,
@@ -71,7 +70,7 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   );
 }
 
-export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
+export const Route = createRootRoute({
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -117,7 +116,6 @@ function RootShell({ children }: { children: ReactNode }) {
 }
 
 function RootComponent() {
-  const { queryClient } = Route.useRouteContext();
   const [mounted, setMounted] = useState(false);
   const source = useOsc((s) => s.source);
   useLiveSync(); // auto-detects the backend: live via REST/SSE, else falls back to the mock tick
@@ -129,17 +127,17 @@ function RootComponent() {
 
   if (chromeless) {
     return (
-      <QueryClientProvider client={queryClient}>
+      <>
         <DemoBanner show={mounted && source === "demo"} />
         <div className="min-h-screen bg-background">
           {mounted ? <Outlet /> : <div className="h-screen" aria-hidden />}
         </div>
-      </QueryClientProvider>
+      </>
     );
   }
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <>
       <DemoBanner show={mounted && source === "demo"} />
       <div className="min-h-screen bg-background md:grid md:grid-cols-[240px_minmax(0,1fr)]">
         <aside className="hidden border-r border-border/60 md:block">
@@ -167,7 +165,7 @@ function RootComponent() {
           <TabBar />
         </div>
       </div>
-    </QueryClientProvider>
+    </>
   );
 }
 

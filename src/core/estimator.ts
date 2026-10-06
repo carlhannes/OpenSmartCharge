@@ -1,4 +1,4 @@
-import { DEFAULT_CHARGING_EFFICIENCY } from './electrical.js'
+import { DEFAULT_CHARGING_EFFICIENCY } from '../sdk/electrical.js'
 
 // Estimates current SoC when the vehicle API is unavailable.
 // Requires at least one prior successful vehicle read to have cached batteryCapacityKWh.

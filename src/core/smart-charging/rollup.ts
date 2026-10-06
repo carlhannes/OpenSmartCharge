@@ -2,7 +2,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { localDateKey, localHour } from '../../sdk/local-time.js'
 
 // Household-load history for the "worst-case current over the last N days" charging fallback.
-// Stored as an hourly MAX rollup (one row per Stockholm day+hour) rather than raw samples:
+// Stored as an hourly MAX rollup (one row per site-local day+hour) rather than raw samples:
 // bounded at 24 rows/day regardless of meter cadence, a single MAX query, and DST-safe (a
 // repeated local hour collapses via the max() upsert).
 
@@ -21,7 +21,7 @@ export function recordHouseholdLoad(
 }
 
 /**
- * Worst-case (max) household load observed in `at`'s Stockholm hour-of-day across the last
+ * Worst-case (max) household load observed in `at`'s site-local hour-of-day across the last
  * `historicalDays` calendar days (inclusive of `at`'s day). Null when there's no history for
  * that hour yet — the caller then falls through to the static rung.
  */

@@ -11,15 +11,17 @@ site:
   name: "My Home"
   # port: 8080        # HTTP server port (default: 8080)
 
-# MQTT broker connection.
-# Required for the mqtt-circuit balancer and for Home Assistant integration.
-# Run "docker compose up" to start a local Mosquitto instance.
-mqtt:
-  host: localhost
-  port: 1883
-  # user: ""
-  # password: ""
-  topicPrefix: osc          # all OSC topics will be under osc/...
+# OSC's OUTBOUND MQTT bridge (optional): publishes loadpoint state, accepts mode/target commands and
+# emits Home Assistant discovery. Meter readers (below) LISTEN on their own broker: block — the two
+# are independent, so omit this whole block if OSC should not publish anything.
+# Run "docker compose up mosquitto -d" to start a local Mosquitto instance.
+mqttBridge:
+  broker:
+    host: localhost
+    port: 1883
+    # user: ""
+    # password: ""
+  topicPrefix: osc               # all OSC-published topics live under osc/...
   homeAssistantDiscovery: true   # auto-create HA entities via MQTT discovery
 
 # Day-ahead tariff sources.
@@ -29,7 +31,8 @@ tariffs:
     type: elprisetjustnu     # Swedish zones (SE1–SE4) via elprisetjustnu.se — free, no API key
     zone: SE4                # SE1 | SE2 | SE3 | SE4   (SEK/kWh, 15-minute resolution)
                              # Prices fetched at 13:15 Europe/Stockholm after Nordpool publishes.
-                             # Health is 'degraded' between midnight and 13:15 until tomorrow lands.
+                             # Health is 'degraded' from 13:15 until tomorrow's prices land
+                             # (before 13:15, having today's prices is enough).
                              # For the Baltics/Finland instead, use:  type: elering  zone: EE|FI|LV|LT
                              # For a fixed-price contract instead:    type: fixed    pricePerKWh: 1.5
 
@@ -58,24 +61,35 @@ vehicles:
     username: you@example.com    # MySkoda account email  (sensitive)
     password: "your-password"    # MySkoda account password (sensitive)
     vin: TMBABCDEF12345678       # 17-char VIN (uppercase)
-    # pollIntervalSec: 900       # poll interval; minimum 300 s (default: 900)
-    # staleAfterSec: 7200        # health → degraded if no successful poll for this long
+                                 # Polling cadence is global, not per car: smartCharging.vehiclePollIntervalSec.
+  # For a car with no app/API, add a manual vehicle (kWh-only targets, never polled):
+  # - name: guest-car
+  #   type: manual
 
 # Meter readers — the single source of truth for live household current, so a balancer can
 # size charger output below the main fuse. A balancer points its meterReader: at one by name.
 # The reader's health()/staleAfterSec is the ONE staleness authority: when it goes degraded,
-# the circuit falls back down the ladder (historical → static-tod). Requires mqtt: above.
+# the circuit falls back down the ladder (historical → static-tod). Each reader carries its
+# OWN broker: block (listen-only) — independent of the mqttBridge above.
 meterReaders:
   - name: house-phase
     type: mqtt-phase             # subscribes to house/i1_a, house/i2_a, house/i3_a — raw per-phase
     topicPrefix: house           # amps published by pulse_bridge.py or any DSMR/Modbus bridge
     staleAfterSec: 60            # health → degraded after this many seconds without a frame
+    broker:                      # the broker this reader listens on (required)
+      host: localhost
+      port: 1883
+      # user: ""
+      # password: ""
   # For a Tibber Pulse speaking DSMR directly, use the richer reader instead of mqtt-phase:
   # - name: house-pulse
   #   type: tibber-pulse
   #   subTopic: pulse              # MQTT topic where Pulse publishes DSMR frames (default: pulse)
   #   republishPrefix: house       # optional: re-publish house/{power_w,i1_a,i2_a,i3_a} for dashboards
   #   staleAfterSec: 60
+  #   broker:
+  #     host: localhost
+  #     port: 1883
 
 # OCPP chargers.
 # Any OCPP 1.6J charger configured to connect to ws://<your-host>:8080/ocpp

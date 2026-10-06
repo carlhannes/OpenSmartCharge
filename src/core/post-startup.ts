@@ -1,4 +1,4 @@
-import { backoffDelayMs, type BackoffCfg } from './source-reconciler.js'
+import { backoffDelayMs, type BackoffCfg } from '../sdk/source-reconciler.js'
 
 // Runs each module's optional `postStartup()` hook once after the whole system is up, retrying
 // failures with capped exponential backoff. The lifecycle owns the WHEN (this runner) — modules stay

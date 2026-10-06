@@ -1,5 +1,11 @@
 # OpenSmartCharge — Vision & Roadmap for v0.2.0
 
+> **Historical (written 2026-07; shipped in 0.2.x).** Parts 1–6 — who the user is, the design principles,
+> the information architecture, the user stories and the UX checklist — remain the product reference.
+> The former Parts 7–10 (gap analysis, backend roadmap, open decisions, verification plan) described a
+> design that was built differently in places and have been removed; what exists today is documented in
+> `docs/architecture.md`, `docs/config.md` and `ROADMAP.md`.
+
 > This is a design brief + backend roadmap, not a UI spec. It captures the UX vision as user stories and maps the backend gaps needed to support a mobile-first redesign. The frontend is built separately from the user stories here.
 >
 > **Decisions locked:**
@@ -157,94 +163,3 @@ The frontend needs these backend contracts to exist. Summarized; detailed in Par
 
 ---
 
-# PART 7 — Gap analysis (described vision vs. what the backend does today)
-
-*Backend/logic only — UI excluded. Grounded in the current code (file:line citations from a July 2026 code sweep; verify against current code before implementing).*
-
-| Vision feature | Exists today? | Backend gap to close |
-|---|---|---|
-| **Onboarding wizard / first-run** | ❌ Config is immutable YAML (`config.ts` load-only, no writer anywhere); no first-run concept | Topology as a **JSON config document in SQLite** with a declarative `GET`/`PUT /api/config` (zod-validated); an "is-configured / first-run" flag; one-time YAML→document import + document→YAML export |
-| **Charger pairing / "detect my charger"** | ⚠️ All WS connections accepted (`charger-ocpp16/server.ts` `accept()`); unknown stations orphan; no discovery API | Track **pending/unclaimed** stations; expose via API + SSE event; a "claim" flow that creates charger+loadpoint config |
-| **Electricity region at runtime** | ⚠️ Zone is per-tariff YAML, read-only (`tariff-elering/index.ts`) | Writable tariff config; re-init/reload tariff module + re-fetch on change |
-| **Multiple plans per charger** | ❌ Single `targetSoc`+`targetTime` on `LoadpointState` (`loadpoint.ts`) | New **plans** table + **plan-resolution** logic; feed the *resolved* plan into the existing planner |
-| **Day-of-week recurrence** | ❌ `targetTime` is a bare HH:MM, next-occurrence only (`lifecycle.ts` `parseTargetTime`) | Day-mask gating; compute next ready-by datetime from mask |
-| **Target in %** | ✅ `targetSoc` 0–100 (`config.ts`) | — reuse as-is |
-| **Target in km** | ⚠️ `range` read from Skoda & cached (`vehicle-skoda/index.ts`, `vehicle_cache.range_km`), but never a target; no conversion | km→% conversion from live range/SoC ratio; store target **unit**; persist last ratio for offline durability |
-| **Target in kWh (Guest, no car)** | ❌ | Small add — planner already thinks in `requiredKWh` (`planner.ts`), so a kWh target is the *most direct* input |
-| **Battery-capacity durability** | ✅ **Largely done** — capacity fetched once, cached in SQLite (`vehicle_cache.battery_capacity_kwh`), estimator `lastSoc + kWh·0.92/capacity` survives outage (`estimator.ts`) | Also persist the **km↔% ratio** + last range; ensure Guest/kWh path never needs capacity |
-| **Guest vs detected car** | ❌ No guest concept; static 1:1 VIN mapping (`config.ts`, `lifecycle.ts`) | Model a **vehicle profile** on the loadpoint with a **Guest** default; record per-session which profile was used |
-| **Automatic car detection** (0.3.0) | ❌ | Correlation heuristic; needs connector/plug state — Skoda gives a coarse `state` enum currently **discarded** (`vehicle-skoda/index.ts` keeps only `=== 'CHARGING'`); re-expose it |
-| **Climate-triggered charging** (0.3.0) | ❌ **Zero** climate support anywhere (grep confirms) | Skoda climatisation endpoint (port from evcc); extend **Vehicle interface** with climate/precondition + connector state; loadpoint trigger rule + guardrail |
-| **Estimated cost in history** | ⚠️ `transactions` + `meter_values` stored (`db.ts`); no cost | Join session energy × tariff price-at-time → cost; small aggregation endpoint |
-| **Trustworthy live values** | ✅ Resolved (2026-07-04, see `ROADMAP.md`): live `currentA`/`sessionEnergy` now survive restart/reconnect; session energy is the delta; `defaultMode`/targets seed the DB with a declarative `config:apply` escape hatch | Foundation done — redesign can rely on `/api/loadpoints` live values |
-
-**Headline:** the single biggest gap is that **config is immutable at runtime** — onboarding + live plan/charger editing is net-new architecture, not a UI skin. The single biggest *pleasant surprise* is that **capacity-based durability already works**, so km/% offline behavior mostly reuses the existing estimator.
-
----
-
-# PART 8 — Backend / logic roadmap
-
-## 0.2.0 workstreams
-
-**W1 — Config as data (the enabler).** SQLite becomes the single *live* source of truth; YAML is import/export only.
-- **Topology as one JSON document, not table-per-entity:** a single-row `config_document` table in `src/core/db.ts` holding the whole topology config (chargers, meters, tariffs, balancers, vehicles, site) as validated JSON. Far less code than normalized tables, and round-trips to/from YAML trivially. (`plans` is the one normalized table — see W3.)
-- **Declarative surface:** `GET /api/config` returns the document; `PUT /api/config` validates with the **existing zod schemas** in `src/core/config.ts` (DRY — don't fork validation) and replaces it. Tests PUT a fixture document.
-- `loadConfig()` gains a DB-backed path; on first 0.2.0 boot with no document, **import `osc.yaml` → document** once (guarded by an `is-configured` flag), then the DB wins and YAML is never read live again. Provide document→YAML export (complements `scripts/backup.mjs`, which already covers the whole DB).
-- **Soft in-process reload:** refactor `lifecycle.ts`'s boot into a `buildRuntime(config)` / `teardown()` pair so `PUT /api/config` tears down and rebuilds the whole module graph in-process — a full rebuild, **not** hot-diffing individual modules (KISS/low-risk). Plans and live mode/target are read each balancer tick, so their edits need no reload.
-
-**W2 — Config API + pairing.** In `src/server/api.ts`:
-- **Primary surface is the declarative document** from W1 (`GET`/`PUT /api/config`). Topology changes are rare, so the UI can read-modify-write the whole document; granular per-entity endpoints are optional — add them only where a flow genuinely needs one.
-- **Pending stations:** in `src/modules/charger-ocpp16/server.ts`, track connected-but-unclaimed stationIds; expose `GET /api/stations/pending` + an SSE `station.connected` event; a "claim" action adds the charger + loadpoint to the config document (W1) and soft-reloads.
-- Expose a first-run/is-configured flag (the existing read-only `GET /api/site` projection can remain as a convenience, or fold into `GET /api/config`).
-
-**W3 — Plans model & resolution.**
-- New `plans` table: `(id, loadpoint_name, days_mask, ready_by, target_value, target_unit['soc'|'km'|'kwh'], enabled)`.
-- New `src/core/plans.ts`: given now + a loadpoint's plans → resolve the governing plan → produce `{ requiredKWh, targetTime }` and hand to the **existing** `plan()` in `src/core/planner.ts` (unchanged) and the tariff gate in `lifecycle.ts`.
-- CRUD endpoints in `api.ts`.
-
-**W4 — km / kWh targets + durability.**
-- km→%: `ratio = range / soc` (live), `requiredSoc = targetKm / ratio`; **persist the ratio** (extend `vehicle_cache` / `module_kv`) so km targets survive a vehicle-API outage; freeze last ratio when offline.
-- kWh target: feed `requiredKWh` directly to the planner (Guest-friendly, no capacity needed).
-- Reuse `estimateSoc()` (`src/core/estimator.ts`) untouched.
-
-**W5 — Cost in history.** Aggregation endpoint joining `meter_values`/`transactions` energy with `tariff_slots` price-at-time → estimated cost. Read-only; no schema change beyond a query.
-
-**W6 — Foundation fixes.** ✅ Done (2026-07-04, see `ROADMAP.md` "Resolved"): live `currentA`/`sessionEnergy` survive restart/reconnect, session energy is the delta, `defaultMode`/targets seed the DB (+ declarative `config:apply`), `dev:ui` blank page, reconnect health refresh, and the off-boundary smart-charge price bug. (Note: Swedish `elprisetjustnu` prices are genuinely 15-min; the "hourly" note applied to Elering/Nord Pool day-ahead.)
-
-## 0.3.0 workstreams
-
-**W7 — Automatic car detection.** Re-expose the discarded Skoda `state` enum (`READY_FOR_CHARGING` etc.) and add connector/plug state; correlation heuristic between vehicle transitions and loadpoint sessions; confidence + Guest fallback.
-
-**W8 — Climate-triggered charging.** Port Skoda climatisation status (evcc reference); extend `src/sdk/vehicle.ts` `VehicleData` with climate/precondition state; loadpoint trigger rule with guardrail/timeout in `lifecycle.ts`.
-
-## Critical files (for whoever implements)
-- `src/core/db.ts` — new config + plans tables, migrations
-- `src/core/config.ts` — reuse zod schemas for API validation; DB-backed load + YAML import/export
-- `src/core/plans.ts` *(new)* — plan resolution
-- `src/core/planner.ts`, `src/core/estimator.ts` — **reuse as-is**
-- `src/core/lifecycle.ts` — reconfigure path; plan-resolution wiring
-- `src/server/api.ts` — `GET`/`PUT /api/config`, plans CRUD, pairing, cost endpoints
-- `src/modules/charger-ocpp16/server.ts` — pending-station tracking + SSE
-- `src/sdk/vehicle.ts`, `src/modules/vehicle-skoda/*` — (0.3.0) climate + connector state
-- Docs to update: `docs/config.md`, `docs/architecture.md` ("immutable at runtime" is no longer true), `docs/modules.md`, `ROADMAP.md`
-
----
-
-# PART 9 — Key architectural decisions & open questions
-
-1. **Apply model for topology changes** — **decided:** soft in-process reload (`buildRuntime`/`teardown`, full rebuild, no hot-diffing, no container restart). Plans/mode changes are instant (read each tick).
-2. **Config store** — **decided:** SQLite is the single live source of truth (topology as one JSON document + `plans` table); YAML is import/export only. Rules out a dual YAML+DB source.
-3. **Plan conflict resolution** — recommend *earliest upcoming ready-by among today's active plans wins*; alternative is user-ordered priority. *(Open.)*
-4. **km target when offline** — recommend *freeze & persist last known range/SoC ratio*; degrade to % if never seen. Confirmed the Enyaq's reported range already tracks seasonal derating, so a linear ratio is sound. *(Open detail.)*
-5. **Migration** — one-time YAML→document import on first 0.2.0 boot; keep YAML export for the git/backup workflows self-hosters expect.
-
----
-
-# PART 10 — Verification approach (per workstream, for implementation)
-
-Each backend workstream ships with an end-to-end check, on top of the existing `npm run build && npm start` + `npm run smoke` gates:
-- **W1/W2:** run onboarding against `scripts/sim-charger.mjs`; confirm a claimed station produces a live loadpoint via soft reload (no process restart), and that after a real restart config still loads from the DB document (YAML is not re-read). PUT a fixture config document and confirm the module graph rebuilds to match it.
-- **W3:** create two overlapping plans and assert the resolver picks the earlier ready-by; verify a day-mask that excludes today yields "no active plan."
-- **W4:** set a km target with a connected vehicle, then simulate a vehicle-API outage and confirm the frozen ratio keeps the target sane; set a kWh target with no vehicle (Guest) and confirm the planner charges the right amount.
-- **W5:** compare a computed session cost against a manual kWh × slot-price calculation.
-- **W6:** confirm `currentA`/`sessionEnergy` read correctly against real or simulated meter values.

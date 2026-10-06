@@ -33,7 +33,7 @@ OSC controls current with a single OCPP `SetChargingProfile`
 Outbound commands OSC can send (all in `commands.ts`, wired through `server.ts` →
 `index.ts` → `src/server/api.ts`): `SetChargingProfile`, `RemoteStartTransaction`,
 `RemoteStopTransaction`, `Reset`, `ChangeAvailability`, `ClearChargingProfile`,
-`GetCompositeSchedule`.
+`GetCompositeSchedule`, `GetConfiguration`, `TriggerMessage`.
 
 ## Reading the charger's actual state
 
@@ -136,12 +136,16 @@ when OSC raises the limit back to 8 A — nor on a bare `RemoteStart` (a no-op w
 open). Only a full **`RemoteStop` + `RemoteStart`** (a fresh transaction) restarted it. This is a
 known VW-group trait; the same current-only pause/resume works on many other cars.
 
-**Fix — the resume-nudge** (`resumeNudgeDecision`, `src/core/control-loop.ts`; wired in
-`circuitTick`): when a loadpoint *wants* current, is plugged with an **open session**, yet draws
-`~0 A` beyond a ramp-grace window, the control loop issues `RemoteStop`+`RemoteStart`. It is guarded
-by a grace window (absorbs the normal `SuspendedEVSE→Charging` ramp), a cooldown between attempts, and
-a max-retries cap (never stop/starts a genuinely stuck car forever). It requires an **open** session,
-so it only ever *resumes* — never *starts* a transaction — which keeps `autoStartTransaction: false` meaningful.
+**Fix — the SessionReconciler** (`decideSession`, `src/core/session-reconciler.ts`; wired in
+`circuitTick`): level-triggered recovery that compares "OSC wants charge" (commanded amps > 0) with the
+observed connector status, live draw and the car's own state, and climbs a ladder of levers — `RemoteStart`
+when a present car has no open session, `RemoteStop`+`RemoteStart` (a fresh transaction) for a session
+latched at `~0 A`, the vehicle module's car-side `startCharging()` when the car reports charging OFF (the
+one lever no OCPP command can pull), `ClearChargingProfile` + re-assert when a leftover profile may be
+suppressing us, and a `Reset` as the last resort. Every step is guarded by a grace window (absorbs the
+normal `SuspendedEVSE→Charging` ramp), a cooldown between attempts, and a max-attempts cap, so a genuinely
+stuck car is never stop/started forever. `RemoteStart` as an *opener* only runs where `autoStartTransaction`
+allows it, which keeps `autoStartTransaction: false` meaningful.
 
 ## References
 - Zaptec native OCPP 1.6J docs & release notes: <https://docs.zaptec.com/docs/ocpp16j>,

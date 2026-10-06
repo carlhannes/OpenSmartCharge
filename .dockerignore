@@ -1,0 +1,13 @@
+# Build context hygiene: never ship local state, secrets or installed deps into the image.
+node_modules
+src/ui2/node_modules
+dist
+src/ui2/dist
+data
+backups
+osc.yaml
+*.local.yaml
+.env
+.git
+coverage
+.references

@@ -9,7 +9,7 @@ test('manual vehicle: registered, no telemetry, kWh-only, never auto-identified'
   const v = mod!.create({ name: 'opel' }, {} as unknown as ModuleCtx)
 
   expect(v.id).toBe('opel')
-  // All-false capabilities → targetUnitsFor yields kWh-only, autoIdentifiable is false (see energy.ts).
+  // All-false capabilities → targetUnitsFor yields kWh-only; presence=false means never auto-identified.
   expect(v.capabilities).toEqual({
     soc: false,
     range: false,

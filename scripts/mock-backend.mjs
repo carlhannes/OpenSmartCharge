@@ -393,6 +393,15 @@ const server = http.createServer((req, res) => {
     })
     return
   }
+  const balancerPut = p.match(/^\/api\/balancers\/([^/]+)$/)
+  if (balancerPut && req.method === 'PUT') {
+    readBody((b) => {
+      if (b.mainBreakerA != null) siteBreaker = b.mainBreakerA
+      emit('config.changed', { kind: 'balancer', name: balancerPut[1] })
+      send(res, { ok: true })
+    })
+    return
+  }
   if (p === '/api/smartcharging' && req.method === 'PUT') {
     readBody((b) => {
       if (b.nightMarginA != null) smartCharging.nightMarginA = b.nightMarginA

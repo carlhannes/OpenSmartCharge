@@ -103,7 +103,8 @@ test('POST /api/system/reset clears all seeded tables and calls requestRestart o
   const dir = mkdtempSync(join(tmpdir(), 'osc-api-reset-'))
   const db = openDb(dir)
   let restarts = 0
-  const count = (t: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n
+  const count = (t: string) =>
+    (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n
   try {
     // Seed rows across three distinct tables (config layer, settings KV, runtime plans).
     db.prepare("INSERT INTO config_overrides (kind, name, patch) VALUES ('site','site',?)").run(
@@ -1012,7 +1013,9 @@ test('GET /api/loadpoints/:name/plan merges the price curve with the tick-comput
           name: 'garage',
           mode: 'smart',
           // a 15-min charging slot inside the middle (21:00) hour
-          plannedSlots: [{ start: t(21), end: new Date('2026-07-04T21:15:00Z'), shouldCharge: true }],
+          plannedSlots: [
+            { start: t(21), end: new Date('2026-07-04T21:15:00Z'), shouldCharge: true },
+          ],
           planReadyBy: t(21).getTime(),
         },
       ],
@@ -1050,5 +1053,28 @@ test('GET /api/power-history returns the rolling power buffer', async () => {
     const res = await fetch(`${baseUrl}/api/power-history`)
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual(samples)
+  })
+})
+
+test('a request with no JSON body is a 400, not a 500 (Express 5 leaves req.body undefined)', async () => {
+  const deps = {
+    config: { loadpoints: [{ name: 'garage', charger: 'garage' }] },
+    chargers: new Map(),
+    loadpoints: new Map([['garage', { name: 'garage' }]]),
+    onModeChange: async () => {},
+  } as unknown as ApiDeps
+  await withApi(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/loadpoints/garage/mode`, { method: 'POST' })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ error: 'mode must be smart | fast | disabled' })
+  })
+})
+
+test('an unknown /api path is a JSON 404 (never the SPA shell)', async () => {
+  const deps = { config: { loadpoints: [] }, loadpoints: new Map() } as unknown as ApiDeps
+  await withApi(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/nope`)
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ error: 'not found' })
   })
 })

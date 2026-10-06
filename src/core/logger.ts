@@ -22,5 +22,3 @@ export const createLogger = (captureStreams: Writable[] = []): pino.Logger => {
     ]),
   )
 }
-
-export type Logger = pino.Logger

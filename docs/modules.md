@@ -104,7 +104,7 @@ The `type: static` must match the string you pass to `api.registerTariff({ type:
 Start OSC (`npm run dev` or `npm start`) and check health:
 
 ```bash
-curl -s http://localhost:8080/api/health | jq '."tariff-flat-rate"'
+curl -s http://localhost:8080/api/health | jq '."flat-rate"'   # health is keyed by the configured module name
 # → "ok"
 ```
 
@@ -131,15 +131,14 @@ Throw a descriptive `Error` from `create()` on bad config — OSC logs it and ab
 
 ### Going further
 
-Once you need HTTP, scheduling, or persistence, `src/modules/tariff-elering/` is the reference:
+Once you need HTTP, scheduling, or persistence, the Nord Pool providers are the reference — and note how little lives in the module: `src/modules/tariff-elprisetjustnu/` is an `api.ts` (one HTTP fetch + parse) plus a one-line registration. Everything shared sits in `src/sdk/nordpool-tariff.ts`:
 
-| Feature | File | Key pattern |
+| Concern | Where | Key pattern |
 |---|---|---|
-| Periodic fetch | `index.ts` | `setTimeout` + `clearTimeout` in `start`/`stop`; state captured by closure |
-| `ctx.fetch` jitter | `index.ts:57` | Use `ctx.fetch` for scheduled calls; `globalThis.fetch` for immediate startup calls |
-| SQLite persistence | `persistence.ts` | `ctx.db.prepare('INSERT OR REPLACE …').run(…)` in `start()`; `CREATE TABLE IF NOT EXISTS` once |
-| Time-zone-safe scheduling | `scheduler.ts` | DST-safe Stockholm-time math; returns `{ delayMs, reason }` |
-| Tri-state health | `index.ts` | `computeHealth()` — `'ok'` / `'degraded'` (stale cache) / `'unavailable'` (no data at all) |
+| Fetch + parse | `src/modules/tariff-*/api.ts` | one `fetchSlots(zone, from, to, fetchFn)`; `AbortSignal.timeout(FETCH_TIMEOUT_MS)` per request; throw `ZoneNotFoundError` for a permanent misconfiguration |
+| Publish-window schedule + retry | `src/sdk/nordpool-tariff.ts` | the one timer a tariff owns: 13:15 market time plus a random 0–120 s herd-spreading offset; failures retry with `backoffDelayMs` (`src/sdk/source-reconciler.ts`) |
+| SQLite persistence | `src/sdk/nordpool-tariff.ts` | `upsertSlots` / `getSlots` on the shared `tariff_slots` table |
+| Tri-state health | `src/sdk/nordpool-tariff.ts` | `computeTariffHealth()` — `'ok'` / `'degraded'` (past the window, no tomorrow yet) / `'unavailable'` (no future slots) |
 
 ## Promoting a plugin to first-party
 
@@ -165,7 +164,7 @@ registerTariff({ type: 'static', create(cfg, ctx) { … } })
 import '../modules/tariff-static/index.js'
 ```
 
-The `create(cfg, ctx)` factory itself is unchanged. See `src/core/lifecycle.ts:1-6` for the first-party import block.
+The `create(cfg, ctx)` factory itself is unchanged. See the side-effect import block at the top of `src/core/lifecycle.ts`.
 
 ## The five interfaces
 
@@ -226,6 +225,7 @@ interface Balancer {
 
 interface BalancerInput {
   loadpoints: LoadpointSnapshot[]
+  circuitBudgetA: number  // amps available for the whole circuit this tick — already resolved by the lifecycle
   timestamp: Date
 }
 
@@ -234,7 +234,7 @@ interface BalancerOutput {
 }
 ```
 
-`tick` is called every `intervalSec` seconds. It must always return a valid `allocations` map — never throw. If meter data is stale or unavailable, return a safe fallback current (not zero, unless the loadpoint mode is `disabled`).
+`tick` runs once per control tick (`smartCharging.controlIntervalSec`, default 30 s) with an already-resolved `circuitBudgetA`. The balancer is a **pure splitter**: it never reads a meter, computes headroom or decides staleness — the lifecycle's current-budget ladder (live meter → historical worst-case → static time-of-day) did that before calling it. Split the budget across the loadpoints that want current, never exceed a loadpoint's `maxCurrentA`, floor a share below the IEC minimum (`IEC_MIN_CURRENT_A` in `src/sdk/electrical.ts`) to 0, and always return a valid `allocations` map — never throw.
 
 The `LoadpointSnapshot` includes these notable fields:
 
@@ -243,21 +243,24 @@ The `LoadpointSnapshot` includes these notable fields:
 | `mode` | `disabled` / `smart` / `fast` |
 | `maxCurrentA` | Per-loadpoint ceiling from charger config. Never exceed it. |
 | `shouldChargeNow?` | Set by lifecycle for smart-mode loadpoints. `false` = expensive slot, allocate 0. `undefined` = charge. |
-| `pricesAvailable` | Whether the tariff module has data. Informational. |
-| `currentA` | What the charger is currently drawing. Add this back before re-distributing headroom (credit-back). |
+| `targetReached?` / `pauseOnTarget?` | The active plan's target is met / it asks to pause there — a `fast` loadpoint with both set wants 0. |
+| `currentA` / `commandedA?` | What the charger draws / was last commanded. Informational here — the credit-back for a ramping car happens in the lifecycle's budget resolver. |
 
-Lifecycle sets `shouldChargeNow=false` for smart-mode loadpoints in expensive tariff slots; the balancer allocates 0 to those and distributes freed headroom to the remaining loadpoints.
+Lifecycle sets `shouldChargeNow=false` for smart-mode loadpoints in expensive tariff slots; the balancer allocates 0 to those and distributes the budget across the remaining loadpoints (`fast` first, then an equal split).
 
 ### `Vehicle` (`src/sdk/vehicle.ts`)
 
 ```ts
 interface Vehicle {
   readonly id: string
-  start(): Promise<void>
-  stop(): Promise<void>
+  readonly capabilities: VehicleCapabilities  // what this module can report: soc / range / capacity / presence / climate / targetSoc
+  refresh(): Promise<VehicleData>              // ONE live fetch — the lifecycle decides when to call it
+  getData(): Promise<VehicleData>              // the last cached reading; never hits the network
+  getCachedCapacity(): number | undefined      // always fast (from SQLite cache)
+  startCharging?(): Promise<void>              // optional car-side levers the SessionReconciler may use
+  stopCharging?(): Promise<void>
   health(): ModuleHealth
-  getData(): Promise<VehicleData>
-  getCachedCapacity(): number | undefined  // always fast (from SQLite cache)
+  stop(): Promise<void>
 }
 
 interface VehicleData {
@@ -265,13 +268,16 @@ interface VehicleData {
   batteryCapacity?: number // kWh (stable per VIN — cache this)
   range?: number           // km
   isCharging?: boolean
+  targetSoc?: number       // the target set in the car
+  pluggedIn?: boolean      // the car's own cable state — a cross-check of the OCPP status
+  climateActive?: boolean  // remote climate / preconditioning running
   fetchedAt: Date
 }
 ```
 
-Lifecycle calls `vehicle.start()` once at boot; the module owns its own poll timer. Cache battery capacity to SQLite via `ctx.db` — it's stable per VIN and enables SoC estimation when the API is unreachable.
+**The module owns no poll timer.** The lifecycle calls `refresh()` on charger-connect and then on its drawing/idle cadences while the car is plugged in — never while unplugged (polling a parked car can wake it and risks an account lockout). `refresh()` does one fetch with the plain global `fetch` (add a per-request `AbortSignal.timeout`), updates the SQLite cache and returns the fresh reading; throw on failure — the lifecycle keeps the last cached value and backs off.
 
-**Cache battery capacity aggressively.** Once you've read it, return it forever from `getCachedCapacity()`. `getData()` should return cached data when the API is down — set `health()` to `'degraded'` in that case. Never throw when the API is temporarily unavailable.
+**Cache battery capacity aggressively.** Once you've read it, return it forever from `getCachedCapacity()` — it's stable per VIN and enables SoC estimation when the API is unreachable. Derive `health()` from recent failures with `sourceHealth()` (`src/sdk/source-reconciler.ts`) so an outage is visible instead of a stale cache masquerading as `ok`.
 
 **The vehicle module self-describes its onboarding form.** Beyond `type` and `create()`, a `VehicleModule` declares `label`, `capabilities` (what it can report — see `VehicleCapabilities` / `VEHICLE_CAPS_NONE`), and `configFields` — the credentials/config it needs beyond the universal `name`. That descriptor drives `GET /api/vehicle-types`, the app's create/edit/onboarding form, and the generic `POST`/`PUT /api/vehicles` validation — so a new car API is a drop-in module with **no core or UI change**. Mark credential fields `secret: true` (masked in the form, redacted on export, and kept on edit when left blank).
 
@@ -306,15 +312,14 @@ interface MeterReader {
   stop(): Promise<void>
   health(): ModuleHealth
   latest(): MeterSnapshot | null  // null = no frame received yet
-  onSnapshot(cb: (s: MeterSnapshot) => void): () => void  // returns unsubscribe
 }
 ```
 
-`latest()` returning `null` means the reader has never seen a frame (report `'unavailable'`). A non-null snapshot that is older than `staleAfterSec` means the feed has stopped (report `'degraded'` but keep returning the last value).
+`latest()` returning `null` means the reader has never seen a frame (report `'unavailable'`). A non-null snapshot that is older than `staleAfterSec` means the feed has stopped (report `'degraded'` but keep returning the last value) — `meterHealth(latest, staleAfterSec)` from `src/sdk/meter-reader.ts` is that rule.
 
-`onSnapshot` is the push channel used by the balancer for in-process data flow — no MQTT round-trip needed.
+Announce every new frame on the event bus — `ctx.events.emit('meter.snapshot', { name, snapshot })` — that is the one fan-out path (the lifecycle folds it into the load history and the power chart). Open your own listen-only connection with `connectBroker(broker, clientIdPrefix)` / `endBroker(client)` from `src/sdk/broker.ts`.
 
-Reference: `src/modules/meter-tibber-pulse/`
+Reference: `src/modules/meter-mqtt-phase/` (the smaller one) and `src/modules/meter-tibber-pulse/`.
 
 ## `ModuleCtx`
 
@@ -325,15 +330,14 @@ interface ModuleCtx {
   db: DatabaseSync     // node:sqlite (Node 22.5+ built-in) — persistence
   events: EventEmitter // internal pub/sub
   log: Logger          // pino — the shared app logger; every line is captured to the Logs viewer
-  fetch: typeof globalThis.fetch  // drop-in fetch() with 0–120 s anti-thundering-herd jitter
 }
 ```
 
-**`ctx.fetch` vs global `fetch`** — use `ctx.fetch` for all scheduled/periodic outbound HTTP calls (tariff fetches, vehicle polls). It adds a random 0–120 s jitter so multiple OSC instances on the same network don't slam upstream APIs at the same millisecond. For a fetch that must happen immediately at startup, use the global `fetch` directly. See `src/modules/tariff-elering/index.ts` for the pattern.
+**HTTP** — use the global `fetch` with a per-request timeout (`AbortSignal.timeout(…)`). There is no jittered fetch: anything time-related (herd-spreading jitter, retry backoff, cadence) is a scheduling concern and lives where the schedule is decided — the lifecycle for vehicle polls, the shared Nord Pool factory for the publish-window refetch — never inside a request primitive.
 
 **MQTT-speaking modules carry their own `broker:`** — there is no `ctx.mqtt`. A meter reader that listens on a broker declares its own `broker: {host, port, user?, password?}` in its `meterReaders[]` entry and opens its own listen-only connection (parse it with `parseBroker()` from `src/sdk/broker.ts`; see `src/modules/meter-mqtt-phase`). OSC's *own* outbound publishing (state topics + Home Assistant discovery) is a separate concern configured under `mqttBridge:` — consuming a meter never makes OSC publish. Fail loudly in `create()` if a required broker is missing (that's what `parseBroker` does).
 
-**`ctx.db`** — your tables, your `CREATE TABLE IF NOT EXISTS` in `start()`. Don't collide with OSC core table names: `loadpoint_state`, `transactions`, `meter_values`, `tariff_slots`, `vehicle_cache`.
+**`ctx.db`** — your tables, your `CREATE TABLE IF NOT EXISTS` in `create()`/`start()`. Don't collide with OSC's table names: `loadpoint_state`, `charge_plans`, `config_overrides`, `settings`, `transactions`, `meter_values`, `ocpp_tx_counter`, `tariff_slots`, `vehicle_cache`, `household_load_hourly`, `logs`, `module_kv` (a shared key/value table a module may use for small durable state — see `src/modules/vehicle-skoda/persistence.ts`).
 
 **`ctx.log`** — log through it (`ctx.log.info(...)`, `.warn(...)`, `.debug(...)`, …), **not `console.log`**. Everything logged this way is captured to the runtime `logs` store and shown in the app's **Logs viewer** (Settings → Logs) — at every level (there's no minimum; logs rotate out by age, default 3 days). To get a clean **module label** on your lines, include a module-type field the capturer recognizes (`charger`/`vehicle`/`tariff`/`balancer`/`meter`/`loadpoint` — e.g. `ctx.log.info({ tariff: name }, 'ready')`) or set your own with `ctx.log.child({ module: 'my-mod' })`. `console.*` is *also* captured as a safety net (so a stray `console.log` from a dependency isn't lost) but arrives unlabeled — and a logger you construct yourself that writes straight to stdout is **not** captured. Prefer `ctx.log`.
 
@@ -347,7 +351,7 @@ Return one of three values from `health()`:
 | `'degraded'` | Serving stale or estimated data; operation continues but with reduced precision |
 | `'unavailable'` | No data at all; module is offline |
 
-Health is polled every 30 seconds and published to `osc/health/<module>` on MQTT and `GET /api/health` on REST. The system never stops based on module health — it just communicates the state.
+Health is re-read on module events and by a 15-second sweep; every transition emits a `health.changed` SSE event and is mirrored to `osc/health/<module>` on MQTT and `GET /api/health` on REST. The system never stops based on module health — it just communicates the state.
 
 ## Registration functions
 

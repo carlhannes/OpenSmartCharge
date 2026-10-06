@@ -41,7 +41,7 @@ function HouseSettings() {
           className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
         />
         <p className="mt-2 text-xs text-muted-foreground">
-          A friendly name for this installation — shows in config backups and Home Assistant.
+          A friendly name for this installation — shows in config backups and on the About page.
         </p>
       </div>
 

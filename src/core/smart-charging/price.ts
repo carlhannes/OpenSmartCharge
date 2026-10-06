@@ -1,21 +1,22 @@
 import type { TariffSlot } from '../../sdk/tariff.js'
-import { localHour, isNight } from '../../sdk/local-time.js'
+import { localHour, inLocalHourWindow } from '../../sdk/local-time.js'
 import type { Resolved, PriceRung, NightWindow } from './types.js'
 
 export interface PriceInputs {
   /** Live day-ahead slots from the tariff module; empty/undefined → fall back. */
   livePrices?: TariffSlot[]
-  /** Historical average price keyed by Stockholm hour-of-day (0–23). */
+  /** Historical average price keyed by site-local hour-of-day (0–23). */
   historicalAvgByHour?: Map<number, number>
   now: Date
   targetTime: Date
   nightWindow: NightWindow
   /** Site timezone for hour-of-day binning + the night-window curve. */
   tz: string
-  /** Synthetic-curve prices (relative ordering only). night < day so night wins. */
-  nightPrice?: number
-  dayPrice?: number
 }
+
+// Synthetic-curve prices (relative ordering only): night < day so the planner prefers the night.
+const NIGHT_PRICE = 1
+const DAY_PRICE = 2
 
 /**
  * Resolve a price curve covering [now, targetTime], degrading:
@@ -34,19 +35,18 @@ export function resolvePriceCurve(i: PriceInputs): Resolved<TariffSlot[], PriceR
     return { value: i.livePrices, source: 'live-tariff', degraded: false }
   }
 
-  const nightPrice = i.nightPrice ?? 1
-  const dayPrice = i.dayPrice ?? 2
-
   if (i.historicalAvgByHour && i.historicalAvgByHour.size > 0) {
     const value = buildHourlyCurve(i.now, i.targetTime, (start) => {
       // Missing hour in the history → treat as expensive so it's only used if unavoidable.
-      return i.historicalAvgByHour!.get(localHour(start, i.tz)) ?? dayPrice
+      return i.historicalAvgByHour!.get(localHour(start, i.tz)) ?? DAY_PRICE
     })
     return { value, source: 'historical-avg', degraded: true }
   }
 
   const value = buildHourlyCurve(i.now, i.targetTime, (start) =>
-    isNight(start, i.nightWindow.startHour, i.nightWindow.endHour, i.tz) ? nightPrice : dayPrice,
+    inLocalHourWindow(start, i.nightWindow.startHour, i.nightWindow.endHour, i.tz)
+      ? NIGHT_PRICE
+      : DAY_PRICE,
   )
   return { value, source: 'static-night', degraded: true }
 }

@@ -238,17 +238,12 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-const json = (body: unknown): RequestInit => ({
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(body),
-});
-
 const jsonBody = (method: string, body: unknown): RequestInit => ({
   method,
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify(body),
 });
+const json = (body: unknown): RequestInit => jsonBody("POST", body);
 
 // For endpoints that return no body (e.g. 204 DELETE).
 async function apiVoid(path: string, init: RequestInit): Promise<void> {
@@ -257,8 +252,6 @@ async function apiVoid(path: string, init: RequestInit): Promise<void> {
 }
 
 export const getLoadpoints = () => apiFetch<LoadpointStateDto[]>("/api/loadpoints");
-export const getLoadpoint = (name: string) =>
-  apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}`);
 export const setMode = (name: string, mode: ChargeMode) =>
   apiFetch<LoadpointStateDto>(`/api/loadpoints/${name}/mode`, json({ mode }));
 // /target COALESCE-merges — send only the fields you want to change. `kwh: null` explicitly CLEARS
@@ -324,7 +317,10 @@ export const setSettings = (s: SettingsDto) =>
 // Runtime config writes — persist to config_overrides (DB-wins, no restart); each emits config.changed.
 export const setSiteBreaker = (mainBreakerA: number) =>
   apiFetch<unknown>("/api/site", jsonBody("PUT", { mainBreakerA }));
-// Home / installation display name (the site name; shows in backups + Home Assistant discovery).
+// A balancer circuit's fuse — what the control loop sizes that circuit from (reconciled live).
+export const updateBalancer = (name: string, patch: { mainBreakerA?: number }) =>
+  apiFetch<unknown>(`/api/balancers/${name}`, jsonBody("PUT", patch));
+// Home / installation display name (the site name; shows in backups + the About page).
 export const setSiteName = (name: string) =>
   apiFetch<unknown>("/api/site", jsonBody("PUT", { name }));
 // Static-fallback margins — applied live via PUT /api/smartcharging.
@@ -359,7 +355,7 @@ export const claimCharger = (body: {
 }) => apiFetch<{ name: string }>("/api/chargers", jsonBody("POST", body));
 
 // Config backup. Export is a file download (a GET URL, not a fetch); import validates then applies on
-// the next restart (POST /api/system/restart). See docs/ui2-api-wishlist.md + docs/config.md.
+// the next restart (POST /api/system/restart). See README.md → "REST API" + docs/config.md.
 export interface ImportResultDto {
   dryRun: boolean;
   mode: "merge" | "replace";
@@ -403,7 +399,7 @@ export const getTransactions = (opts?: { loadpoint?: string; limit?: number }) =
 export const getTransaction = (id: number) =>
   apiFetch<TransactionDetailDto>(`/api/transactions/${id}`);
 
-// Logs (read-only viewer). See docs/ui2-logs-handoff.md for the backend contract.
+// Logs (read-only viewer). Backend contract: README.md → "REST API" (logs rows).
 export type LogLevel = "debug" | "info" | "warn" | "error";
 export interface LogEntry {
   id: number;
@@ -414,39 +410,29 @@ export interface LogEntry {
   fields?: Record<string, unknown>; // structured context
   err?: string; // stack / error string when present
 }
-export const getLogs = (opts?: {
+export interface LogQuery {
   level?: LogLevel; // minimum severity
   since?: string; // ISO
   until?: string; // ISO
-  limit?: number;
   q?: string;
-}) => {
+  limit?: number;
+}
+const logQueryString = (opts?: LogQuery): string => {
   const params = new URLSearchParams();
   if (opts?.level) params.set("level", opts.level);
   if (opts?.since) params.set("since", opts.since);
   if (opts?.until) params.set("until", opts.until);
   if (opts?.limit) params.set("limit", String(opts.limit));
   if (opts?.q) params.set("q", opts.q);
-  const qs = params.size > 0 ? `?${params}` : "";
-  return apiFetch<LogEntry[]>(`/api/logs${qs}`);
+  return params.size > 0 ? `?${params}` : "";
 };
+export const getLogs = (opts?: LogQuery) =>
+  apiFetch<LogEntry[]>(`/api/logs${logQueryString(opts)}`);
 
 // Downloadable .log of the full filtered set (no viewer limit) — same filters as getLogs, minus limit.
 // Returned as a text/plain attachment by the backend; the UI fetches it and triggers a file download.
-export const logsExportUrl = (opts?: {
-  level?: LogLevel;
-  since?: string;
-  until?: string;
-  q?: string;
-}) => {
-  const params = new URLSearchParams();
-  if (opts?.level) params.set("level", opts.level);
-  if (opts?.since) params.set("since", opts.since);
-  if (opts?.until) params.set("until", opts.until);
-  if (opts?.q) params.set("q", opts.q);
-  const qs = params.size > 0 ? `?${params}` : "";
-  return `/api/logs/export${qs}`;
-};
+export const logsExportUrl = (opts?: Omit<LogQuery, "limit">) =>
+  `/api/logs/export${logQueryString(opts)}`;
 
 // Log retention (days before auto-rotation). Everything is logged; rotation is the only space control.
 export interface LogsConfigDto {

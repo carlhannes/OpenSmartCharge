@@ -4,9 +4,8 @@ import type { ModuleHealth } from '../../sdk/types.js'
 import { OcppServer } from './server.js'
 import { createDebouncedSetter } from './debounce.js'
 
-// Singleton OCPP server shared across all ocpp16 charger instances.
-// The server is created on first module load; subsequent charger factories
-// attach to the same WS server.
+// Singleton OCPP server shared across all ocpp16 charger instances. The lifecycle starts it at boot
+// (ensureOcppServer) so a fresh install already listens; each charger factory attaches to it.
 let sharedServer: OcppServer | undefined
 
 export function getOcppServer(): OcppServer | undefined {

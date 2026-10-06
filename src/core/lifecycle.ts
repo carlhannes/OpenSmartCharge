@@ -40,8 +40,8 @@ import type { Tariff, TariffSlot } from '../sdk/tariff.js'
 import type { MeterReader, MeterSnapshot } from '../sdk/meter-reader.js'
 import { recordHouseholdLoad, pruneHouseholdLoad, worstCaseLoadA } from './smart-charging/rollup.js'
 import { pushPowerSample, type PowerSample } from './power-history.js'
-import { GRID_VOLTAGE_V } from './electrical.js'
-import { localDateKey, localHour, msUntilLocalTime } from '../sdk/local-time.js'
+import { GRID_VOLTAGE_V, IEC_MIN_CURRENT_A } from '../sdk/electrical.js'
+import { localDateKey, localHour, inLocalHourWindow, nextLocalTime } from '../sdk/local-time.js'
 import { getTimezone, seedSettings, getLogRetentionDays } from './settings.js'
 import { getEffectiveConfig } from './config-overrides.js'
 import { materializeConfigOnce } from './config-io.js'
@@ -78,7 +78,7 @@ import {
   SESSION_RECONCILE,
   type SessionReconcilerState,
 } from './session-reconciler.js'
-import { backoffDelayMs } from './source-reconciler.js'
+import { backoffDelayMs } from '../sdk/source-reconciler.js'
 import { runPostStartup } from './post-startup.js'
 import type { ModuleHealth } from '../sdk/types.js'
 
@@ -129,21 +129,11 @@ async function main() {
 
   await loadPlugins(PLUGINS_DIR, log)
 
-  // ctx.fetch is a drop-in fetch() replacement with 0-120s random jitter.
-  // Modules use it for scheduled outbound HTTP calls to prevent all instances
-  // from hitting the same external endpoint at the same millisecond.
-  const jitterFetch: typeof globalThis.fetch = async (input, init) => {
-    const jitter = Math.floor(Math.random() * 120_000)
-    await new Promise<void>((resolve) => setTimeout(resolve, jitter))
-    return fetch(input, init)
-  }
-
   // Build charger lookup map by charger name
   const ctx = {
     db,
     events,
     log,
-    fetch: jitterFetch,
   }
   const chargers = new Map<string, Charger>()
 
@@ -211,7 +201,7 @@ async function main() {
   const powerHistory: PowerSample[] = []
   const houseMeter = [...meterReaders.keys()][0]
 
-  // Track the last Stockholm day we pruned the load rollup, so pruning runs once per day
+  // Track the last site-local day we pruned the load rollup, so pruning runs once per day
   // (on rollover) rather than on the ~1 Hz meter-event path.
   let lastRollupPruneDay: string | undefined
   events.on('meter.snapshot', (payload) => {
@@ -438,7 +428,7 @@ async function main() {
   // When charging is driven ONLY by climate (preconditioning, battery already at target), offer just
   // the IEC minimum rather than the full circuit budget — the car draws only its climate load, and
   // this avoids topping the battery past the target at full rate. The car chooses how much it pulls.
-  const CLIMATE_MAX_OFFER_A = 6
+  const CLIMATE_MAX_OFFER_A = IEC_MIN_CURRENT_A
 
   // Last-emitted resolve per loadpoint (as JSON) — change-guard so `loadpoint.resolve` only fires
   // when the decision actually changes, not every ~30 s tick with an identical frame.
@@ -609,9 +599,8 @@ async function main() {
         : candidateNames.filter((n) => vehicles.get(n)?.capabilities.presence)
     // Idle polling is faster during the day window (preconditioning/departure) and slower at night.
     const sc = config.smartCharging
-    const h = localHour(new Date(nowMs), getTimezone(db))
     const { startHour: ds, endHour: de } = sc.vehicleIdlePollDayWindow
-    const isDay = ds <= de ? h >= ds && h < de : h >= ds || h < de
+    const isDay = inLocalHourWindow(new Date(nowMs), ds, de, getTimezone(db))
     for (const name of pollSet) {
       const vehicle = vehicles.get(name)
       if (!vehicle) continue
@@ -693,7 +682,9 @@ async function main() {
       sessionEnergyKWh: state.sessionEnergyKWh,
       estimatedSoc: estimatedSocVal,
       targetSoc: state.targetSoc,
-      targetTime: state.targetTime ? parseTargetTime(state.targetTime, getTimezone(db)) : undefined,
+      targetTime: state.targetTime
+        ? nextLocalTime(state.targetTime, new Date(), getTimezone(db))
+        : undefined,
       maxCurrentA: state.maxCurrentA,
       pricesAvailable,
       shouldChargeNow,
@@ -702,7 +693,7 @@ async function main() {
     }
   }
 
-  // Average price per Stockholm hour-of-day over the last N days (price fallback rung). Reuses
+  // Average price per site-local hour-of-day over the last N days (price fallback rung). Reuses
   // the tariff's own cache via prices() — no zone plumbing needed. Only computed when live
   // prices are missing.
   async function historicalPriceAvg(
@@ -790,7 +781,7 @@ async function main() {
     const targetTime = activePlan
       ? planTargetTime(activePlan, now, tz)
       : state.targetTime
-        ? parseTargetTime(state.targetTime, tz)
+        ? nextLocalTime(state.targetTime, now, tz)
         : new Date(now.getTime() + 24 * 3600_000)
     const hoursUntilTarget = Math.max(0.25, (targetTime.getTime() - now.getTime()) / 3_600_000)
     // A real deadline exists only when a plan or an ad-hoc target time is set; otherwise targetTime
@@ -978,7 +969,7 @@ async function main() {
       maxCurrentA: state?.maxCurrentA ?? 0,
       mainBreakerA,
       liveMaxPhaseA,
-      ownDrawA: Math.max(state?.currentA ?? 0, lastCommandedA.get(circuit.loadpoint.name) ?? 0),
+      ownDrawA: circuitOwnDrawA([circuit.loadpoint], loadpointStates, lastCommandedA),
       worstCaseLoadA: worst(mainBreakerA),
       reserveA: sc.reserveA,
       nightWindow: sc.nightWindow,
@@ -1440,15 +1431,6 @@ async function main() {
 
   process.once('SIGINT', () => void shutdown('SIGINT'))
   process.once('SIGTERM', () => void shutdown('SIGTERM'))
-}
-
-// Parse "HH:MM" into the next occurrence of that time in the SITE-local wall-clock (today or
-// tomorrow) — matching how the night window + plans are reasoned about. Previously used
-// server-local setHours, which was only correct when the host TZ happened to be the site TZ.
-function parseTargetTime(hhmm: string, tz: string): Date {
-  const [h, m] = hhmm.split(':').map(Number)
-  const now = new Date()
-  return new Date(now.getTime() + msUntilLocalTime(now, h, m, tz))
 }
 
 main().catch((err) => {

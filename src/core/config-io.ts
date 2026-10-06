@@ -15,6 +15,7 @@ import {
   setLogRetentionDays,
   isConfigMaterialized,
   setConfigMaterialized,
+  DEFAULT_LOG_RETENTION_DAYS,
 } from './settings.js'
 
 // Import/export serialization of the CONFIG (not runtime history/cache). The exported document is a
@@ -26,9 +27,6 @@ import {
 /** Placeholder shown in place of a secret in redacted exports/responses. On import a field equal to
  *  this is treated as "unchanged" so a redacted round-trip never clobbers the real credential. */
 export const REDACTED = '••••••'
-
-/** Default log-retention days (mirrors settings.ts) — omitted from the export when unchanged. */
-const DEFAULT_LOG_RETENTION_DAYS = 3
 
 // The all-defaults config — the baseline a field must differ from to be worth exporting. Every
 // top-level config field has a default or is optional, so parsing `{}` yields a complete config.
@@ -347,7 +345,6 @@ export function importConfig(
       db,
       (lps as Array<Record<string, unknown>>).map((lp) => ({
         name: String(lp.name),
-        maxCurrentA: 16, // unused by the loadpoint_state upsert (kept for the shared init shape)
         defaultMode: lp.defaultMode as ChargeMode | undefined,
         targetSoc: lp.targetSoc as number | undefined,
         targetTime: lp.targetTime as string | undefined,

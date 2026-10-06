@@ -28,9 +28,10 @@ test('not connected / climatising / nothing delivered / actively drawing → nev
   // initial ramp: offered current, 0 A, but nothing delivered yet → not "done", it never started
   expect(resolveSessionComplete({ ...base, deliveredKWh: 0 }, cfg).complete).toBe(false)
   // actively drawing (Fast charging past an OSC target) → not complete, and the settle timer resets
-  expect(
-    resolveSessionComplete({ ...base, drawingA: 13, zeroDrawSinceMs: 1 }, cfg),
-  ).toEqual({ complete: false, zeroDrawSinceMs: undefined })
+  expect(resolveSessionComplete({ ...base, drawingA: 13, zeroDrawSinceMs: 1 }, cfg)).toEqual({
+    complete: false,
+    zeroDrawSinceMs: undefined,
+  })
 })
 
 test('target reached + pauseOnTarget → complete immediately (even when not offering current)', () => {
@@ -59,7 +60,10 @@ test('carStoppedItself: offering current + car at ~0 A anchors the settle timer,
 
   // Still within the window → not complete, timer preserved.
   expect(
-    resolveSessionComplete({ ...base, zeroDrawSinceMs: 100_000, now: 100_000 + cfg.settleMs - 1 }, cfg),
+    resolveSessionComplete(
+      { ...base, zeroDrawSinceMs: 100_000, now: 100_000 + cfg.settleMs - 1 },
+      cfg,
+    ),
   ).toEqual({ complete: false, zeroDrawSinceMs: 100_000 })
 
   // At/after the window → complete (the car refused what we offered = done).
@@ -73,6 +77,9 @@ test('not offering current (paused for a cheap window) → not complete, settle 
   // Smart cheap-window pause: still need charge (requiredKWh>0), not offering, not drawing → waiting,
   // not done — and any prior settle anchor is dropped so it never accrues while we intentionally pause.
   expect(
-    resolveSessionComplete({ ...base, commandedA: 0, requiredKWh: 5, zeroDrawSinceMs: 100_000 }, cfg),
+    resolveSessionComplete(
+      { ...base, commandedA: 0, requiredKWh: 5, zeroDrawSinceMs: 100_000 },
+      cfg,
+    ),
   ).toEqual({ complete: false, zeroDrawSinceMs: undefined })
 })

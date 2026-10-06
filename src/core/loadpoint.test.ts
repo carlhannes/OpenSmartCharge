@@ -10,6 +10,7 @@ import {
   setLoadpointMode,
   setLoadpointVehicleOverride,
   applyConfigToLoadpoints,
+  parseTargetPatch,
   type LoadpointLiveFields,
 } from './loadpoint.js'
 import type { ChargerStatus } from '../sdk/charger.js'
@@ -233,4 +234,19 @@ test('vehicle override persists, reads back a name or guest, and clears to auto'
     db.close()
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('parseTargetPatch: lenient on shape, strict on range (shared by REST + MQTT)', () => {
+  expect(parseTargetPatch({ soc: 80, time: '07:00', kwh: null })).toEqual({
+    ok: true,
+    patch: { soc: 80, time: '07:00', kwh: null, minSoc: undefined },
+  })
+  // wrong-typed fields mean "leave unchanged" — never persisted as garbage
+  expect(parseTargetPatch({ soc: 'abc' })).toEqual({ ok: true, patch: { kwh: undefined } })
+  expect(parseTargetPatch(undefined)).toEqual({ ok: true, patch: { kwh: undefined } })
+  // out-of-range values are rejected on every command surface
+  expect(parseTargetPatch({ soc: 500 })).toEqual({ ok: false, error: 'soc must be 0–100' })
+  expect(parseTargetPatch({ time: '7am' })).toEqual({ ok: false, error: 'time must be HH:MM' })
+  expect(parseTargetPatch({ kwh: 0 })).toEqual({ ok: false, error: 'kwh must be 1–100' })
+  expect(parseTargetPatch({ minSoc: -1 })).toEqual({ ok: false, error: 'minSoc must be 0–100' })
 })

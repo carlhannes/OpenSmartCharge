@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { parse } from 'yaml'
 import { z } from 'zod'
-import { isValidTimeZone } from '../sdk/local-time.js'
+import { isValidTimeZone, HHMM_RE } from '../sdk/local-time.js'
 import { brokerSchema } from '../sdk/broker.js'
+import { DEFAULT_CHARGING_EFFICIENCY } from '../sdk/electrical.js'
 
 const chargeModeSchema = z.enum(['disabled', 'smart', 'fast'])
 
@@ -15,7 +16,7 @@ const smartChargingConfigSchema = z
     controlIntervalSec: z.number().min(5).max(60).default(30),
     // Only re-command the charger when the target moves at least this many amps (anti-chatter).
     deadbandA: z.number().min(0).default(1),
-    // Assumed-cheap night window in local Stockholm hours [startHour, endHour), wrapping
+    // Assumed-cheap night window in site-local hours [startHour, endHour), wrapping
     // midnight. Used by the price fallback (night priced cheaper) and the static current
     // fallback (night gets the generous budget).
     nightWindow: z
@@ -39,7 +40,7 @@ const smartChargingConfigSchema = z
     historicalDays: z.number().int().min(1).max(30).default(3),
     // Vehicle telemetry poll cadence while actively drawing current (re-anchors the SoC estimate
     // against delivered energy) AND while connected-but-idle at night. Default 15 min. Polling too
-    // often risks waking/draining a parked car + a provider lockout; the module backs off on 429.
+    // often risks waking/draining a parked car + a provider lockout; the lifecycle backs off after failures.
     vehiclePollIntervalSec: z.number().min(300).max(3600).default(900),
     // Idle-poll cadence — car plugged in but NOT drawing (paused/idle). This faster interval applies
     // ONLY during the day window below; outside it OSC falls back to vehiclePollIntervalSec, so an
@@ -55,7 +56,7 @@ const smartChargingConfigSchema = z
       .default({}),
     // AC charging efficiency (energy into battery ÷ energy from grid) — tunes the between-poll
     // SoC estimate that carries a real reading forward by delivered kWh.
-    chargingEfficiency: z.number().min(0.5).max(1).default(0.92),
+    chargingEfficiency: z.number().min(0.5).max(1).default(DEFAULT_CHARGING_EFFICIENCY),
   })
   .default({})
 
@@ -101,10 +102,7 @@ const loadpointConfigSchema = z.object({
   // unplug until the mode is changed by hand.
   autoRevertToSmart: z.boolean().default(true),
   targetSoc: z.number().min(0).max(100).optional(),
-  targetTime: z
-    .string()
-    .regex(/^\d{2}:\d{2}$/, 'targetTime must be HH:MM')
-    .optional(),
+  targetTime: z.string().regex(HHMM_RE, 'targetTime must be HH:MM').optional(),
   // Fixed energy-to-add target (kWh) — the energy fallback when there's no vehicle SoC
   // (guest car / no app). Session-relative: charge until this session has delivered it.
   targetKWh: z.number().min(1).max(100).optional(),
@@ -123,6 +121,9 @@ const mqttBridgeSchema = z.object({
   homeAssistantDiscovery: z.boolean().default(true),
 })
 
+// Default site timezone — the one place it is spelled out (settings.ts reads it for the KV fallback).
+export const DEFAULT_TIMEZONE = 'Europe/Stockholm'
+
 const siteConfigSchema = z.object({
   name: z.string().default('OpenSmartCharge'),
   port: z.number().default(8080),
@@ -136,7 +137,7 @@ const siteConfigSchema = z.object({
   timezone: z
     .string()
     .refine(isValidTimeZone, { message: 'site.timezone must be a valid IANA timezone' })
-    .default('Europe/Stockholm'),
+    .default(DEFAULT_TIMEZONE),
 })
 
 export const configSchema = z.object({
@@ -154,31 +155,17 @@ export const configSchema = z.object({
 export type Config = z.infer<typeof configSchema>
 export type LoadpointConfig = z.infer<typeof loadpointConfigSchema>
 export type ChargeMode = z.infer<typeof chargeModeSchema>
-export type SmartChargingConfig = z.infer<typeof smartChargingConfigSchema>
 
 // Runtime paths (env-overridable). Single-sourced here so the server (lifecycle.ts) and the
 // config-apply CLI resolve the same osc.yaml + data dir.
 export const CONFIG_PATH = process.env.OSC_CONFIG ?? './osc.yaml'
 export const DATA_DIR = process.env.OSC_DATA_DIR ?? './data'
 
-export function loadConfig(path: string): Config {
-  const raw = readFileSync(path, 'utf8')
-  const parsed = parse(raw)
-  if (parsed && typeof parsed === 'object' && 'mqtt' in parsed) {
-    // Migration aid: the old combined `mqtt:` block is gone. Inbound (a meter listening) now lives on
-    // meterReaders[].broker; outbound (OSC publishing / Home Assistant) lives on `mqttBridge:`.
-    console.warn(
-      '[config] top-level `mqtt:` is no longer used and is ignored — split it into meterReaders[].broker (inbound, listen-only) and `mqttBridge:` (outbound publish/HA). See docs/config.md.',
-    )
-  }
-  return configSchema.parse(parsed)
-}
-
 /**
  * Read osc.yaml as a raw config DOCUMENT (parsed YAML, NO schema defaults applied) — the non-default
  * fields the user actually wrote, for import / first-boot materialization. Returns undefined if the
  * file is absent (a fresh install with no osc.yaml is configured via the API instead) or isn't a
- * mapping. Unlike loadConfig, it does not validate — importConfig re-validates the merged result.
+ * mapping. It does not validate — importConfig re-validates the merged result.
  */
 export function readConfigDocument(path: string): Record<string, unknown> | undefined {
   let raw: string

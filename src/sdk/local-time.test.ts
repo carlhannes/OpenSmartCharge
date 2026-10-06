@@ -3,7 +3,7 @@ import {
   localHour,
   localDateKey,
   localWeekday,
-  isNight,
+  inLocalHourWindow,
   msUntilLocalTime,
   isValidTimeZone,
 } from './local-time.js'
@@ -48,8 +48,8 @@ test('localWeekday returns Mon=0..Sun=6 and shifts with the tz', () => {
   expect((localWeekday(late, SE) - localWeekday(late, 'UTC') + 7) % 7).toBe(1)
 })
 
-test('isNight covers the wrapping 23:00–05:00 window in the given tz', () => {
-  const night = (iso: string) => isNight(new Date(iso), 23, 5, SE)
+test('inLocalHourWindow covers the wrapping 23:00–05:00 window in the given tz', () => {
+  const night = (iso: string) => inLocalHourWindow(new Date(iso), 23, 5, SE)
   expect(night('2026-07-04T21:30:00Z')).toBe(true) // 23:30 local
   expect(night('2026-07-04T02:30:00Z')).toBe(true) // 04:30 local
   expect(night('2026-07-04T03:00:00Z')).toBe(false) // 05:00 local (window end, exclusive)

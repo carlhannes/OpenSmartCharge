@@ -10,8 +10,8 @@ export default defineConfig({
     // .references/evcc tests, which use another runner.
     include: ['src/**/*.test.ts'],
     // Globs, not bare names — bare 'node_modules' misses NESTED ones, so a subproject's
-    // deps (e.g. src/ui2/node_modules) would otherwise be scanned. src/ui2 is a separate
-    // WIP app with its own test runner; the root suite must not reach into it.
+    // deps (e.g. src/ui2/node_modules) would otherwise be scanned. The UI (src/ui2) has its own
+    // toolchain and no vitest suite; the root suite must not reach into it.
     exclude: ['**/node_modules/**', '**/dist/**', '.references/**', 'src/ui2/**'],
     coverage: {
       // Report against the whole backend source, not just test-imported files, so the

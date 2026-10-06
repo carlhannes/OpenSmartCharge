@@ -1,4 +1,7 @@
-import { test, expect } from 'vitest'
+import { test, expect, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
+import type { Logger } from 'pino'
+import { msUntilLocalTime } from './local-time.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,6 +15,7 @@ import {
   hasTomorrow,
   nextDelay,
   type SchedulerState,
+  createNordpoolDayAheadTariff,
 } from './nordpool-tariff.js'
 
 function withDb(fn: (db: ReturnType<typeof openDb>) => void): void {
@@ -108,4 +112,48 @@ test('nextDelay: next-day when tomorrow cached, wait-for-window before 13:15, re
   const late = nextDelay({ consecutiveFailures: 6 }, false, new Date('2026-07-04T21:50:00Z'))
   expect(late.reason).toBe('retry') // was 'next-day' before the fix — no longer strands overnight
   expect(late.delayMs).toBe(60 * 60_000)
+})
+
+test('factory: scheduled refetch uses the global fetch and jitters the SCHEDULE, not the request', async () => {
+  // A pre-created AbortSignal.timeout() in a provider's fetch must still be live when the request
+  // runs — so the herd-spreading delay has to sit in the timer, and the fetch handed over must be the
+  // real, un-wrapped one.
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-03-10T08:00:00Z')) // 09:00 Stockholm — before the 13:15 window
+  const random = vi.spyOn(Math, 'random').mockReturnValue(0.5) // → 60 s of jitter
+  const dir = mkdtempSync(join(tmpdir(), 'osc-np-'))
+  const db = openDb(dir)
+  const seen: Array<typeof globalThis.fetch> = []
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger
+  try {
+    const tariff = createNordpoolDayAheadTariff(
+      { db, events: new EventEmitter(), log },
+      {
+        name: 't',
+        zone: 'SE3',
+        provider: 'test',
+        fetchSlots: async (_zone, _from, _to, fetchFn) => {
+          seen.push(fetchFn)
+          return []
+        },
+      },
+    )
+    await tariff.start()
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toBe(globalThis.fetch)
+
+    // No prices cached → wait-for-window: 13:15 Stockholm, plus the 60 s schedule jitter.
+    const base = msUntilLocalTime(new Date(), 13, 15, 'Europe/Stockholm')
+    await vi.advanceTimersByTimeAsync(base + 59_000)
+    expect(seen).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(seen).toHaveLength(2)
+    expect(seen[1]).toBe(globalThis.fetch)
+    await tariff.stop()
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+    random.mockRestore()
+    vi.useRealTimers()
+  }
 })

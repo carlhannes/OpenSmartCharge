@@ -28,6 +28,22 @@ function ChargersSettings() {
   const [undo, setUndo] = useState<{ charger: Charger; plans: Plan[] } | null>(null);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Max amps commits on blur/Enter, never per keystroke: typing "16" must not persist (and command
+  // the charger to) 1 A on the way. The draft holds the text while editing; an invalid value reverts.
+  const [ampsDraft, setAmpsDraft] = useState<Record<string, string>>({});
+  const commitMaxAmps = (c: Charger) => {
+    const raw = ampsDraft[c.id];
+    setAmpsDraft((d) => {
+      const rest = { ...d };
+      delete rest[c.id];
+      return rest;
+    });
+    if (raw === undefined) return;
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n) || n < 6 || n > 32 || n === c.maxAmps) return;
+    void setChargerMaxAmpsCmd(c.id, n);
+  };
+
   const removeCharger = (c: Charger) => {
     const plans = allPlans.filter((p) => p.chargerId === c.id);
     remove(c.id);
@@ -82,8 +98,12 @@ function ChargersSettings() {
             type="number"
             min={6}
             max={32}
-            value={c.maxAmps}
-            onChange={(e) => void setChargerMaxAmpsCmd(c.id, parseInt(e.target.value, 10) || 0)}
+            value={ampsDraft[c.id] ?? c.maxAmps}
+            onChange={(e) => setAmpsDraft((d) => ({ ...d, [c.id]: e.target.value }))}
+            onBlur={() => commitMaxAmps(c)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+            }}
             className="w-32 rounded-lg border border-input bg-background px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 focus:ring-ring/40"
           />
         </div>

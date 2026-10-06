@@ -14,6 +14,8 @@ test('live-meter rung: mainBreaker − maxPhase + ownDraw, clamped to charger ma
     liveMaxPhaseA: 10,
     ownDrawA: 6,
     nightWindow: NIGHT,
+    nightMarginA: 3,
+    daytimeFraction: 0.5,
     tz: TZ,
   })
   expect(r).toMatchObject({ value: 16, source: 'live-meter', degraded: false }) // 25−10+6=21 → clamp 16
@@ -29,6 +31,8 @@ test('circuit budget clamps to the breaker even with a large credit-back (safety
     liveMaxPhaseA: 10,
     ownDrawA: 20, // 25 − 10 + 20 = 35, clamped to 25
     nightWindow: NIGHT,
+    nightMarginA: 3,
+    daytimeFraction: 0.5,
     tz: TZ,
   })
   expect(r).toMatchObject({ value: 25, source: 'live-meter' })
@@ -43,6 +47,8 @@ test('live-meter rung: credit-back avoids a phantom zero during ramp-up', () => 
     liveMaxPhaseA: 20,
     ownDrawA: 6,
     nightWindow: NIGHT,
+    nightMarginA: 3,
+    daytimeFraction: 0.5,
     tz: TZ,
   })
   expect(r.value).toBe(11)
@@ -55,6 +61,8 @@ test('historical-worstcase rung: mainBreaker − worstLoad − 1', () => {
     mainBreakerA: 25,
     worstCaseLoadA: 12,
     nightWindow: NIGHT,
+    nightMarginA: 3,
+    daytimeFraction: 0.5,
     tz: TZ,
   })
   expect(r).toMatchObject({ value: 12, source: 'historical-worstcase', degraded: true }) // 25−12−1
@@ -67,6 +75,8 @@ test('static-tod rung: night = breaker − margin, day = breaker × fraction', (
       maxCurrentA: 32,
       mainBreakerA: 16,
       nightWindow: NIGHT,
+      nightMarginA: 3,
+      daytimeFraction: 0.5,
       tz: TZ,
     }),
   ).toMatchObject({
@@ -79,6 +89,8 @@ test('static-tod rung: night = breaker − margin, day = breaker × fraction', (
       maxCurrentA: 32,
       mainBreakerA: 16,
       nightWindow: NIGHT,
+      nightMarginA: 3,
+      daytimeFraction: 0.5,
       tz: TZ,
     }).value,
   ).toBe(8) // 16 × 0.5
@@ -92,6 +104,8 @@ test('a budget below the 6 A IEC minimum resolves to 0, never rounded up', () =>
       maxCurrentA: 16,
       mainBreakerA: 10,
       nightWindow: NIGHT,
+      nightMarginA: 3,
+      daytimeFraction: 0.5,
       tz: TZ,
     }).value,
   ).toBe(0)
@@ -99,7 +113,14 @@ test('a budget below the 6 A IEC minimum resolves to 0, never rounded up', () =>
 
 test('no mainBreakerA → charger maxA is the ceiling (dedicated circuit, not degraded)', () => {
   expect(
-    resolveCurrentBudget({ now: dayNow, maxCurrentA: 10, nightWindow: NIGHT, tz: TZ }),
+    resolveCurrentBudget({
+      now: dayNow,
+      maxCurrentA: 10,
+      nightWindow: NIGHT,
+      nightMarginA: 3,
+      daytimeFraction: 0.5,
+      tz: TZ,
+    }),
   ).toMatchObject({
     value: 10,
     source: 'static-tod',
@@ -118,6 +139,8 @@ test('reserveA shrinks the live-meter budget: target is (mainBreaker − reserve
     ownDrawA: 6,
     reserveA: 2,
     nightWindow: NIGHT,
+    nightMarginA: 3,
+    daytimeFraction: 0.5,
     tz: TZ,
   })
   expect(r).toMatchObject({ value: 14, source: 'live-meter' })
@@ -131,6 +154,8 @@ test('reserveA also applies to the historical rung: (mainBreaker − reserveA) �
     worstCaseLoadA: 12,
     reserveA: 2,
     nightWindow: NIGHT,
+    nightMarginA: 3,
+    daytimeFraction: 0.5,
     tz: TZ,
   })
   expect(r.value).toBe(10) // 25 − 2 − 12 − 1
@@ -145,6 +170,8 @@ test('reserveA is NOT stacked onto static-tod (it already carries nightMargin/da
       mainBreakerA: 16,
       reserveA: 5,
       nightWindow: NIGHT,
+      nightMarginA: 3,
+      daytimeFraction: 0.5,
       tz: TZ,
     }).value,
   ).toBe(13)

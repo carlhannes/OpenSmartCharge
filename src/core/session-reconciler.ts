@@ -71,8 +71,8 @@ export interface SessionReconcilerCfg {
   maxActions: number
 }
 
-/** Guards generalized from the old RESUME_NUDGE. Grace/cooldown mirror it; maxActions is raised
- *  from 3 to cover the richer ladder (a full recovery can be RemoteStart → wake → resume → …). */
+/** Guards for the recovery ladder: the grace absorbs the normal SuspendedEVSE→Charging ramp, the
+ *  cooldown spaces attempts, and maxActions bounds a full recovery (RemoteStart → wake → resume → …). */
 export const SESSION_RECONCILE: SessionReconcilerCfg = {
   minDrawA: 1,
   graceMs: 90_000,

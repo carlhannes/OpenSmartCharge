@@ -16,10 +16,23 @@ export interface MeterReader extends ModuleLifecycle {
   start(): Promise<void>
   stop(): Promise<void>
   health(): ModuleHealth
-  /** Last known snapshot, or null if no frame has been seen yet. */
+  /** Last known snapshot, or null if no frame has been seen yet. Live frames are announced on the
+   *  event bus as `meter.snapshot` ({ name, snapshot }) — that is the one fan-out path. */
   latest(): MeterSnapshot | null
-  /** Subscribe to every new snapshot. Returns an unsubscribe function. */
-  onSnapshot(cb: (s: MeterSnapshot) => void): () => void
+}
+
+/**
+ * The one staleness rule for meter readers: `ok` while frames arrive within `staleAfterSec`,
+ * `degraded` once the last frame is older (the last values are still served), `unavailable` before
+ * the first frame. The reader's health is the single authority the current-budget ladder trusts.
+ */
+export function meterHealth(
+  latest: MeterSnapshot | null,
+  staleAfterSec: number,
+  nowMs = Date.now(),
+): ModuleHealth {
+  if (!latest) return 'unavailable'
+  return nowMs - latest.timestamp.getTime() < staleAfterSec * 1000 ? 'ok' : 'degraded'
 }
 
 export interface MeterReaderModule {

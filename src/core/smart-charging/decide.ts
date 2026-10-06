@@ -22,9 +22,9 @@ export interface DecideResult {
 }
 
 /**
- * Whether a smart-mode loadpoint should charge in the current slot. The extracted, testable
- * core of the old `computeShouldChargeNow`, but with no degradation branching — energy and
- * price are already resolved to guaranteed values before we get here.
+ * Whether a smart-mode loadpoint should charge in the current slot. Pure and testable, with no
+ * degradation branching — energy and price are already resolved to guaranteed values before we
+ * get here.
  *
  * Sized at `planRateA` (the amps we'll actually apply) so a conservative budget grabs MORE
  * cheap slots — meeting the target early rather than under-charging.

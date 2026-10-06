@@ -20,7 +20,7 @@ export interface VehicleData {
 
 /**
  * What signals a vehicle module can provide (static per module; a module may compute it from config).
- * Plan target units and auto-identify eligibility DERIVE from this (see targetUnitsFor/autoIdentifiable
+ * Plan target units and auto-identify eligibility DERIVE from this (see targetUnitsFor
  * in smart-charging/energy.ts) — consumers branch on capabilities, never on the module `type`. A module
  * reporting `presence` (cable-connected via its own API) is eligible for identify-on-plug.
  */

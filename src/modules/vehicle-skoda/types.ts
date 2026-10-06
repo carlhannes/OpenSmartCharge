@@ -6,7 +6,7 @@ export interface SkodaCfg {
 }
 
 // Polling cadence is NOT configured here — the lifecycle owns when to refresh a vehicle
-// (on connect + during charging), via site.smartCharging.vehiclePollIntervalSec.
+// (on connect + while plugged in), via smartCharging.vehiclePollIntervalSec / vehicleIdlePollIntervalSec.
 export function parseConfig(raw: unknown): SkodaCfg {
   if (!raw || typeof raw !== 'object') throw new Error('vehicle-skoda: invalid config')
   const r = raw as Record<string, unknown>
@@ -24,7 +24,7 @@ export function parseConfig(raw: unknown): SkodaCfg {
 }
 
 // Subset of /v2/garage/vehicles/{vin} response we care about.
-// Skoda API returns camelCase JSON; Go unmarshals case-insensitively.
+// Skoda API returns camelCase JSON.
 export interface SkodaVehicleResponse {
   vin?: string
   specification?: {

@@ -57,6 +57,7 @@ export function mapLoadpoint(lp: LoadpointStateDto, site?: SiteDto): Charger {
   return {
     id: lp.name,
     name: label ?? lp.name,
+    chargerName: siteLp?.charger ?? lp.name,
     maxAmps: lp.maxCurrentA,
     mode,
     status: deriveStatus({

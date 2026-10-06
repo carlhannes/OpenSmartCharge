@@ -4,6 +4,68 @@ All notable changes to OpenSmartCharge are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+A cleanup pass against the project's own principles (single source of truth, lean, evergreen docs),
+driven by a full audit of core, SDK, modules, server, UI, scripts and docs. Control-loop behaviour is
+unchanged except where a user-facing bug is listed under Fixed.
+
+### Fixed
+
+- **Fresh installs no longer boot-loop from the example config.** `osc.dist.yaml` still carried the
+  retired top-level `mqtt:` block (silently ignored) and a meter reader without the now-required
+  `broker:` — which threw at startup and, because the config had already been imported into the
+  database, crashed every restart. The template now uses `mqttBridge:` and a `broker:` block, and
+  its stale per-vehicle poll knobs and reversed tariff-health comment are gone.
+- **Scheduled day-ahead price refreshes aborted themselves.** The jittered `ctx.fetch` slept up to
+  120 s *after* the provider had created its 15 s `AbortSignal.timeout`, so most scheduled fetches
+  failed on arrival (the likely cause of the "tariff is empty" known issue). The herd-spreading jitter
+  now lives in the fetch *schedule*; requests use the plain global `fetch`.
+- `npm run smoke` could not pass: it wrote the retired `mqtt:` block and reused a stale data directory
+  (the config is imported only once). It now writes `mqttBridge:` and starts from a clean directory.
+- API: a request without a JSON body returned a 500 (Express 5 leaves `req.body` undefined); unknown
+  `/api/*` paths returned the SPA shell with a 200. Both are now proper 4xx JSON responses.
+- MQTT bridge: `osc/health/<module>` was published only at connect and never updated; `cmd/target`
+  accepted out-of-range values the REST route rejects (one shared validator now); the mode topic was
+  published twice per change; a tariff whose `prices()` rejected would have crashed the process.
+- UI: the charger max-amps field saved on every keystroke (typing "16" first persisted — and commanded
+  — 1 A); it now commits on blur/Enter and rejects values outside 6–32 A. Charger rename / max-amps
+  and the "charger offline" banner used the loadpoint name where the backend keys by charger name.
+  The main-breaker setting wrote `site.mainBreakerA`, which a balancer circuit never reads — it now
+  edits the balancer's breaker when there is one.
+- Docs that sent users down a broken path: the dev quick-start lacked the UI's own `npm install`,
+  the runtime-configuration section described a `config:apply --prune` that doesn't exist, the
+  config reference claimed a boot warning for `mqtt:` that never fired, and its multi-grid example
+  used Elering for Swedish zones with meter readers that would not start.
+
+### Removed
+
+- **`ModuleCtx.fetch`** (the jittered fetch) — see Fixed above for why. Modules call the global
+  `fetch` with a per-request timeout; timing concerns belong to the schedule. No first-party module
+  used it after the fix and there are no external plugins, so this is a clean pre-1.0 SDK change.
+- `MeterReader.onSnapshot()` — every consumer already listened to the `meter.snapshot` bus event.
+- Dead code: `loadConfig`, `applyConfigSettings`, `msUntilLocalMidnight`, `autoIdentifiable`, the
+  unused `src/sdk/index.ts` barrel, the `SmartChargingConfig`/`Logger` aliases, an unread OCPP
+  `statusCallbacks` field, unused UI client helpers, React Query (installed and provided, never used),
+  the `build:server` script (which would have shipped tests into `dist/`), and the finished ui2
+  hand-off docs (their still-true API notes moved into `docs/config.md`).
+
+### Changed
+
+- Shared helpers consolidated in the SDK (one source each): `connectBroker`/`endBroker`,
+  `meterHealth`, `nextLocalTime`, `inLocalHourWindow` (was `isNight`), `IEC_MIN_CURRENT_A`,
+  `DEFAULT_TIMEZONE`, `DEFAULT_LOG_RETENTION_DAYS`, the Nord Pool `MARKET_TZ`/`FETCH_TIMEOUT_MS`, and
+  the retry backoff. `electrical.ts` and `source-reconciler.ts` moved from `core/` to `sdk/` so the
+  Škoda module no longer imports from core (the one boundary violation).
+- `npm run lint` / `npm run format` now cover `src/ui2` as well; a `.dockerignore` keeps `data/`,
+  `osc.yaml` and `node_modules` out of the image, and the runtime image carries production
+  dependencies only.
+- Docs brought back in line with the code: AGENTS.md (five module types, `src/ui2`, `mqttBridge`,
+  the site timezone, the honest Nord Pool timer exception), the module authoring guide (Vehicle,
+  Balancer, MeterReader and `ModuleCtx` contracts), the architecture overview, the config reference,
+  the roadmap, and the known-issues log (resolved entries removed). `docs/vision-0.2.0.md` is kept
+  as the product reference for Parts 1–6 and marked historical.
+
 ## [0.2.2] — 2026-07-25
 
 A batch of fixes and missing edit affordances found while running v0.2.1 on a real VM. These are

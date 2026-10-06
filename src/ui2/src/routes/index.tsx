@@ -35,10 +35,11 @@ function Home() {
 
   // A degraded module that IS a charger link means charging is actually interrupted — don't claim
   // "charging continues". A degraded peripheral (prices / balancer / vehicle / MQTT) is different:
-  // charging really does continue on the last-known plan. Correlate against the charger list (the
-  // health key equals the charger/loadpoint id) rather than a hardcoded module name.
+  // charging really does continue on the last-known plan. Correlate against the charger list (health
+  // is keyed by the charger's config name, which may differ from the loadpoint id) rather than a
+  // hardcoded module name.
   const chargerDegraded = useMemo(
-    () => degraded.filter((m) => chargers.some((c) => c.id === m.id)),
+    () => degraded.filter((m) => chargers.some((c) => (c.chargerName ?? c.id) === m.id)),
     [degraded, chargers],
   );
   const chargerDown = chargerDegraded.length > 0;

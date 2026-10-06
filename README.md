@@ -50,6 +50,7 @@ docker compose up mosquitto -d
 
 # Run OSC (development)
 npm install
+npm --prefix src/ui2 install   # the UI has its own package.json
 npm run dev:all   # backend (port 8080) + ui2 dev server (Vite HMR, port 5174), prefixed logs
 
 # Or run backend and the UI dev server separately:
@@ -72,16 +73,17 @@ Point your OCPP charger at `ws://<your-host>:8080/ocpp/<stationId>` — the OCPP
 
 ## Architecture
 
-OSC has four module types and one core concept:
+OSC has five module types and one core concept:
 
 ### Module types
 
 | Type | What it does | Built-in |
 |---|---|---|
 | **Charger** | Speaks to hardware — sends `SetChargingProfile`, reads meter values | OCPP 1.6J |
-| **Tariff** | Provides day-ahead spot price slots | elprisetjustnu (SE1–SE4), Elering (EE/FI/LV/LT) |
-| **Balancer** | Decides how many amps each charger gets per tick | MQTT circuit |
-| **Vehicle** | Reads state-of-charge | Skoda / VW |
+| **Tariff** | Provides day-ahead spot price slots | elprisetjustnu (SE1–SE4), Elering (EE/FI/LV/LT), fixed (flat rate) |
+| **Balancer** | Splits a circuit's current budget across its chargers each tick | MQTT circuit |
+| **Vehicle** | Reads state-of-charge, range, plug and climate state | Skoda / VW, manual (no API) |
+| **Meter reader** | Reads live household current — the one source of truth for load balancing | MQTT per-phase, Tibber Pulse (DSMR) |
 
 Each module type has a [TypeScript interface in `src/sdk/`](src/sdk/). Third-party modules drop into the `./plugins/` directory and are loaded at startup — no code changes needed in OSC itself. See [the module authoring guide](docs/modules.md).
 
@@ -97,7 +99,7 @@ The loadpoint is what you control — via the web UI, REST, or MQTT. The Charger
 
 ```
 [Elering API] → tariff slots → planner  ─┐
-[Tibber Pulse] → MQTT → balancer tick    ─┤→ SetChargingProfile → [Charger]
+[Tibber Pulse] → meter reader → budget   ─┤→ SetChargingProfile → [Charger]
 [Skoda API]   → estimator → loadpoint    ─┘
 ```
 
@@ -131,14 +133,16 @@ Copy `osc.dist.yaml` to `osc.yaml` and edit. Full reference: [docs/config.md](do
 
 ### Runtime configuration (declarative)
 
-`osc.yaml` is the **seed**, not the live source of truth. Structural config — tariff region, main
-breaker, balancer params, and even claiming a newly-connected charger or adding a vehicle — is editable
-at runtime through the API/UI; changes persist in the database (`config_overrides`) and **win over
-`osc.yaml` on restart**. The system applies them by **soft-reloading just the affected module** — no
-process restart. `npm run config:apply` re-asserts the file over runtime edits (clearing them for
-file-defined entities, preserving runtime-added ones; `-- --prune` clears everything). This declarative
-model — desired state in config/DB, the running system continuously reconciling toward it — is also what
-keeps charging resilient to flaky connectivity (see [AGENTS.md](AGENTS.md) → "Declarative config & soft-reload").
+`osc.yaml` is an **import format**, not the live config. On the first boot of a fresh (or cleared)
+database OSC imports it once; from then on the **database is the source of truth**. Structural config —
+tariff region, main breaker, balancer params, claiming a newly-connected charger, adding a vehicle — is
+edited at runtime through the API/UI. Each write is validated against the same schema, persisted
+(`config_overrides` / `settings` / `loadpoint_state`), and applied by **soft-reloading just the affected
+module** — no process restart. To re-assert an edited `osc.yaml`, re-import it: `npm run config:apply`
+(clears the stored config and imports the file; restart afterwards) or `POST /api/config/import` (merge
+by default). This declarative model — desired state in the DB, the running system continuously
+reconciling toward it — is also what keeps charging resilient to flaky connectivity (see
+[AGENTS.md](AGENTS.md) → "Declarative config & soft-reload").
 
 ### Credentials
 
@@ -190,7 +194,22 @@ npm run restore -- --in backups/osc-2025-06-01T12-00-00.db
 | `GET` | `/api/meters/:name` | Meter reader latest snapshot + health |
 | `GET` | `/api/balancers/:name` | Balancer allocations + health |
 | `GET` | `/api/vehicles/:name` | Vehicle SoC, capacity, health |
+| `POST` | `/api/vehicles/:name/refresh`, `/api/tariffs/:name/refresh` | Force one live fetch now (manual recovery) |
 | `GET` | `/api/health` | Module health map |
+| `GET` | `/api/site` | The effective config topology (chargers, loadpoints, vehicles, tariffs, balancers, meters) — credentials redacted |
+| `GET` | `/api/plans`, `/api/loadpoints/:name/plans` | Recurring charging plans (all / per loadpoint); `POST`/`PUT /:id`/`DELETE /:id` per loadpoint — see [docs/config.md](docs/config.md#charging-plans) |
+| `GET` | `/api/loadpoints/:name/plan` | The planner's current forward schedule + prices (what the charger chart renders) |
+| `POST` | `/api/loadpoints/:name/vehicle` | Sticky active-vehicle override (`{"vehicle": null \| "guest" \| "<name>"}`) |
+| `GET` | `/api/chargers/pending` | OCPP stations connected but not yet claimed; `POST /api/chargers` claims one (charger + loadpoint) |
+| `GET` | `/api/transactions`, `/api/transactions/:id` | Charging-session history (`?loadpoint=&limit=`) + per-session meter samples |
+| `GET` | `/api/power-history` | Rolling 15-min whole-house + car power buffer (the Home chart) |
+| `GET` | `/api/logs` | Runtime logs, newest first (`?level=` minimum severity, `since=`/`until=` ISO, `q=` substring, `limit=` ≤ 500); `GET /api/logs/export` = the same filters as a chronological `.log` download; `GET`/`PUT /api/logs/config` = `{ "retentionDays": 1–365 }` |
+| `GET` | `/api/config/export` | The config as YAML (`?secrets=1` for a full-fidelity backup); `POST /api/config/import` re-imports one — see [docs/config.md](docs/config.md) |
+| `POST` | `/api/system/restart`, `/api/system/reset` | Graceful restart (a supervisor brings OSC back) / wipe the database and restart |
+
+Config writes (`PUT /api/site`, `/api/smartcharging`, `/api/tariffs/:name`, `/api/balancers/:name`, `/api/chargers/:name`, `/api/vehicles/:name`, `/api/loadpoints/:name`, …) are documented in [docs/config.md](docs/config.md#the-config-model-oscyaml-is-an-import-format).
+
+Live updates stream over Server-Sent Events at `GET /events`: `loadpoint.state` / `.mode` / `.target` / `.resolve` / `.session` / `.plans`, `vehicle.poll`, `meter.snapshot`, `balancer.tick`, `tariff.updated`, `health.changed`, `config.changed`, `settings.changed`.
 | `GET` | `/events` | SSE stream of all state changes |
 
 ## MQTT topics
@@ -206,7 +225,7 @@ Commands (not retained):
 - `osc/loadpoints/<name>/cmd/mode` — publish `smart`, `fast`, or `disabled`
 - `osc/loadpoints/<name>/cmd/target` — publish JSON `{ "soc": 80, "time": "07:00" }`
 
-Home Assistant MQTT discovery is published automatically at startup (disable with `mqtt.homeAssistantDiscovery: false` in config).
+Home Assistant MQTT discovery is published automatically at startup (disable with `mqttBridge.homeAssistantDiscovery: false` in config).
 
 ## Roadmap
 

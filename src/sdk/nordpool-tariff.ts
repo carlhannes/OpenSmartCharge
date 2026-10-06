@@ -11,19 +11,25 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { ModuleCtx, ModuleHealth } from './types.js'
 import type { Tariff, TariffSlot } from './tariff.js'
 import { localParts, msUntilLocalTime } from './local-time.js'
+import { backoffDelayMs, type BackoffCfg } from './source-reconciler.js'
 
 // Nord Pool day-ahead prices publish ~13:00 CET; wait until 13:15 to fetch. This is the price
 // MARKET's timezone (Nord Pool = CET/CEST), NOT the site/user timezone — the publish window +
 // per-day slot boundaries follow the market regardless of where the user lives.
-const MARKET_TZ = 'Europe/Stockholm'
+export const MARKET_TZ = 'Europe/Stockholm'
+// Per-request HTTP timeout for the price APIs (the schedule, not the request, carries the jitter).
+export const FETCH_TIMEOUT_MS = 15_000
 const PUBLISH_HOUR = 13
 const PUBLISH_MINUTE = 15
 // After-publish retry backoff. A missing "tomorrow" past the publish window is a fetch FAILURE
 // (network/provider), not "not published yet". Start SHORT — a transient blip usually clears within
 // minutes — and grow exponentially, but CAP at hourly so we keep retrying until it succeeds instead
 // of letting the backoff grow past midnight and stranding empty prices ~24 h.
-const BASE_RETRY_MS = 10 * 60_000 // first retry ~10 min
-const MAX_RETRY_MS = 60 * 60_000 // …doubling (10 → 20 → 40) to a 1 h ceiling
+// 10 → 20 → 40 → 60 min.
+const RETRY_BACKOFF: BackoffCfg = { baseMs: 10 * 60_000, factor: 2, maxMs: 60 * 60_000 }
+// Herd-spreading: every OSC instance would otherwise fetch at exactly 13:15:00. The random offset
+// lives in the SCHEDULE (one per run), not inside fetch — so per-request timeouts keep working.
+const SCHEDULE_JITTER_MS = 120_000
 
 /**
  * Thrown by a provider's `fetchSlots` when the configured zone is absent from the
@@ -144,9 +150,10 @@ export function nextDelay(
   // capped exponential backoff: 10 m → 20 m → 40 m → hourly, so a transient network blip recovers in
   // ~10 min instead of stranding for an hour. The cap keeps it retrying rather than backing off past
   // midnight and stranding empty prices ~24 h (which is why it never collapses to "next-day" here).
-  const attempt = Math.max(0, state.consecutiveFailures - 1) // 1st failure → 0 → BASE_RETRY_MS
-  const raw = 2 ** attempt * BASE_RETRY_MS
-  return { delayMs: Math.min(raw, MAX_RETRY_MS), reason: 'retry' }
+  return {
+    delayMs: backoffDelayMs(Math.max(1, state.consecutiveFailures), RETRY_BACKOFF),
+    reason: 'retry',
+  }
 }
 
 // ── the shared provider factory ──────────────────────────────────────────────
@@ -159,8 +166,7 @@ export interface NordpoolTariffOptions {
   /**
    * Fetch price slots covering [from, to). Throw {@link ZoneNotFoundError} for a bad
    * zone (permanent — not retried); throw anything else for a transient failure (retried).
-   * Receives the jitter-enabled `ctx.fetch` for scheduled calls or the global `fetch`
-   * for the immediate startup call.
+   * Receives the global `fetch` (the parameter exists so tests can inject a fake).
    */
   fetchSlots: (
     zone: string,
@@ -187,17 +193,18 @@ export function createNordpoolDayAheadTariff(ctx: ModuleCtx, opts: NordpoolTarif
 
   function scheduleNext(): void {
     const decision = nextDelay(state, hasTomorrow(ctx.db, zone), new Date())
-    ctx.log.info({ name, zone, provider, decision }, 'nordpool tariff: next fetch scheduled')
-    timer = setTimeout(() => void runOnce(true), decision.delayMs)
+    const jitterMs = Math.floor(Math.random() * SCHEDULE_JITTER_MS)
+    ctx.log.info(
+      { name, zone, provider, decision, jitterMs },
+      'nordpool tariff: next fetch scheduled',
+    )
+    timer = setTimeout(() => void runOnce(), decision.delayMs + jitterMs)
   }
 
-  // scheduled=true → ctx.fetch (jitter, thundering-herd prevention).
-  // scheduled=false → global fetch (startup: immediate).
-  async function runOnce(scheduled: boolean): Promise<void> {
+  async function runOnce(): Promise<void> {
     const { from, to } = fetchRange()
     try {
-      const fetchFn = scheduled ? ctx.fetch : globalThis.fetch
-      const slots = await fetchSlots(zone, from, to, fetchFn)
+      const slots = await fetchSlots(zone, from, to, globalThis.fetch)
       upsertSlots(ctx.db, zone, slots)
       state.consecutiveFailures = 0
       health = computeTariffHealth(ctx.db, zone)
@@ -228,18 +235,18 @@ export function createNordpoolDayAheadTariff(ctx: ModuleCtx, opts: NordpoolTarif
       return name
     },
     async start() {
-      await runOnce(false)
+      await runOnce()
     },
     async stop() {
       if (timer !== undefined) clearTimeout(timer)
     },
     // Manual out-of-band refetch (POST /api/tariffs/:name/refresh). Cancels the pending timer and
-    // fetches now (global fetch — immediate, no jitter), which reschedules the normal cadence.
+    // fetches now (no schedule jitter), which reschedules the normal cadence.
     // Never rejects: runOnce swallows fetch errors into health + a retry, so the caller can read
     // health() afterwards to see whether it recovered.
     async refresh() {
       if (timer !== undefined) clearTimeout(timer)
-      await runOnce(false)
+      await runOnce()
     },
     health() {
       return health
