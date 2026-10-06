@@ -1,5 +1,9 @@
 import { test, expect } from 'vitest'
-import { shouldPollVehicle, type VehiclePollInput } from './vehicle-poll.js'
+import {
+  shouldPollVehicle,
+  vehiclesToResetOnUnplug,
+  type VehiclePollInput,
+} from './vehicle-poll.js'
 
 // The lifecycle owns WHEN to poll a vehicle; this pure gate encodes the policy: poll on (re)connect,
 // then on two cadences while plugged in — slow while actively drawing (re-anchor the estimate),
@@ -38,4 +42,26 @@ test('connected + idle → poll on the (faster) idle interval to catch climate/p
   const between = base.idleIntervalMs + 1
   expect(shouldPollVehicle({ ...base, drawing: false, lastPollAt: 0, now: between })).toBe(true)
   expect(shouldPollVehicle({ ...base, drawing: true, lastPollAt: 0, now: between })).toBe(false)
+})
+
+test('vehiclesToResetOnUnplug: only on the unplug edge, and never a car in use on another loadpoint', () => {
+  const base = { candidates: ['enyaq', 'opel'], inUseElsewhere: new Set<string>() }
+  // the connected→unplugged edge resets every candidate
+  expect(vehiclesToResetOnUnplug({ ...base, wasConnected: true, connected: false })).toEqual([
+    'enyaq',
+    'opel',
+  ])
+  // staying unplugged (every later tick) resets nothing — the old behaviour reset on each tick
+  expect(vehiclesToResetOnUnplug({ ...base, wasConnected: false, connected: false })).toEqual([])
+  // still plugged in → nothing
+  expect(vehiclesToResetOnUnplug({ ...base, wasConnected: true, connected: true })).toEqual([])
+  // a car charging on another loadpoint keeps its poll state (no forced re-poll, backoff intact)
+  expect(
+    vehiclesToResetOnUnplug({
+      ...base,
+      wasConnected: true,
+      connected: false,
+      inUseElsewhere: new Set(['enyaq']),
+    }),
+  ).toEqual(['opel'])
 })

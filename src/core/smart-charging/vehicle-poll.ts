@@ -26,3 +26,21 @@ export function shouldPollVehicle(i: VehiclePollInput): boolean {
   const interval = i.drawing ? i.chargingIntervalMs : i.idleIntervalMs
   return i.now - i.lastPollAt >= interval // periodic re-anchor (drawing) or climate/plug watch (idle)
 }
+
+/**
+ * Which vehicles' poll state to reset when a loadpoint is unplugged. Poll state is kept PER VEHICLE
+ * and shared by every loadpoint, so the reset must fire only on this loadpoint's connected→unplugged
+ * EDGE (not on every tick it stays unplugged) and must spare a car another plugged-in loadpoint is
+ * using — otherwise one idle charger re-arms "first poll on connect" for the other's car every tick,
+ * polling it every control interval and defeating its failure backoff.
+ */
+export function vehiclesToResetOnUnplug(i: {
+  wasConnected: boolean
+  connected: boolean
+  candidates: string[]
+  /** Active vehicles of OTHER loadpoints that are plugged in right now. */
+  inUseElsewhere: ReadonlySet<string>
+}): string[] {
+  if (i.connected || !i.wasConnected) return []
+  return i.candidates.filter((name) => !i.inUseElsewhere.has(name))
+}

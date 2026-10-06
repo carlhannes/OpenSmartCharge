@@ -57,7 +57,7 @@ import { resolvePriceCurve } from './smart-charging/price.js'
 import { resolveCurrentBudget } from './smart-charging/current.js'
 import { decideShouldCharge, forceMinSoc, forceClimate } from './smart-charging/decide.js'
 import type { PlannedSlot } from './planner.js'
-import { shouldPollVehicle } from './smart-charging/vehicle-poll.js'
+import { shouldPollVehicle, vehiclesToResetOnUnplug } from './smart-charging/vehicle-poll.js'
 import { resolveActiveVehicle, positiveClaimant } from './smart-charging/guest.js'
 import { resolveSessionComplete, SESSION_COMPLETE } from './smart-charging/session-complete.js'
 import {
@@ -135,6 +135,28 @@ async function main() {
     events,
     log,
   }
+
+  // Declared before any module starts: module events (e.g. a meter frame) read loadpoint state, and a
+  // listener firing during a later `await start()` must never hit an uninitialized binding.
+  // maxA per loadpoint comes from the referenced charger config (see configToLoadpointInits).
+  const loadpointStates = loadLoadpointStates(db, configToLoadpointInits(config))
+  log.info({ loadpoints: [...loadpointStates.keys()] }, 'loadpoints initialized')
+
+  // One misconfigured or unreachable module must not take the whole system down (degradation model):
+  // log it, mark it unavailable, and boot on without it — the resolver ladders degrade around the gap.
+  async function bootModule<T>(
+    kind: string,
+    name: string,
+    build: () => Promise<T>,
+  ): Promise<T | undefined> {
+    try {
+      return await build()
+    } catch (err) {
+      log.error({ err, [kind]: name }, `${kind} module failed to start — continuing without it`)
+      setHealth(name, 'unavailable')
+      return undefined
+    }
+  }
   const chargers = new Map<string, Charger>()
 
   for (const chargerCfg of config.chargers) {
@@ -146,8 +168,12 @@ async function main() {
       )
       continue
     }
-    const charger = mod.create(chargerCfg, ctx)
-    await charger.start()
+    const charger = await bootModule('charger', chargerCfg.name, async () => {
+      const c = mod.create(chargerCfg, ctx)
+      await c.start()
+      return c
+    })
+    if (!charger) continue
     chargers.set(chargerCfg.name, charger)
     updateHealth(health, chargerCfg.name, charger.health())
     log.info({ charger: chargerCfg.name, type: chargerCfg.type }, 'charger module created')
@@ -164,8 +190,12 @@ async function main() {
       )
       continue
     }
-    const tariff = mod.create(tariffCfg, ctx)
-    await tariff.start()
+    const tariff = await bootModule('tariff', tariffCfg.name, async () => {
+      const t = mod.create(tariffCfg, ctx)
+      await t.start()
+      return t
+    })
+    if (!tariff) continue
     tariffs.set(tariffCfg.name, tariff)
     updateHealth(health, tariffCfg.name, tariff.health())
     log.info({ tariff: tariffCfg.name, type: tariffCfg.type }, 'tariff module created')
@@ -188,8 +218,12 @@ async function main() {
       )
       continue
     }
-    const reader = mod.create(meterCfg, ctx)
-    await reader.start()
+    const reader = await bootModule('meter', meterCfg.name, async () => {
+      const r = mod.create(meterCfg, ctx)
+      await r.start()
+      return r
+    })
+    if (!reader) continue
     meterReaders.set(meterCfg.name, reader)
     updateHealth(health, meterCfg.name, reader.health())
     log.info({ meter: meterCfg.name, type: meterCfg.type }, 'meter reader module created')
@@ -197,9 +231,9 @@ async function main() {
 
   // Rolling 15-min whole-house + car power buffer for the ui2 "Home now" chart — served on refresh via
   // GET /api/power-history (thereafter the client keeps it live via the meter.snapshot SSE). Only the
-  // primary/house meter (matching the client's meterReaders[0]) feeds it.
+  // primary/house meter (matching the client's meterReaders[0]) feeds it — resolved per frame, since
+  // reconcile adds/removes readers in this same Map at runtime.
   const powerHistory: PowerSample[] = []
-  const houseMeter = [...meterReaders.keys()][0]
 
   // Track the last site-local day we pruned the load rollup, so pruning runs once per day
   // (on rollover) rather than on the ~1 Hz meter-event path.
@@ -225,7 +259,7 @@ async function main() {
 
     // Whole-house + car power sample for the Home chart (outside the maxPhaseA guard so a powerW-only
     // meter still records). total = meter watts (powerW, else Σ phase amps × 230); ev = Σ loadpoint draw.
-    if (p.name === houseMeter) {
+    if (p.name === [...meterReaders.keys()][0]) {
       const totalW = s.powerW ?? ((s.i1A ?? 0) + (s.i2A ?? 0) + (s.i3A ?? 0)) * GRID_VOLTAGE_V
       const evW = [...loadpointStates.values()].reduce((a, st) => a + Math.max(0, st.powerW), 0)
       pushPowerSample(powerHistory, Math.round(totalW), Math.round(evW), s.timestamp.getTime())
@@ -240,7 +274,8 @@ async function main() {
       log.warn({ type: vCfg.type, name: vCfg.name }, 'no module registered for vehicle type')
       continue
     }
-    const vehicle = mod.create(vCfg, ctx)
+    const vehicle = await bootModule('vehicle', vCfg.name, async () => mod.create(vCfg, ctx))
+    if (!vehicle) continue
     // No start() — the module owns no poll timer. The control loop drives vehicle.refresh()
     // on charger-connect + during charging (see maybePollVehicle).
     vehicles.set(vCfg.name, vehicle)
@@ -278,16 +313,16 @@ async function main() {
         { balancer: balancerCfg.name, deprecated },
         'balancer fields are deprecated + ignored — the meter + its staleness moved to a MeterReader; use `meterReader` for live data and `nightMarginA`/`daytimeFraction` for the static fallback',
       )
-    const balancer = mod.create(balancerCfg, ctx)
-    await balancer.start()
+    const balancer = await bootModule('balancer', balancerCfg.name, async () => {
+      const b = mod.create(balancerCfg, ctx)
+      await b.start()
+      return b
+    })
+    if (!balancer) continue
     balancers.set(balancerCfg.name, balancer)
     updateHealth(health, balancerCfg.name, balancer.health())
     log.info({ balancer: balancerCfg.name, type: balancerCfg.type }, 'balancer module created')
   }
-
-  // maxA per loadpoint comes from the referenced charger config (see configToLoadpointInits).
-  const loadpointStates = loadLoadpointStates(db, configToLoadpointInits(config))
-  log.info({ loadpoints: [...loadpointStates.keys()] }, 'loadpoints initialized')
 
   // Group loadpoints into circuits (balancer-shared vs bare). The single control loop ticks every
   // circuit. Rebuildable IN PLACE so reconcile (add/remove loadpoint) can regroup without replacing
@@ -453,6 +488,9 @@ async function main() {
     { lastPollAt: number; polledThisConnection: boolean; consecutiveFailures: number }
   >()
   const vehicleAnchor = new Map<string, { soc: number; sessionEnergyKWh: number }>()
+  // Per loadpoint: was it plugged in at its previous poll check — so the per-vehicle poll reset fires
+  // once on the unplug edge, not on every tick the charger stays idle (see vehiclesToResetOnUnplug).
+  const wasConnectedForPoll = new Map<string, boolean>()
   // The session's FIRST real reading, kept alongside the latest anchor so we can observe THIS
   // session's charging efficiency (see effectiveEfficiencyFor). Reset on disconnect, so each
   // charging session measures its own efficiency; never persisted across sessions.
@@ -581,8 +619,22 @@ async function main() {
   // next tick). Manual cars (no telemetry) are never polled. Per-vehicle backoff; fire-and-forget.
   function maybePollVehicles(lpCfg: LoadpointConfig, state: LoadpointState, nowMs: number): void {
     const candidateNames = config.vehicles.map((v) => v.name)
+    const wasConnected = wasConnectedForPoll.get(lpCfg.name) ?? false
+    wasConnectedForPoll.set(lpCfg.name, state.connected)
     if (!state.connected) {
-      for (const name of candidateNames) {
+      const inUseElsewhere = new Set<string>()
+      for (const other of loadpointStates.values()) {
+        if (other !== state && other.connected && other.activeVehicle) {
+          inUseElsewhere.add(other.activeVehicle)
+        }
+      }
+      const toReset = vehiclesToResetOnUnplug({
+        wasConnected,
+        connected: false,
+        candidates: candidateNames,
+        inUseElsewhere,
+      })
+      for (const name of toReset) {
         const vp = vehiclePollState.get(name)
         if (vp) {
           vp.polledThisConnection = false // next connection re-anchors on its first tick
@@ -794,7 +846,9 @@ async function main() {
     const chargerCfg = config.chargers.find((c) => c.name === lpCfg.charger) as
       | { phases?: number }
       | undefined
-    const phases = balancerCfg?.phases ?? chargerCfg?.phases ?? 3
+    // The car draws on the charger's phases, capped by the supply's: a 1-phase charger on a 3-phase
+    // circuit charges at 1-phase power (balancer `phases` defaults to 3, so it must not win outright).
+    const phases = Math.min(chargerCfg?.phases ?? 3, balancerCfg?.phases ?? 3)
 
     // One target → one resolved { requiredKWh (charge) + resolvedSoc (display) } through the single
     // resolver (unit conversion + the degradation ladder). The target is the governing plan or the
@@ -1142,7 +1196,11 @@ async function main() {
           // Soft-start a resume: if we were paused (~0 A), command half the target this tick so the
           // car ramps gently instead of briefly overshooting the fuse; the next tick reaches full.
           const limit = softStartLimit(w, lastCommandedA.get(lpId) ?? 0)
-          await charger.setCurrentLimit(limit).catch(() => {})
+          await charger
+            .setCurrentLimit(limit)
+            .catch((err) =>
+              log.warn({ err, loadpoint: lpId, amps: limit }, 'setting the charger limit failed'),
+            )
           lastCommandedA.set(lpId, limit) // record the ACTUAL command → credit-back + next-tick ramp stay honest
         }
       }
@@ -1238,6 +1296,10 @@ async function main() {
           )
         }
       }
+    } catch (err) {
+      // Every caller fire-and-forgets this tick; an escaping error would be an unhandled rejection
+      // and exit the process. Log it — the next tick (≤ controlIntervalSec) retries from fresh state.
+      log.error({ err, circuit: circuit.id }, 'control tick failed')
     } finally {
       slot.running = false
       if (slot.rerun) {
@@ -1307,13 +1369,6 @@ async function main() {
     },
   })
   log.info({ port: config.site.port }, 'HTTP server listening')
-
-  // Wire REST mode/target handlers
-  events.on('loadpoint.mode', (payload) => {
-    const p = payload as { name: string; mode: ChargeMode }
-    const charger = chargers.get(config.loadpoints.find((l) => l.name === p.name)?.charger ?? '')
-    if (charger) setHealth(p.name, charger.health())
-  })
 
   // Attach OCPP WS upgrade handler to the HTTP server
   // Always start the OCPP server (even with no chargers configured yet) so a fresh install listens for
@@ -1414,16 +1469,22 @@ async function main() {
   // child the signal wouldn't reach).
   const shutdown = createSignalShutdown(
     {
-      timers: [controlInterval, logPruneInterval, healthSweepInterval, postStartupTimer],
+      // Getters, read at shutdown time: the post-startup retry timer is (re)assigned after this point,
+      // and reconcile swaps modules in these Maps at runtime — a snapshot taken now would miss both.
+      get timers() {
+        return [controlInterval, logPruneInterval, healthSweepInterval, postStartupTimer]
+      },
       httpServer,
       ocppServer,
       mqttBridge,
-      modules: [
-        ...balancers.values(),
-        ...vehicles.values(),
-        ...tariffs.values(),
-        ...meterReaders.values(),
-      ],
+      get modules() {
+        return [
+          ...balancers.values(),
+          ...vehicles.values(),
+          ...tariffs.values(),
+          ...meterReaders.values(),
+        ]
+      },
       db,
     },
     log,
