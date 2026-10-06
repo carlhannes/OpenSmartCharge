@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Creates an online SQLite backup using VACUUM INTO — safe while OSC is running.
 // Usage: node scripts/backup.mjs [--data <dir>] [--out <path>]
-//   --data  path to the OSC data directory (default: ./data)
+//   --data  path to the OSC data directory (default: $OSC_DATA_DIR, else ./data — same as the server)
 //   --out   destination file (default: ./backups/osc-<timestamp>.db)
 
 import { DatabaseSync } from 'node:sqlite'
@@ -14,7 +14,7 @@ function arg(name, fallback) {
   return i !== -1 && args[i + 1] ? args[i + 1] : fallback
 }
 
-const dataDir = resolve(arg('--data', './data'))
+const dataDir = resolve(arg('--data', process.env.OSC_DATA_DIR ?? './data'))
 const dbPath = join(dataDir, 'osc.db')
 
 if (!existsSync(dbPath)) {

@@ -57,7 +57,7 @@ A thin factory layer over the SDK registry (`src/sdk/registry-api.ts`). Modules 
 
 ### `src/core/plugin-loader.ts`
 
-Scans `./plugins/*.js` at startup and imports each file. Plugins self-register by calling the SDK registration functions on import. Errors in one plugin are logged but don't crash the system.
+Scans `./plugins/*.js` at startup and imports each file, then calls (and awaits) its default export with the registration API, so even an async plugin has registered before modules are instantiated. Errors in one plugin are logged but don't crash the system.
 
 ### `src/core/events.ts`
 

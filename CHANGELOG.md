@@ -33,6 +33,36 @@ unchanged except where a user-facing bug is listed under Fixed.
   and the "charger offline" banner used the loadpoint name where the backend keys by charger name.
   The main-breaker setting wrote `site.mainBreakerA`, which a balancer circuit never reads — it now
   edits the balancer's breaker when there is one.
+- **One broken module no longer takes OSC down.** A module whose setup throws (e.g. a meter reader
+  without `broker:`) is logged, shown as `unavailable` and skipped; everything else boots and the
+  control loop degrades around it. An error inside a control tick is logged instead of crashing the
+  process.
+- **The balancer could allocate more than the circuit budget.** Its 1 A hysteresis held the previous,
+  higher value when the budget dropped. It now only holds a value on a small *rise*.
+- **With two or more chargers, an idle one made the other's car be polled every 30 s** (and reset its
+  failure backoff), risking a car-API lockout. The poll state now resets only when that charger is
+  unplugged, and never for a car another charger is using.
+- Smart-mode planning used the balancer's phase count (default 3) even for a 1-phase charger, so it
+  planned too few slots. It now uses the lower of the charger's and the supply's phases.
+- MySkoda requests had no timeout; a car-side start-charge is awaited inside the control tick, so a
+  hung request could freeze current control for that circuit. Every call now times out after 15 s.
+- Day-ahead prices: a failed slot write could leave a database transaction open for the whole app
+  (later writes uncommitted and lost on exit). It now rolls back. A replaced tariff could keep
+  fetching forever, its health only updated on fetch attempts (now derived live), and a dead
+  internet link could delay boot by up to ~45 s (the first fetch no longer blocks startup).
+- DST: on a host with a DST timezone, the autumn change produced one 75-minute plan slot (and a
+  2-hour flat-tariff slot), and "tomorrow at 07:00" landed an hour off on DST nights.
+- OCPP: power reported in kW was shown 1000× too small, a sample without a measurand (the energy
+  register by default) was ignored, and a session closed after a missed StopTransaction got an end
+  time the UI read as local time.
+- Home Assistant's "Session energy" sensor dropped to zero on OCPP transaction churn mid-session, so
+  HA over-counted energy; it now reports the per-plug-in delivered total.
+- Charger health appeared a second time under the loadpoint's name after any mode change.
+- `PUT /api/mqtt-bridge` persisted the redacted password placeholder when a client echoed it back;
+  `GET /api/transactions?limit=-1` returned every row and a non-numeric limit returned a 500.
+- An async plugin registered after modules were created, so its types were reported as unknown.
+- `npm run restore` without `--in` crashed instead of printing its usage; backup and restore now
+  honour `OSC_DATA_DIR`, and a forced restore removes the old database's stale WAL files.
 - Docs that sent users down a broken path: the dev quick-start lacked the UI's own `npm install`,
   the runtime-configuration section described a `config:apply --prune` that doesn't exist, the
   config reference claimed a boot warning for `mqtt:` that never fired, and its multi-grid example

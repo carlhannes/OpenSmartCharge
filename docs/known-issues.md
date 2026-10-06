@@ -60,8 +60,9 @@ data-freshness, and recovery bugs.
 - **Fix idea:** make `health()` staleness-aware per module (esp. vehicle — mirror the meter reader's
   `staleAfterSec`), and have the charger health reflect WS-heartbeat recency + connector state.
 - **Status:** vehicle health is now failure/staleness-aware (`sourceHealth`), charger health tracks the
-  OCPP connection, and every transition emits `health.changed` (SSE + MQTT). Remaining: a Nord Pool
-  tariff caches its health until its next fetch attempt, so the 15 s sweep can't see it go stale.
+  OCPP connection, Nord Pool tariff health is derived from the price cache on every read, and every
+  transition emits `health.changed` (SSE + MQTT). Remaining: charger health is one value for all
+  stations on the shared OCPP server, not per charger.
 
 ### 4. Skoda/vehicle does not auto-recover from transient API failures  ·  severity: high
 - **Symptom:** the vehicle showed as disconnected/stale and never recovered on its own; only a manual force
@@ -162,6 +163,6 @@ data-freshness, and recovery bugs.
 ### Cross-cutting theme
 The 2026-07-08 batch exposed one underlying gap: **health/status reporting that was not freshness/liveness
 aware**. Most of it has since landed — staleness-aware vehicle health, a charger-aware home banner, and a
-`health.changed` SSE event mirrored to MQTT. What remains is listed above (#2 for the tariff, #5 for the
-UI's SoC-only vehicle updates) plus a single backend "charging possible + why/why-not" signal, which the
+`health.changed` SSE event mirrored to MQTT. What remains is listed above (#2 for per-charger health, #5 for
+the UI's SoC-only vehicle updates) plus a single backend "charging possible + why/why-not" signal, which the
 `resolve` payload on each loadpoint now approximates.

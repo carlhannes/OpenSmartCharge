@@ -171,6 +171,8 @@ npm run backup                         # → backups/osc-<timestamp>.db
 npm run backup -- --out ~/my-backup.db # custom output path
 ```
 
+Both scripts use `$OSC_DATA_DIR` (default `./data`) like the server; `--data <dir>` overrides it.
+
 Restore (OSC must be stopped first):
 
 ```bash

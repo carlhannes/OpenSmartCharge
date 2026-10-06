@@ -8,6 +8,7 @@ import { openDb } from '../core/db.js'
 import { configSchema } from '../core/config.js'
 import { getEffectiveConfig, getOverride } from '../core/config-overrides.js'
 import { createApiRouter, type ApiDeps } from './api.js'
+import { REDACTED } from '../core/config-io.js'
 // Register the real vehicle modules so the generic /vehicles endpoints resolve their descriptors
 // (getVehicleModule / listVehicleModules) — normally done by lifecycle's side-effect imports.
 import '../modules/vehicle-skoda/index.js'
@@ -1077,4 +1078,56 @@ test('an unknown /api path is a JSON 404 (never the SPA shell)', async () => {
     expect(res.status).toBe(404)
     expect(await res.json()).toEqual({ error: 'not found' })
   })
+})
+
+test('GET /transactions clamps limit to 1–200 (no "unlimited" -1, no 500 on garbage)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-tx-'))
+  const db = openDb(dir)
+  const insert = db.prepare(
+    `INSERT INTO transactions (id, loadpoint_name, station_id, start_time, meter_start)
+     VALUES (?, 'garage', 'STN', '2026-07-04T10:00:00Z', 0)`,
+  )
+  for (let id = 1; id <= 60; id++) insert.run(id)
+  try {
+    await withApi({ db } as unknown as ApiDeps, async (baseUrl) => {
+      const count = async (q: string) => {
+        const res = await fetch(`${baseUrl}/api/transactions${q}`)
+        expect(res.status).toBe(200)
+        return ((await res.json()) as unknown[]).length
+      }
+      expect(await count('?limit=-1')).toBe(1) // was: no limit at all
+      expect(await count('?limit=abc')).toBe(50) // was: a 500
+      expect(await count('?limit=5')).toBe(5)
+      expect(await count('')).toBe(50)
+    })
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('PUT /mqtt-bridge: echoing the redacted password back keeps the real one', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'osc-api-mb-'))
+  const db = openDb(dir)
+  const deps = {
+    db,
+    config: configSchema.parse({
+      mqttBridge: { broker: { host: 'broker', user: 'osc', password: 's3cret' } },
+    }),
+  } as unknown as ApiDeps
+  try {
+    await withApi(deps, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/mqtt-bridge`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ broker: { host: 'broker2', user: 'osc', password: REDACTED } }),
+      })
+      expect(res.status).toBe(200)
+    })
+    const stored = getOverride(db, 'mqttBridge', 'mqttBridge') as { broker: { password?: string } }
+    expect(stored.broker.password).toBe('s3cret')
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

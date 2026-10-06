@@ -214,7 +214,11 @@ function publishState(client: mqtt.MqttClient, prefix: string, state: LoadpointS
   const lpPrefix = `${prefix}/loadpoints/${state.name}`
   client.publish(`${lpPrefix}/mode`, state.mode, { retain: true })
   client.publish(`${lpPrefix}/current_a`, String(state.currentA), { retain: true })
-  client.publish(`${lpPrefix}/energy_kwh`, String(state.sessionEnergyKWh), { retain: true })
+  // Home Assistant treats this as a `total_increasing` sensor, so it must not drop mid-session: the
+  // raw per-transaction value resets on OCPP transaction churn (HA would count each reset as a new
+  // cycle and inflate its statistics). deliveredKWh is the peak-held per-plug-in total.
+  const energyKWh = state.deliveredKWh ?? state.sessionEnergyKWh
+  client.publish(`${lpPrefix}/energy_kwh`, String(energyKWh), { retain: true })
   client.publish(`${lpPrefix}/state`, JSON.stringify(state), { retain: true })
 }
 

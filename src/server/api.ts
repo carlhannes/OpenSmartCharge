@@ -320,6 +320,14 @@ export function createApiRouter(deps: ApiDeps): Router {
       res.status(400).json({ error: 'body must be a non-empty mqttBridge config' })
       return
     }
+    // GET /api/site returns the broker password as the redaction placeholder; a client that echoes it
+    // back means "unchanged" — keep the real one instead of persisting the placeholder as the password.
+    const broker = patch.broker as { password?: unknown } | undefined
+    if (broker?.password === REDACTED) {
+      const current = deps.config.mqttBridge?.broker.password
+      if (current === undefined) delete broker.password
+      else broker.password = current
+    }
     try {
       validateConfigWith(deps.config, [{ kind: 'mqttBridge', name: 'mqttBridge', patch }])
     } catch {
@@ -1476,7 +1484,9 @@ export function createApiRouter(deps: ApiDeps): Router {
   // GET /api/transactions
   router.get('/transactions', (req: Request, res: Response) => {
     const loadpoint = req.query.loadpoint as string | undefined
-    const limit = Math.min(Number(req.query.limit ?? 50), 200)
+    // Clamp to 1–200 (default 50): `?limit=-1` meant "no limit" to SQLite, and a non-number was a 500.
+    const raw = Number(req.query.limit ?? 50)
+    const limit = Number.isFinite(raw) ? Math.min(Math.max(Math.trunc(raw), 1), 200) : 50
 
     const rows = loadpoint
       ? deps.db

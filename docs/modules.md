@@ -127,7 +127,7 @@ if (!name || !zone) {
 }
 ```
 
-Throw a descriptive `Error` from `create()` on bad config — OSC logs it and aborts startup cleanly. Don't silently default missing required fields.
+Throw a descriptive `Error` from `create()` on bad config — OSC logs it, marks the module `unavailable` and boots on without it (the other modules and the control loop keep running; fix the config and it comes back on the next reconcile or restart). Don't silently default missing required fields.
 
 ### Going further
 
