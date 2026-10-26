@@ -5,8 +5,9 @@
 // their MARKET timezone (Europe/Stockholm) — publish windows + per-day price files follow the
 // price market, not where the user lives.
 
-/** Wall-clock "HH:MM" as users type it (targets, plan ready-by) — shared by config + API validation. */
-export const HHMM_RE = /^\d{2}:\d{2}$/
+/** Wall-clock "HH:MM" as users type it (targets, plan ready-by) — shared by config + API validation.
+ *  24:00 is accepted as end-of-day midnight (ISO 8601); 24:01 or 99:99 are not a time. */
+export const HHMM_RE = /^(([01]\d|2[0-3]):[0-5]\d|24:00)$/
 
 export interface LocalParts {
   year: number
@@ -101,11 +102,15 @@ function localInstant(
   minute: number,
   tz: string,
 ): Date {
-  // Build the wall-clock time as a "fake UTC" instant, then shift by the zone's offset at that time.
-  // Date.UTC normalizes day overflow (d + 1 on the 31st → the 1st of next month). Safe for the times
-  // we use it (publish window, plan ready-by, targets) — none sit in the 02:00–03:00 DST gap.
+  // Build the wall-clock time as a "fake UTC" instant, then shift by the zone's offset. The offset is
+  // resolved twice: sampled at the fake instant alone it lands on the wrong side of a DST change for
+  // wall-clock times within an hour or two of it (01:30 on the autumn night came out as 02:30), so the
+  // first pass only locates the right side and the second takes the offset there. A time inside the
+  // spring gap (02:xx) does not exist and resolves to 03:xx. Date.UTC normalizes day overflow
+  // (d + 1 on the 31st → the 1st of next month).
   const fakeUtc = new Date(Date.UTC(y, m - 1, d, hour, minute))
-  return new Date(fakeUtc.getTime() + getOffsetMs(fakeUtc, tz))
+  const guess = new Date(fakeUtc.getTime() + getOffsetMs(fakeUtc, tz))
+  return new Date(fakeUtc.getTime() + getOffsetMs(guess, tz))
 }
 
 /** Ms until the next occurrence of HH:MM in `tz` local time (same day or tomorrow). */

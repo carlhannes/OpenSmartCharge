@@ -1097,6 +1097,7 @@ test('GET /transactions clamps limit to 1–200 (no "unlimited" -1, no 500 on ga
       }
       expect(await count('?limit=-1')).toBe(1) // was: no limit at all
       expect(await count('?limit=abc')).toBe(50) // was: a 500
+      expect(await count('?limit=')).toBe(50) // empty → the default, not 1
       expect(await count('?limit=5')).toBe(5)
       expect(await count('')).toBe(50)
     })

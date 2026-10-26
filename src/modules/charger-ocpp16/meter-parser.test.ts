@@ -87,4 +87,9 @@ test('power respects a declared kW unit (W is the default)', () => {
 
 test('a sample with no measurand is the energy register (the OCPP 1.6 default)', () => {
   expect(parseMeterValue(mv([{ value: '12500', unit: 'Wh' }])).energyKwh).toBe(12.5)
+  expect(parseMeterValue(mv([{ value: '12500' }])).energyKwh).toBe(12.5)
+  // …unless its unit says it is something else: that sample is dropped, never counted as energy.
+  const parsed = parseMeterValue(mv([{ value: '7400', unit: 'W' }]))
+  expect(parsed.energyKwh).toBeUndefined()
+  expect(parsed.powerW).toBeUndefined()
 })

@@ -96,6 +96,11 @@ test('nextDelay: next-day when tomorrow cached, wait-for-window before 13:15, re
   const s: SchedulerState = { consecutiveFailures: 0 }
   expect(nextDelay(s, true, new Date('2026-07-04T09:00:00Z')).reason).toBe('next-day')
   expect(nextDelay(s, false, new Date('2026-07-04T09:00:00Z')).reason).toBe('wait-for-window')
+  // A failure before the window retries as well: on an empty cache (a fresh install) waiting for
+  // 13:15 would mean hours without any prices after a transient blip.
+  expect(
+    nextDelay({ consecutiveFailures: 1 }, false, new Date('2026-07-04T09:00:00Z')),
+  ).toMatchObject({ reason: 'retry', delayMs: 10 * 60_000 })
   // After publish (14:00 Stockholm), no tomorrow → exponential backoff from 10 min, doubling.
   const t = new Date('2026-07-04T12:00:00Z')
   expect(nextDelay({ consecutiveFailures: 1 }, false, t)).toMatchObject({
@@ -205,7 +210,7 @@ test('factory: stop() during an in-flight fetch never re-arms the schedule; heal
     expect(calls).toBe(1) // the stopped instance did not schedule another fetch
 
     // Health reflects the cache as it is NOW, with no fetch needed to refresh it.
-    expect(tariff.health()).toBe('unavailable') // the slot ended at 2026-03-11T08:00Z, 48 h ago
+    expect(tariff.health()).toBe('unavailable') // the slot ended at 2026-03-11T08:00Z, 24 h ago
     upsertSlots(db, 'SE3', [slot('2026-03-12T07:00:00Z', '2026-03-13T08:00:00Z', 1)])
     expect(tariff.health()).toBe('ok')
   } finally {

@@ -29,6 +29,10 @@ if (!existsSync(inPath)) {
   console.error(`Error: backup file not found: ${inPath}`)
   process.exit(1)
 }
+if (!existsSync(dataDir)) {
+  console.error(`Error: data directory not found: ${dataDir}`)
+  process.exit(1)
+}
 
 const walPath = join(dataDir, 'osc.db-wal')
 const shmPath = join(dataDir, 'osc.db-shm')

@@ -28,7 +28,7 @@ export function createPulseClient(opts: PulseClientOpts): PulseClientHandle {
   let latestSnapshot: MeterSnapshot | null = null
   let lastDisableMs = 0
   let lastLogMs = 0
-  const stats = { msgs: 0, json: 0, text: 0, binary: 0, published: 0 }
+  const stats = { msgs: 0, json: 0, text: 0, published: 0 }
   let mqttClient: MqttClient | undefined
 
   function disableBatching(c: MqttClient, reason: string): void {

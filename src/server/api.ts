@@ -31,6 +31,7 @@ import {
 } from '../core/config-io.js'
 import { getOcppServer } from '../modules/charger-ocpp16/index.js'
 import { isValidTimeZone, HHMM_RE } from '../sdk/local-time.js'
+import { DEFAULT_PHASES } from '../sdk/electrical.js'
 import {
   listPlans,
   listAllPlans,
@@ -556,7 +557,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       res.status(400).json({ error: 'maxA must be a positive integer' })
       return
     }
-    const phases = b.phases === undefined ? 3 : b.phases
+    const phases = b.phases === undefined ? DEFAULT_PHASES : b.phases
     if (typeof phases !== 'number' || ![1, 2, 3].includes(phases)) {
       res.status(400).json({ error: 'phases must be 1, 2 or 3' })
       return
@@ -1484,8 +1485,9 @@ export function createApiRouter(deps: ApiDeps): Router {
   // GET /api/transactions
   router.get('/transactions', (req: Request, res: Response) => {
     const loadpoint = req.query.loadpoint as string | undefined
-    // Clamp to 1–200 (default 50): `?limit=-1` meant "no limit" to SQLite, and a non-number was a 500.
-    const raw = Number(req.query.limit ?? 50)
+    // Clamp to 1–200 (default 50, also for an empty or non-numeric value): `?limit=-1` meant "no
+    // limit" to SQLite, and a non-number was a 500.
+    const raw = Number(req.query.limit || 50)
     const limit = Number.isFinite(raw) ? Math.min(Math.max(Math.trunc(raw), 1), 200) : 50
 
     const rows = loadpoint

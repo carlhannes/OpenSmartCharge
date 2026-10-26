@@ -247,6 +247,9 @@ test('parseTargetPatch: lenient on shape, strict on range (shared by REST + MQTT
   // out-of-range values are rejected on every command surface
   expect(parseTargetPatch({ soc: 500 })).toEqual({ ok: false, error: 'soc must be 0–100' })
   expect(parseTargetPatch({ time: '7am' })).toEqual({ ok: false, error: 'time must be HH:MM' })
+  expect(parseTargetPatch({ time: '99:99' })).toEqual({ ok: false, error: 'time must be HH:MM' })
+  expect(parseTargetPatch({ time: '24:01' })).toEqual({ ok: false, error: 'time must be HH:MM' })
+  expect(parseTargetPatch({ time: '24:00' }).ok).toBe(true) // end-of-day midnight
   expect(parseTargetPatch({ kwh: 0 })).toEqual({ ok: false, error: 'kwh must be 1–100' })
   expect(parseTargetPatch({ minSoc: -1 })).toEqual({ ok: false, error: 'minSoc must be 0–100' })
 })

@@ -147,19 +147,20 @@ export function nextDelay(
       reason: 'next-day',
     }
   }
-  if (!isPastPublishWindow(now)) {
+  // A failed fetch retries with capped exponential backoff — 10 m → 20 m → 40 m → hourly — at any time
+  // of day: before the window too, or a transient blip on an empty cache (a fresh install, a reset)
+  // would leave no prices at all until 13:15. Past the window with no tomorrow yet, the same retry
+  // applies (that is a fetch failure, not "not published"). The cap keeps it retrying rather than
+  // backing off past midnight and stranding empty prices ~24 h (it never collapses to "next-day" here).
+  if (state.consecutiveFailures > 0 || isPastPublishWindow(now)) {
     return {
-      delayMs: msUntilLocalTime(now, PUBLISH_HOUR, PUBLISH_MINUTE, MARKET_TZ),
-      reason: 'wait-for-window',
+      delayMs: backoffDelayMs(Math.max(1, state.consecutiveFailures), RETRY_BACKOFF),
+      reason: 'retry',
     }
   }
-  // Past publish window, don't have tomorrow yet — a fetch failure, not "not published". Retry with
-  // capped exponential backoff: 10 m → 20 m → 40 m → hourly, so a transient network blip recovers in
-  // ~10 min instead of stranding for an hour. The cap keeps it retrying rather than backing off past
-  // midnight and stranding empty prices ~24 h (which is why it never collapses to "next-day" here).
   return {
-    delayMs: backoffDelayMs(Math.max(1, state.consecutiveFailures), RETRY_BACKOFF),
-    reason: 'retry',
+    delayMs: msUntilLocalTime(now, PUBLISH_HOUR, PUBLISH_MINUTE, MARKET_TZ),
+    reason: 'wait-for-window',
   }
 }
 

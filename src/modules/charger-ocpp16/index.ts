@@ -3,6 +3,7 @@ import type { Charger, ChargerStatus } from '../../sdk/charger.js'
 import type { ModuleHealth } from '../../sdk/types.js'
 import { OcppServer } from './server.js'
 import { createDebouncedSetter } from './debounce.js'
+import { DEFAULT_PHASES } from '../../sdk/electrical.js'
 
 // Singleton OCPP server shared across all ocpp16 charger instances. The lifecycle starts it at boot
 // (ensureOcppServer) so a fresh install already listens; each charger factory attaches to it.
@@ -46,7 +47,7 @@ registerCharger({
     ensureOcppServer(ctx.db, ctx.log)
 
     sharedServer!.registerStation(stationId, config.autoStartTransaction ?? true)
-    sharedServer!.setStationPhases(stationId, config.phases ?? 3)
+    sharedServer!.setStationPhases(stationId, config.phases ?? DEFAULT_PHASES)
 
     const debouncedSet = createDebouncedSetter({
       minIntervalMs: (config.minWriteIntervalSec ?? 10) * 1000,

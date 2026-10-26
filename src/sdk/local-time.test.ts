@@ -88,3 +88,16 @@ test('msUntilLocalTime lands on the right wall-clock time across a DST change (t
   const t2 = new Date(spring.getTime() + msUntilLocalTime(spring, 7, 0, SE))
   expect(t2.toISOString()).toBe('2026-03-29T05:00:00.000Z')
 })
+
+test('msUntilLocalTime: a wall-clock time within an hour of the DST change lands on its right side', () => {
+  const at = (now: Date, h: number, m: number) =>
+    new Date(now.getTime() + msUntilLocalTime(now, h, m, SE)).toISOString()
+  // Autumn: 01:30 on Sun 2026-10-25 is still CEST (the clocks go back at 03:00) → 23:30Z.
+  const autumn = new Date('2026-10-24T20:00:00Z')
+  expect(at(autumn, 1, 30)).toBe('2026-10-24T23:30:00.000Z')
+  // Spring: 01:30 on Sun 2026-03-29 is still CET (the clocks go forward at 02:00) → 00:30Z.
+  const spring = new Date('2026-03-28T21:00:00Z')
+  expect(at(spring, 1, 30)).toBe('2026-03-29T00:30:00.000Z')
+  // 02:30 does not exist on the spring night → resolves to 03:30 CEST, never an hour early.
+  expect(at(spring, 2, 30)).toBe('2026-03-29T01:30:00.000Z')
+})

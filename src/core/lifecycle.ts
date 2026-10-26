@@ -40,7 +40,7 @@ import type { Tariff, TariffSlot } from '../sdk/tariff.js'
 import type { MeterReader, MeterSnapshot } from '../sdk/meter-reader.js'
 import { recordHouseholdLoad, pruneHouseholdLoad, worstCaseLoadA } from './smart-charging/rollup.js'
 import { pushPowerSample, type PowerSample } from './power-history.js'
-import { GRID_VOLTAGE_V, IEC_MIN_CURRENT_A } from '../sdk/electrical.js'
+import { GRID_VOLTAGE_V, IEC_MIN_CURRENT_A, DEFAULT_PHASES } from '../sdk/electrical.js'
 import { localDateKey, localHour, inLocalHourWindow, nextLocalTime } from '../sdk/local-time.js'
 import { getTimezone, seedSettings, getLogRetentionDays } from './settings.js'
 import { getEffectiveConfig } from './config-overrides.js'
@@ -284,7 +284,8 @@ async function main() {
   }
 
   // Warn about loadpoints that reference a vehicle name no module provided.
-  // Likely cause: typo in osc.yaml; falls back to duty-cycle planning silently.
+  // Likely cause: a typo in the config, or the vehicle's module failed to start (logged above);
+  // falls back to duty-cycle planning silently.
   for (const lpCfg of config.loadpoints) {
     if (lpCfg.vehicle && !vehicles.has(lpCfg.vehicle)) {
       log.warn(
@@ -850,7 +851,10 @@ async function main() {
       | undefined
     // The car draws on the charger's phases, capped by the supply's: a 1-phase charger on a 3-phase
     // circuit charges at 1-phase power (balancer `phases` defaults to 3, so it must not win outright).
-    const phases = Math.min(chargerCfg?.phases ?? 3, balancerCfg?.phases ?? 3)
+    const phases = Math.min(
+      chargerCfg?.phases ?? DEFAULT_PHASES,
+      balancerCfg?.phases ?? DEFAULT_PHASES,
+    )
 
     // One target → one resolved { requiredKWh (charge) + resolvedSoc (display) } through the single
     // resolver (unit conversion + the degradation ladder). The target is the governing plan or the
@@ -1148,47 +1152,49 @@ async function main() {
       if (circuit.kind === 'balancer') {
         const balancer = balancers.get(circuit.balancerName)
         if (!balancer) {
-          // No split without the balancer (handing each loadpoint the whole budget could overload the
-          // fuse), so these chargers keep their last limit. Say so — once — instead of going silent.
+          // No safe split without the balancer: handing each loadpoint the whole budget could overload
+          // the fuse, and holding the last limit would keep charging through a change to Off. Fail
+          // closed — an empty allocation commands 0 A — and say so once instead of going silent.
           if (!missingBalancerWarned.has(circuit.balancerName)) {
             missingBalancerWarned.add(circuit.balancerName)
             log.warn(
               { balancer: circuit.balancerName, loadpoints: lpCfgs.map((l) => l.name) },
-              'balancer unavailable — its loadpoints are not being commanded (chargers hold their last limit)',
+              'balancer unavailable — its loadpoints are held at 0 A until it is back',
             )
           }
-          return
+          allocations = new Map()
+        } else {
+          missingBalancerWarned.delete(circuit.balancerName)
+          const snaps = resolved.map((r) => {
+            const snap = buildSnapshot(
+              r.state,
+              r.activeVehicle ?? undefined,
+              r.shouldChargeNow,
+              r.pricesAvailable,
+              r.targetReached,
+              r.pauseOnTarget,
+            )
+            // Climate-only → cap this loadpoint's allocatable current at the IEC minimum.
+            if (r.climateOnly) snap.maxCurrentA = Math.min(snap.maxCurrentA, CLIMATE_MAX_OFFER_A)
+            return snap
+          })
+          const out = await balancer.tick({
+            loadpoints: snaps,
+            circuitBudgetA: circuitBudget.value,
+            timestamp: now,
+          })
+          allocations = out.allocations
+          const allocRecord = Object.fromEntries(out.allocations)
+          const freeAmps = circuitBudget.value // the resolved circuit headroom (what freeAmps meant before)
+          lastTickByBalancer.set(circuit.balancerName, { allocations: allocRecord, freeAmps })
+          events.emit('balancer.tick', {
+            name: circuit.balancerName,
+            allocations: allocRecord,
+            freeAmps,
+            health: balancer.health(),
+          })
+          updateHealth(health, circuit.balancerName, balancer.health())
         }
-        missingBalancerWarned.delete(circuit.balancerName)
-        const snaps = resolved.map((r) => {
-          const snap = buildSnapshot(
-            r.state,
-            r.activeVehicle ?? undefined,
-            r.shouldChargeNow,
-            r.pricesAvailable,
-            r.targetReached,
-            r.pauseOnTarget,
-          )
-          // Climate-only → cap this loadpoint's allocatable current at the IEC minimum.
-          if (r.climateOnly) snap.maxCurrentA = Math.min(snap.maxCurrentA, CLIMATE_MAX_OFFER_A)
-          return snap
-        })
-        const out = await balancer.tick({
-          loadpoints: snaps,
-          circuitBudgetA: circuitBudget.value,
-          timestamp: now,
-        })
-        allocations = out.allocations
-        const allocRecord = Object.fromEntries(out.allocations)
-        const freeAmps = circuitBudget.value // the resolved circuit headroom (what freeAmps meant before)
-        lastTickByBalancer.set(circuit.balancerName, { allocations: allocRecord, freeAmps })
-        events.emit('balancer.tick', {
-          name: circuit.balancerName,
-          allocations: allocRecord,
-          freeAmps,
-          health: balancer.health(),
-        })
-        updateHealth(health, circuit.balancerName, balancer.health())
       }
 
       const decisions: LpDecision[] = resolved.map((r) => ({

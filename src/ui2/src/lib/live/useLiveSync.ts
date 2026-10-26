@@ -80,7 +80,9 @@ async function rehydrateSite(
   if (site) {
     const zone = site.tariffs[0]?.zone;
     const tariffName = site.tariffs[0]?.name;
-    const siteBreaker = site.site.mainBreakerA ?? site.balancers[0]?.mainBreakerA;
+    // The balancer's breaker first: a balancer circuit sizes from THAT value and setBreaker writes it;
+    // site.mainBreakerA is the bare-loadpoint fallback. What the field shows must be what it edits.
+    const siteBreaker = site.balancers[0]?.mainBreakerA ?? site.site.mainBreakerA;
     const sitePhases = site.balancers[0]?.phases; // only a balancer exposes phases; else default 3
     useOsc.getState().setConfig({
       ...(site.site.name ? { homeName: site.site.name } : {}),

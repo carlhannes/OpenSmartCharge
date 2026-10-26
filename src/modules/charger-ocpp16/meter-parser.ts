@@ -16,8 +16,12 @@ export interface ParsedMeterValue {
  * A measurand that is absent or non-numeric is omitted (undefined), never NaN.
  * Energy is converted from Wh (OCPP `Energy.Active.Import.Register`) to kWh.
  */
-// OCPP 1.6: a sampled value with no `measurand` IS the energy register (the spec's default).
-const measurandOf = (s: SampledValue): string => s.measurand ?? 'Energy.Active.Import.Register'
+// OCPP 1.6: a sampled value with no `measurand` IS the energy register (the spec's default) — but only
+// when its unit agrees: a charger that omits the measurand on a W / A / % sample must not feed that
+// value into the session-energy delta.
+const ENERGY_UNITS = new Set<string | undefined>([undefined, 'Wh', 'kWh'])
+const measurandOf = (s: SampledValue): string | undefined =>
+  s.measurand ?? (ENERGY_UNITS.has(s.unit) ? 'Energy.Active.Import.Register' : undefined)
 const sampleOf = (mv: MeterValue, measurand: string): SampledValue | undefined =>
   mv.sampledValue.find((s) => measurandOf(s) === measurand)
 

@@ -23,3 +23,6 @@ export function chargeRateKW(maxCurrentA: number, phases: number): number {
  * rounded up — because offering 6 A when only 5 A is safe exceeds the budget and risks the breaker.
  */
 export const IEC_MIN_CURRENT_A = 6
+
+/** Phases assumed when a charger or balancer config declares none (the common 3-phase install). */
+export const DEFAULT_PHASES = 3

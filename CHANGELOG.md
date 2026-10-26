@@ -32,11 +32,12 @@ unchanged except where a user-facing bug is listed under Fixed.
   — 1 A); it now commits on blur/Enter and rejects values outside 6–32 A. Charger rename / max-amps
   and the "charger offline" banner used the loadpoint name where the backend keys by charger name.
   The main-breaker setting wrote `site.mainBreakerA`, which a balancer circuit never reads — it now
-  edits the balancer's breaker when there is one.
+  edits (and shows) the balancer's breaker when there is one.
 - **One broken module no longer takes OSC down.** A module whose setup throws (e.g. a meter reader
   without `broker:`) is logged, shown as `unavailable` and skipped; everything else boots and the
-  control loop degrades around it. An error inside a control tick is logged instead of crashing the
-  process.
+  control loop degrades around it. A circuit whose balancer is missing is held at 0 A (fail closed:
+  there is no safe split without it) and logged once. An error inside a control tick is logged instead
+  of crashing the process.
 - **The balancer could allocate more than the circuit budget.** Its 1 A hysteresis held the previous,
   higher value when the budget dropped. It now only holds a value on a small *rise*.
 - **With two or more chargers, an idle one made the other's car be polled every 30 s** (and reset its
@@ -49,20 +50,28 @@ unchanged except where a user-facing bug is listed under Fixed.
 - Day-ahead prices: a failed slot write could leave a database transaction open for the whole app
   (later writes uncommitted and lost on exit). It now rolls back. A replaced tariff could keep
   fetching forever, its health only updated on fetch attempts (now derived live), and a dead
-  internet link could delay boot by up to ~45 s (the first fetch no longer blocks startup).
+  internet link could delay boot by up to ~45 s (the first fetch no longer blocks startup). A fetch
+  that fails before the 13:15 window now retries with the same backoff instead of waiting for the
+  window — a fresh install hit by a blip had no prices at all until then.
 - DST: on a host with a DST timezone, the autumn change produced one 75-minute plan slot (and a
-  2-hour flat-tariff slot), and "tomorrow at 07:00" landed an hour off on DST nights.
+  2-hour flat-tariff slot), and "tomorrow at 07:00" landed an hour off on DST nights. A target within
+  an hour of the change itself (01:30 on either DST night) now lands on the right side of it as well.
 - OCPP: power reported in kW was shown 1000× too small, a sample without a measurand (the energy
-  register by default) was ignored, and a session closed after a missed StopTransaction got an end
+  register by default — when its unit agrees) was ignored, and a session closed after a missed StopTransaction got an end
   time the UI read as local time.
 - Home Assistant's "Session energy" sensor dropped to zero on OCPP transaction churn mid-session, so
   HA over-counted energy; it now reports the per-plug-in delivered total.
 - Charger health appeared a second time under the loadpoint's name after any mode change.
 - `PUT /api/mqtt-bridge` persisted the redacted password placeholder when a client echoed it back;
-  `GET /api/transactions?limit=-1` returned every row and a non-numeric limit returned a 500.
+  `GET /api/transactions?limit=-1` returned every row and a non-numeric limit returned a 500 (an
+  empty `?limit=` now means the default 50).
+- `HH:MM` inputs (ad-hoc targets, plan ready-by times, config `targetTime`) are validated as a real
+  wall-clock time; `99:99` or `24:01` used to be accepted and silently rolled into the next day(s).
+  `24:00` is still accepted as end-of-day midnight.
 - An async plugin registered after modules were created, so its types were reported as unknown.
-- `npm run restore` without `--in` crashed instead of printing its usage; backup and restore now
-  honour `OSC_DATA_DIR`, and a forced restore removes the old database's stale WAL files.
+- `npm run restore` without `--in` crashed instead of printing its usage (and a missing data directory
+  was a stack trace); backup and restore now honour `OSC_DATA_DIR`, and a forced restore removes the
+  old database's stale WAL files.
 - Docs that sent users down a broken path: the dev quick-start lacked the UI's own `npm install`,
   the runtime-configuration section described a `config:apply --prune` that doesn't exist, the
   config reference claimed a boot warning for `mqtt:` that never fired, and its multi-grid example
