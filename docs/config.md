@@ -122,7 +122,7 @@ tariffs:
 
 **Shared fetch schedule (`elprisetjustnu` + `elering`):**
 
-- Nordpool publishes next-day prices around 13:00 CET. OSC waits until **13:15 Europe/Stockholm** before fetching tomorrow's data. On failure it retries with **exponential backoff — 10 min → 20 → 40, capped at hourly** — and keeps retrying (it never backs off past midnight, so a transient blip can't strand prices for a day). `health` is `degraded` from the 13:15 window until tomorrow's data lands; before 13:15, having only today's data is fine.
+- Nordpool publishes next-day prices around 13:00 CET. OSC waits until **13:15 Europe/Stockholm** before fetching tomorrow's data. On failure it retries with **exponential backoff — 10 min → 20 → 40, capped at hourly** — at any time of day, and keeps retrying (it never backs off past midnight, so a transient blip can't strand prices for a day; before the window a blip on an empty cache is retried too, rather than waiting for 13:15). `health` is `degraded` from the 13:15 window until tomorrow's data lands; before 13:15, having only today's data is fine.
 - The fetch _schedule_ carries a random 0–120 s offset so many OSC instances don't hit the API at the same instant after the publish; each request itself uses the plain `fetch` with a 15 s timeout.
 - The Nord Pool schedule, `tariff_slots` persistence, and health logic are shared in `src/sdk/nordpool-tariff.ts`; each provider module only supplies its HTTP fetch+parse.
 
@@ -308,7 +308,7 @@ Every write is **validated against the same schema _before_ it is persisted** (a
   - **`dryRun: true`** validates and reports without writing.
   - A **redacted** credential (the `••••••` placeholder) keeps the existing secret, so a redacted export round-trips without wiping passwords.
   - The document is validated **whole, before any write**, and applies on the **next restart** (a bulk swap, like `config:apply`); the granular `PUT`s above are the live path.
-- **`npm run config:apply`** is the CLI form — read `osc.yaml` → import (replace): it **clears** the DB config and re-imports the file. Use it to re-assert the file or reset runtime tweaks. Reads `OSC_CONFIG`, writes `data/osc.db`; **restart the server to apply**.
+- **`npm run config:apply`** is the CLI form — read `osc.yaml` → import (replace): it **clears** the DB config and re-imports the file. Use it to re-assert the file or reset runtime tweaks. Reads `OSC_CONFIG`, writes `$OSC_DATA_DIR/osc.db` (default `./data`); **restart the server to apply**.
 
 #### What is config vs. data
 

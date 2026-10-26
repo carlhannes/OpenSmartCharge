@@ -89,7 +89,7 @@ so no code branches on "is dependency X degraded" — degradation lives inside e
 - **Energy** (`energy.ts`): live/estimated SoC + `targetSoc` → fixed `targetKWh` → duty-cycle heuristic.
 - **Price** (`price.ts`): live tariff → last-N-day average per hour-of-day → static "cheap 23–05" curve.
   Always a non-empty curve (night priced strictly cheaper than day — equal prices would charge ASAP).
-- **Current** (`current.ts`): live meter headroom (n=1 `allocate()`) → historical worst-case per hour →
+- **Current** (`current.ts`): live meter headroom → historical worst-case per hour →
   time-of-day static (`mainBreakerA − nightMargin` at night, `× daytimeFraction` by day). Clamped to
   `maxA`, floored `<6 A ⇒ 0`.
 
@@ -100,7 +100,7 @@ planning indefinitely).
 
 `src/core/control-loop.ts` + the tick in `lifecycle.ts` drive it: ONE damped tick (default 30 s, since
 a charger/car takes 15–30 s to react) resolves every loadpoint and commands its charger through a
-deadband. Loadpoints group into **circuits** — those sharing a balancer coordinate through `allocate()`;
+deadband. Loadpoints group into **circuits** — those sharing a balancer coordinate through the balancer's `tick()`;
 a balancer-less loadpoint is its own circuit and takes the resolved current budget directly. **Smart mode
 therefore works with or without a balancer.** Wall-clock reasoning (night window, price hour-of-day, plan
 ready-by) uses the configurable **site** timezone (`getTimezone(db)`, default Europe/Stockholm) through the
@@ -139,7 +139,7 @@ Worked examples:
   faster `vehicleIdlePollIntervalSec` while connected-but-idle in the daytime window; **never while
   unplugged** (polling a parked car can wake and drain it, and risks an account lockout). The "don't
   poll a sleeping car" policy is orchestration, so it lives in the lifecycle — not in the module.
-- **Balancing.** The balancer is pure per-tick allocation math (`allocate({loadpoints, circuitBudgetA})`);
+- **Balancing.** The balancer is pure per-tick allocation math (`tick({loadpoints, circuitBudgetA})`);
   it holds no meter, no timer, no staleness. The lifecycle resolves the circuit's current budget **once**
   per tick — the meter reader is the SSoT for live current *and* its staleness (`health()`), and the
   `resolveCurrentBudget` ladder degrades it (live-meter → historical → static-tod) — then hands the
@@ -192,7 +192,9 @@ a safe current via the resolver ladders — the top rung uses the best data; eac
 independently (no combinatorial branching):
 1. Live meter + live tariff + SoC → full optimization
 2. Stale tariff → last-N-day average, then a static night-cheap curve
-3. No meter/balancer → time-of-day static current (night `mainBreakerA − margin`, day `× fraction`)
+3. No meter/balancer → time-of-day static current (night `mainBreakerA − margin`, day `× fraction`).
+   A balancer that is *configured* but failed to start is different: its circuit is held at 0 A (fail
+   closed — there is no safe split without it) and logged once, until it is back.
 4. No vehicle → fixed `targetKWh`, else a duty-cycle heuristic
 5. Never exceed `maxA` / `mainBreakerA`; a sub-6 A budget resolves to 0 (never rounded up)
 
@@ -271,12 +273,14 @@ Real chargers have quirks that cost real time. Before deep-diving a "charger won
 ## Running the project
 
 ```bash
-npm install           # install dependencies
-npm run dev           # start with tsx (development)
-npm run typecheck     # check types (no emit)
-npm run lint          # ESLint
-npm run format        # Prettier
-npm run build         # compile to dist/
+npm install                    # install dependencies
+npm --prefix src/ui2 install   # the UI has its own package.json (lint/format/typecheck reach into it)
+npm run dev                    # start with tsx (development)
+npm run typecheck              # check types, backend + UI (no emit)
+npm run lint                   # ESLint, backend + UI
+npm run format                 # Prettier, backend + UI
+npm test                       # vitest (backend)
+npm run build                  # compile to dist/ (backend + the UI bundle)
 ```
 
 Requires Node.js >= 22.5 (uses `node:sqlite` built-in).

@@ -40,8 +40,8 @@ version. (Piping to `bash` runs code as it downloads — read the script first i
 
 ```bash
 # Clone and configure
-git clone https://github.com/yourusername/opensmartcharge
-cd opensmartcharge
+git clone https://github.com/carlhannes/OpenSmartCharge
+cd OpenSmartCharge
 cp osc.dist.yaml osc.yaml
 nano osc.yaml   # set your zone, breaker size, charger station ID
 
@@ -208,11 +208,11 @@ npm run restore -- --in backups/osc-2025-06-01T12-00-00.db
 | `GET` | `/api/logs` | Runtime logs, newest first (`?level=` minimum severity, `since=`/`until=` ISO, `q=` substring, `limit=` ≤ 500); `GET /api/logs/export` = the same filters as a chronological `.log` download; `GET`/`PUT /api/logs/config` = `{ "retentionDays": 1–365 }` |
 | `GET` | `/api/config/export` | The config as YAML (`?secrets=1` for a full-fidelity backup); `POST /api/config/import` re-imports one — see [docs/config.md](docs/config.md) |
 | `POST` | `/api/system/restart`, `/api/system/reset` | Graceful restart (a supervisor brings OSC back) / wipe the database and restart |
+| `GET` | `/events` | SSE stream of all state changes (see below) |
 
 Config writes (`PUT /api/site`, `/api/smartcharging`, `/api/tariffs/:name`, `/api/balancers/:name`, `/api/chargers/:name`, `/api/vehicles/:name`, `/api/loadpoints/:name`, …) are documented in [docs/config.md](docs/config.md#the-config-model-oscyaml-is-an-import-format).
 
 Live updates stream over Server-Sent Events at `GET /events`: `loadpoint.state` / `.mode` / `.target` / `.resolve` / `.session` / `.plans`, `vehicle.poll`, `meter.snapshot`, `balancer.tick`, `tariff.updated`, `health.changed`, `config.changed`, `settings.changed`.
-| `GET` | `/events` | SSE stream of all state changes |
 
 ## MQTT topics
 
