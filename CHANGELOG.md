@@ -106,6 +106,16 @@ change for plugin authors.
   Balancer, MeterReader and `ModuleCtx` contracts), the architecture overview, the config reference,
   the roadmap, and the known-issues log (resolved entries removed). `docs/vision-0.2.0.md` is kept
   as the product reference for Parts 1–6 and marked historical.
+- **The degradation model is now written down as a design** in `docs/degradation.md`: the goal (the car
+  charged to its target by the deadline, at the lowest risk the facts allow), degraded best effort rather
+  than fail open or fail closed, shared ownership (a module degrades its data, the lifecycle degrades the
+  decisions), the declarative tick, the three ladders with their margins and the history-tail rule, the
+  fuse rule, car identification, the only legitimate 0 A cases, a case matrix per dependency and nine
+  worked scenarios. AGENTS.md's degradation section and the README's "When things break" are rewritten
+  around it (the two-tier model is gone), the config, module and architecture docs link to it, and the
+  roadmap lists where the code still lags the design. A `degradation-reviewer` subagent and a
+  `/degradation-review` skill under `.claude/` check changes to modules, resolvers, the control loop and
+  the lifecycle against it.
 
 ## [0.2.2] — 2026-07-25
 
