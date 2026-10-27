@@ -208,7 +208,7 @@ interface TariffSlot {
 
 Return slots at whatever resolution your data source provides (hourly is fine — Elering uses hourly). The planner ranges over slots, not fixed buckets, so resolution is transparent.
 
-Return an empty array for time ranges where you have no data. The system falls back gracefully.
+Return an empty array for time ranges where you have no data, and serve your cache for the ranges you do have — the lifecycle builds the fallback curve (the last days' average per hour, then the night window). Never synthesize prices inside the module.
 
 Reference: `src/modules/tariff-elering/`
 
@@ -234,7 +234,7 @@ interface BalancerOutput {
 }
 ```
 
-`tick` runs once per control tick (`smartCharging.controlIntervalSec`, default 30 s) with an already-resolved `circuitBudgetA`. The balancer is a **pure splitter**: it never reads a meter, computes headroom or decides staleness — the lifecycle's current-budget ladder (live meter → historical worst-case → static time-of-day) did that before calling it. Split the budget across the loadpoints that want current, never exceed a loadpoint's `maxCurrentA`, floor a share below the IEC minimum (`IEC_MIN_CURRENT_A` in `src/sdk/electrical.ts`) to 0, and always return a valid `allocations` map — never throw.
+`tick` runs once per control tick (`smartCharging.controlIntervalSec`, default 30 s) with an already-resolved `circuitBudgetA`. The balancer is a **pure splitter**: it never reads a meter, computes headroom or decides staleness — the lifecycle's current-budget ladder (live meter → historical worst-case → static time-of-day) did that before calling it. Split the budget across the loadpoints that want current, never exceed a loadpoint's `maxCurrentA`, floor a share below the IEC minimum (`IEC_MIN_CURRENT_A` in `src/sdk/electrical.ts`) to 0, and always return a valid `allocations` map — never throw. A balancer is never a prerequisite for charging: if your module is missing at runtime (failed to start, unregistered type), the lifecycle applies the same equal split itself.
 
 The `LoadpointSnapshot` includes these notable fields:
 
@@ -278,6 +278,8 @@ interface VehicleData {
 **The module owns no poll timer.** The lifecycle calls `refresh()` on charger-connect and then on its drawing/idle cadences while the car is plugged in — never while unplugged (polling a parked car can wake it and risks an account lockout). `refresh()` does one fetch with the plain global `fetch` (add a per-request `AbortSignal.timeout`), updates the SQLite cache and returns the fresh reading; throw on failure — the lifecycle keeps the last cached value and backs off.
 
 **Cache battery capacity aggressively.** Once you've read it, return it forever from `getCachedCapacity()` — it's stable per VIN and enables SoC estimation when the API is unreachable. Derive `health()` from recent failures with `sourceHealth()` (`src/sdk/source-reconciler.ts`) so an outage is visible instead of a stale cache masquerading as `ok`.
+
+**`getData()` serves the cache with its age.** It returns the last reading with its `fetchedAt`, so the lifecycle can see how old it is; it never hits the network. Today it rejects only when nothing has ever been fetched (every consumer tolerates that); returning `null` instead is on the follow-up list.
 
 **The vehicle module self-describes its onboarding form.** Beyond `type` and `create()`, a `VehicleModule` declares `label`, `capabilities` (what it can report — see `VehicleCapabilities` / `VEHICLE_CAPS_NONE`), and `configFields` — the credentials/config it needs beyond the universal `name`. That descriptor drives `GET /api/vehicle-types`, the app's create/edit/onboarding form, and the generic `POST`/`PUT /api/vehicles` validation — so a new car API is a drop-in module with **no core or UI change**. Mark credential fields `secret: true` (masked in the form, redacted on export, and kept on edit when left blank).
 
@@ -351,7 +353,20 @@ Return one of three values from `health()`:
 | `'degraded'` | Serving stale or estimated data; operation continues but with reduced precision |
 | `'unavailable'` | No data at all; module is offline |
 
-Health is re-read on module events and by a 15-second sweep; every transition emits a `health.changed` SSE event and is mirrored to `osc/health/<module>` on MQTT and `GET /api/health` on REST. The system never stops based on module health — it just communicates the state.
+Health describes the module's **own data**, never the system; the lifecycle decides what to do about it. Health is re-read on module events and by a 15-second sweep; every transition emits a `health.changed` SSE event and is mirrored to `osc/health/<module>` on MQTT and `GET /api/health` on REST. The system never stops based on module health — it just communicates the state.
+
+## Degradation: what a module owns
+
+Degradation is shared between a module and the lifecycle (the full model is [docs/degradation.md](degradation.md)). The module's side of the contract, as a checklist:
+
+- **Serve the last known value with its age.** A reading carries a timestamp (`MeterSnapshot.timestamp`, `VehicleData.fetchedAt`); a cache survives a rebuild (SQLite), so the value is still there after a reconcile or a restart.
+- **Report health honestly.** `ok` only for fresh data; `degraded` when serving stale data or after a failure; `unavailable` when there is nothing to serve. A stale cache is never `ok` — use `meterHealth()` / `sourceHealth()` / `computeTariffHealth()` from the SDK.
+- **Getters return the cache; they do not throw.** `latest()` returns `null` before the first frame; `prices()` returns what the cache holds; `getData()` returns the cached reading. Throw from `refresh()` (a failed live fetch) and from `create()` (bad config), nowhere else.
+- **Retries and backoff only for a source you schedule yourself.** The Nord Pool publish-window refetch is the one documented timer (shared in `src/sdk/nordpool-tariff.ts`); a vehicle's cadence and backoff belong to the lifecycle.
+- **Declare `capabilities`.** Consumers branch on what you can report, never on your `type`.
+- **Contribute readings, never decisions.** No synthetic prices, no guessed household load, no "charge now" or "stop" inside a module — the resolver ladders in the lifecycle decide, with the margins the design prescribes.
+
+Before reporting a module change done, run `/degradation-review` (the `degradation-reviewer` subagent) — it walks this checklist and the case matrix for every state your module can be in.
 
 ## Registration functions
 

@@ -10,7 +10,7 @@ OpenSmartCharge is a **lean, modular, LAN-survivable** EV smart-charging system.
 
 **Modular**: Features live in modules (`src/modules/`). The core (`src/core/`) handles orchestration only. Module interfaces live in `src/sdk/`. First-party modules are reference implementations — readable enough for a third party to copy and adapt.
 
-**LAN-survivable**: Charging must continue when the internet is down. Internet-dependent modules (tariff, vehicle) are optional enhancements. See the degradation model.
+**LAN-survivable (degraded best effort)**: the car is charged to its target by the deadline, at the lowest risk the available facts allow. A lost dependency — local or remote — lands on a lower rung with more margin; it never stops charging. See the degradation model below and `docs/degradation.md`.
 
 ---
 
@@ -29,6 +29,7 @@ These were established at project start and apply to all changes:
 9. **Update docs** — when changing something that's documented, update the docs in the same commit.
 10. **Run the tools** — after file edits, run `npm run format && npm run typecheck && npm run lint && npm test` and fix all errors before reporting done. (The root `lint`/`format`/`typecheck` scripts cover `src/ui2` too.)
 11. **Sanity-check** — after completing a task, randomly pick one modified file and re-read it as a stranger would. State what you find.
+12. **Degradation review** — a change to a module (`src/modules`, `src/sdk`), a resolver (`src/core/smart-charging`), the control loop or lifecycle, or `docs/degradation.md` is reported done only after `/degradation-review` (the `degradation-reviewer` subagent) has run and its findings are addressed.
 
 ---
 
@@ -56,7 +57,7 @@ src/
   server/     — Express HTTP + SSE + MQTT bridge
   ui2/        — React 19 + Vite (TanStack Start, built as a static SPA) admin app
 plugins/      — third-party modules (auto-loaded at startup, gitignored)
-docs/         — architecture, module authoring, config reference
+docs/         — architecture, module authoring, config reference, degradation model
 ```
 
 ### The five module types
@@ -106,13 +107,19 @@ therefore works with or without a balancer.** Wall-clock reasoning (night window
 ready-by) uses the configurable **site** timezone (`getTimezone(db)`, default Europe/Stockholm) through the
 helpers in `src/sdk/local-time.ts`.
 
+The design these ladders implement — the goal, who owns which part of degradation, the margins per rung,
+the fuse rule and the only legitimate 0 A cases — is `docs/degradation.md`.
+
 ### Modules vs. the lifecycle: who owns what
 
 This is the single most important boundary in the codebase. Get it right and everything stays lean.
 
 **Modules are minimal mappers** to exactly one external service. A module does four things and nothing
 more: authenticate, translate that service's data ⇄ OSC's SDK types *when asked*, actuate when told,
-and report its own `health()`/degradation. A module owns **no orchestration** — no background timers,
+and report its own `health()`/degradation. Degradation itself is **shared**: the module degrades its *data*
+(the last known value with its age, honest health, declared capabilities, no throwing getters); the
+lifecycle degrades the *decisions* (the ladders, the margins, replanning, car identification). Modules
+contribute facts, never decisions. A module owns **no orchestration** — no background timers,
 no polling cadence, no decisions about *when* it runs or how its data combines with other modules'.
 `charger-ocpp16`, `tariff-elprisetjustnu`, `tariff-elering`, `vehicle-skoda`, `meter-tibber-pulse`,
 and `meter-mqtt-phase` all follow this: each is a thin translation layer over one protocol/API.
@@ -181,26 +188,31 @@ instance *before* stopping the old, so an in-flight tick never sees a half-dead 
 
 ## Degradation model (core design constraint)
 
-The system is split into two tiers:
+The full model, the case matrix and the scenarios live in **`docs/degradation.md`**. The rules that must
+survive any change:
 
-**Tier 1 (LAN-only, always works):** OCPP server, MQTT broker, balancer circuit math, SQLite, web UI.
+- **Goal:** the car is charged to its target by the deadline at the lowest risk the facts allow. An
+  uncharged car is the failure we optimise against; fuses are the backstop, not the goal.
+- **Degraded best effort, not fail open or fail closed.** A lost dependency — meter, balancer, car API,
+  prices, internet — degrades the affected module and the engine replans from the rolling tail of recent
+  days with a larger margin. It never stops charging and never charges blind at full rate. Local and
+  remote dependencies degrade the same way; there are no tiers that "always work".
+- **Shared ownership.** A module degrades its own data (last known value with age, honest health,
+  capabilities, retries only for a source it schedules itself, no throwing getters). The lifecycle
+  degrades decisions (ladders, margins, replanning, identification, priority among signals). Modules
+  contribute facts, never decisions.
+- **Declarative tick.** Every tick re-derives amps per loadpoint from the current facts; same facts, same
+  result; re-running is safe. Single-flight per circuit with a rerun flag, a deadband, and no steering
+  between ticks.
+- **Fuse rule.** Plan under the fuse with `reserveA`, more margin when degraded; a transient over the
+  fuse between two ticks is corrected on the next tick, never by ticking faster.
+- **0 A is legitimate only when:** mode is Off; the budget is below the 6 A minimum; the target is reached
+  (fast mode only with the plan's `pauseOnTarget`); or the planner is waiting for a cheaper slot. Any
+  other 0 A is a bug.
 
-**Tier 2 (internet-enhanced):** Tariff (Elering), Vehicle (Skoda API).
-
-Every module reports `health(): 'ok' | 'degraded' | 'unavailable'`. The control loop *always* commands
-a safe current via the resolver ladders — the top rung uses the best data; each lower rung degrades
-independently (no combinatorial branching):
-1. Live meter + live tariff + SoC → full optimization
-2. Stale tariff → last-N-day average, then a static night-cheap curve
-3. No meter/balancer → time-of-day static current (night `mainBreakerA − margin`, day `× fraction`).
-   A balancer that is *configured* but failed to start is different: its circuit is held at 0 A (fail
-   closed — there is no safe split without it) and logged once, until it is back.
-4. No vehicle → fixed `targetKWh`, else a duty-cycle heuristic
-5. Never exceed `maxA` / `mainBreakerA`; a sub-6 A budget resolves to 0 (never rounded up)
-
-**Critical rule:** No internet-dependent code path may sit between a charger and a safe current limit.
-Degraded modules must return their best available stale data, not throw. Smart mode requires neither a
-balancer, a tariff, nor a vehicle — each is an enhancement, not a prerequisite.
+Before reporting done on a change to a module, a resolver, the control loop or lifecycle, or
+`docs/degradation.md`, run **`/degradation-review`** (the `degradation-reviewer` subagent) and act on its
+findings.
 
 ---
 
@@ -257,7 +269,7 @@ HA discovery: `homeassistant/select/osc_<lp>_mode/config` etc. (device `OSC <lp>
 - Do not add caches unless the task explicitly requires them.
 - Do not put timing inside a request primitive. Jitter, backoff and cadence are *scheduling* concerns and live where the schedule is decided — the lifecycle for vehicle polls, the shared Nord Pool factory for the publish-window refetch. Modules call the plain global `fetch` with a per-request `AbortSignal.timeout`. (A jittered `ctx.fetch` once existed; it silently broke every caller's timeout signal and was removed.)
 - Do not push to remote without explicit user request.
-- Do not assume the internet is available — all code paths must handle its absence gracefully.
+- Do not assume any dependency is available. A lost meter, balancer, car API, price feed or internet link lands on a lower rung with more margin; it never resolves to 0 A outside the four legitimate cases (`docs/degradation.md`).
 
 ---
 

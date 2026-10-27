@@ -21,6 +21,7 @@ Before opening a pull request for anything else:
    ```
    (`format`, `typecheck` and `lint` cover the UI in `src/ui2` as well — install its dependencies once with `npm --prefix src/ui2 install`; `npm test` is the backend suite.)
 5. **Update docs** if your change affects any documented behavior.
+6. **Check degradation** if the change touches a module, the SDK, a resolver, the control loop or the lifecycle: a lost dependency must land on a lower rung with more margin, never on 0 A. With Claude Code, run `/degradation-review`; otherwise walk the case matrix in [docs/degradation.md](docs/degradation.md) by hand.
 
 ## Bug reports
 

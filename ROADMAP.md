@@ -101,16 +101,7 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 - [x] Publishes allocation state to `osc/balancer/<name>/...` (health, free_amps, allocations)
 - [x] `GET /api/balancers/:name` REST endpoint — live allocations + health + freeAmps
 
-**Verification (degradation matrix):**
-
-| Scenario | Expected |
-|---|---|
-| Full healthy | Dynamic balancing at full optimization |
-| Internet down | Balancer uses cached prices; SoC estimated; charging continues |
-| Pulse feed stops | Meter reader → `degraded` (its `staleAfterSec`); circuit falls to historical-worstcase, then static-tod (`nightMarginA`/`daytimeFraction`); UI shows "meter feed lost" |
-| Vehicle API down, never seen | Time-based planning; charging at scheduled start |
-| Vehicle API down, seen before | Estimated SoC from capacity + session kWh; departure planning works |
-| Everything restored | Auto-recovery, no restart |
+**Verification:** superseded by the case matrix and scenarios in [docs/degradation.md](docs/degradation.md).
 
 ---
 
@@ -162,7 +153,7 @@ Each milestone is independently shippable — M0 gives you docs and a typed skel
 ## Out of scope (not planned)
 
 - OCPP 2.0.1 (future parallel module — intentionally not bolted onto 1.6)
-- PV / solar surplus charging
+- PV / solar surplus charging in core (a module may contribute a "surplus now" fact through the seam described in [docs/degradation.md](docs/degradation.md))
 - Multi-tenancy or user accounts
 - Vehicle brands beyond Skoda / VW group (community modules welcome)
 - Embedded MQTT broker
@@ -194,7 +185,7 @@ Covered by tests: `src/modules/charger-ocpp16/server.integration.test.ts` (mock 
 
 ### Smart charging: graceful degradation (shipped 2026-07-04)
 
-Smart mode now works with **any subset of dependencies degraded**, via pure resolver ladders (`src/core/smart-charging/`) driven by a single control loop — no combinatorial `if (X degraded)` branching. Each input resolver returns `{value, source, degraded}`; consumers read only `.value`.
+Smart mode now works with **any subset of dependencies degraded**, via pure resolver ladders (`src/core/smart-charging/`) driven by a single control loop — no combinatorial `if (X degraded)` branching. Each input resolver returns `{value, source, degraded}`; consumers read only `.value`. The design the ladders implement — the goal, shared ownership, the margins per rung, the fuse rule, the legitimate 0 A cases, a case matrix and scenarios — is written up in [docs/degradation.md](docs/degradation.md); the code gaps against it are listed under "Degradation follow-ups (code)" below.
 
 - [x] **Swedish prices** via `tariff-elprisetjustnu` (SE1–SE4, 15-min, SEK); shared Nord Pool factory + `sdk/stockholm-time.ts` (DST-safe local time).
 - [x] **Energy / price / current resolver ladders** — SoC→fixed-kWh→duty-cycle; live→3-day-avg→static-night; live-meter→worst-case→time-of-day-static. Unit-tested incl. the ASAP-price trap and the 6 A floor.
@@ -232,6 +223,24 @@ Unblocks ui2's plan UI — the ui2-side wiring (`mapPlan`, plan commands, `plans
 - [x] `powerW` is on `ChargerStatus` but not surfaced on `LoadpointState`/UI — done: `LoadpointState.powerW` feeds the Home power chart.
 - [x] Surface each loadpoint's resolver `sources` (energy/price/current rung) for UI observability — **done in 0.2.2**: `loadpoint.resolve` SSE + `resolve` on the site/loadpoint DTO, shown as a plain-language "why" badge on the charger detail.
 - [ ] **Charger delete + pending-claim from Settings in live mode** (0.2.2 deferral). Charger rename + max-amps are live-editable; `DELETE /api/chargers/:name` (409s on an active session) and the pending-claim wizard exist but are only wired in *demo* on the Settings page. Deleting a charger is a destructive config mutation, and claiming a new one already lives in onboarding — so wire both into Settings → Chargers with a live-safe confirm (no optimistic undo, since a live delete isn't trivially reversible).
+
+### Degradation follow-ups (code)
+
+Where the code still lags the design in [docs/degradation.md](docs/degradation.md) (each gap is tagged "design — not yet in code" there), in value order:
+
+- [ ] **A car's SoC after time away.** Store the unplug time and the SoC at departure per vehicle; on the next plug-in without a successful poll, start from that reading minus an assumed consumption for the time away (the car's own km-per-% ratio at an assumed 70 km/h when range data exists, else about 5 %-points per hour), capped at empty, tagged degraded; re-anchor on the first successful poll. Scenario tests.
+- [ ] **Several cars, identification degraded.** When no car can claim the plug (APIs down), assume the car that needs the most charge and plan for it; a later positive claim takes over; Guest stays an explicit choice.
+- [ ] **Margins and history quality.** A named degraded margin instead of the hard-coded 1 A on the historical rung; the worst load over the hour *and its neighbours* (slack — a load peak does not start at an exact minute); exclude the circuit's own draw from the rollup; history per circuit instead of one merged table.
+- [ ] **Partial price coverage.** When cached prices end before the deadline, back-fill the gap per slot from the historical/static rung instead of treating it as most expensive; a median rather than a mean per hour.
+- [ ] **Elering hourly slots** should include the started hour.
+- [ ] **Boot-skipped modules.** A module whose factory threw, or whose type has no registered module, gets a health entry and a retry with backoff instead of staying gone until a config write or a restart.
+- [ ] **`PUT /api/loadpoints/:name`** regroups the circuits when a tariff/balancer/vehicle binding changes.
+- [ ] **Age-aware vehicle health** and a "last updated N min ago" on the API/UI.
+- [ ] **Per-charger OCPP health** and an honest charger-offline banner (today one value for the whole server).
+- [ ] **`static-tod` for a deliberately meterless installation** is not reported `degraded` in `resolve`.
+- [ ] **SDK:** `Vehicle.getData()` returns `null` instead of rejecting when nothing has been cached.
+- [ ] **Edge cases:** a `24:00` ready-by; a sub-6 A budget as "throttle to 6 A and hold" instead of 0 A (known-issues #10).
+- [ ] **Parked:** when far over the fuse, a short pause and then a slow ramp back up (instead of one correction step).
 
 ### Charge-plan UX — future (found running v0.2.x on the VM, 2026-07-25; NOT in 0.2.2)
 

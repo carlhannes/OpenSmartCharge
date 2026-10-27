@@ -15,7 +15,7 @@ If you want something that handles solar, batteries, heat pumps, and 300 EV mode
 - **Charge modes per charger** — `disabled` / `smart` / `fast`, changeable via UI, REST, or MQTT
 - **Home Assistant ready** — MQTT auto-discovery; OSC appears in HA automatically with selects and sensors per charger
 - **Modular** — every feature above is a module with a published TypeScript interface; write your own to add a different charger type, tariff source, or meter
-- **Degradation-aware** — the system keeps charging safely when the internet, your pulse meter, or a vehicle API goes down. See [the degradation model](#when-things-break).
+- **Degradation-aware** — the system keeps charging, on less information and with more margin, when the internet, your meter, a balancer or a vehicle API goes down. See [When things break](#when-things-break).
 
 ## Quickstart
 
@@ -107,25 +107,21 @@ Each control tick, OSC resolves the circuit's available current — the main bre
 
 ## When things break
 
-OSC is designed around a two-tier model so that a bad internet day doesn't stop your car from charging.
+OSC has one job: your car is charged to its target by the time you leave, at the lowest risk the available facts allow. So when something is missing — the internet, the meter feed, a balancer, the car's API — OSC does not stop. The affected module reports itself `degraded` or `unavailable`, and the control loop re-plans from what it still knows: the last few days of history plus a larger safety margin, because it knows less. A failure on your LAN is handled the same way as one on the internet.
 
-**Tier 1 — always works (LAN-only):**
-OCPP server, MQTT broker, balancer circuit math, web UI, SQLite.
-
-**Tier 2 — internet-enhanced (optional):**
-Day-ahead tariffs (elprisetjustnu / Elering), vehicle SoC (Skoda API).
-
-Every module reports a health status: `ok` / `degraded` / `unavailable`. The system keeps running under degradation:
+Every module reports a health status: `ok` / `degraded` / `unavailable`. What you can expect:
 
 | What breaks | What happens |
 |---|---|
-| Internet down | Balancer uses cached prices (yesterday's curve). Vehicle SoC estimated from last known value + session kWh delivered. Charging continues. |
-| Tibber Pulse / MQTT meter feed stale | The circuit steps down the current ladder — last-few-days worst-case household load, then a time-of-day static (night `mainBreakerA − nightMarginA`, day `mainBreakerA × daytimeFraction`). Conservative but meaningful. Fuses safe. |
-| Vehicle API unreachable (never seen vehicle) | Planner falls back to time-based: start charging at the latest time that completes by departure. |
-| Vehicle API unreachable (seen vehicle before) | Battery capacity is cached. Planner estimates current SoC from `lastKnownSoc + (sessionKWh / capacity)`. Full departure planning works. |
-| Everything restored | Modules recover automatically. No restart needed. |
+| Internet down | Prices: today's cached slots, then an average per hour of the last days, then a plain "night is cheap" curve. Car: the SoC estimate carries the last reading forward by the energy delivered; a car plugged in after the outage began plans on a kWh target or a duty cycle instead. Charging continues on the live meter budget. |
+| Meter feed or its MQTT broker down (LAN) | The circuit steps down the current ladder — the worst household load seen in this hour over the last days, then a time-of-day static (night `mainBreakerA − nightMarginA`, day `mainBreakerA × daytimeFraction`) — each rung with more margin than live data. |
+| No meter and no balancer configured | Normal, not a fault: on a 16 A fuse with the default margins, 13 A at night and 8 A by day (clamped to the charger's `maxA`). Add a meter reader later and the live budget takes over. |
+| Balancer configured but failed to start | Its chargers share the circuit budget by the same equal split the balancer would make (fast mode first, 6 A floor), applied by the control loop itself; the balancer shows `unavailable`. |
+| Vehicle API down | The last cached reading keeps serving with its age; the SoC anchor from this plug-in keeps the estimate accurate; without one, the kWh target or the duty cycle plans the session. Polls back off (30 s → 5 min); a parked car is never polled. |
+| Tariff zone misconfigured | Logged as a permanent error; charging falls back to the cheap night window. Fix the zone in Settings and the module is rebuilt live. |
+| Everything restored | The next retry, poll or meter frame moves each input back up the ladder; the next control tick re-plans. No restart. |
 
-All degraded states are surfaced on the UI and on MQTT (`osc/health/<module>`).
+All degraded states are surfaced on the UI and on MQTT (`osc/health/<module>`). The full model — who owns what, the case matrix and worked scenarios — is in [docs/degradation.md](docs/degradation.md).
 
 ## Configuration
 

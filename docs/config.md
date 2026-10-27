@@ -14,6 +14,8 @@ site:
     16 # optional — main fuse per phase (amps). Circuit ceiling for loadpoints
     # WITHOUT a balancer; the smart-charging static current fallback sizes
     # against it. A balancer, when configured, carries its own mainBreakerA.
+    # With no meter and no balancer this is the manual cap: night
+    # mainBreakerA − nightMarginA, day mainBreakerA × daytimeFraction.
   timezone:
     Europe/Stockholm # optional (default Europe/Stockholm) — the SITE/user timezone for
     # all wall-clock planning: the night window, plan "ready by" times, and
@@ -59,9 +61,9 @@ smartCharging:
 
 - **Energy** (how much to add): live/estimated vehicle SoC → a fixed `targetKWh` → a duty-cycle heuristic.
 - **Price** (when it's cheap): live day-ahead tariff → last-`historicalDays` average per hour-of-day → the static night window above.
-- **Current** (how many amps): live meter headroom → worst-case household load per hour over the last `historicalDays` → a time-of-day static (night `mainBreakerA − nightMarginA`, day `mainBreakerA × daytimeFraction`), clamped to the charger's `maxA` and floored to 0 below the 6 A IEC minimum. The two load-aware rungs target `mainBreakerA − reserveA`, so steady state sits a modest margin below the fuse; a brief overshoot is corrected on the next control tick rather than by steering faster (which would just oscillate the charger).
+- **Current** (how many amps): live meter headroom → worst-case household load per hour over the last `historicalDays` → a time-of-day static (night `mainBreakerA − nightMarginA`, day `mainBreakerA × daytimeFraction`), clamped to the charger's `maxA` and floored to 0 below the 6 A IEC minimum. The two load-aware rungs target `mainBreakerA − reserveA`, so steady state sits a modest margin below the fuse; a brief overshoot is corrected on the next control tick rather than by steering faster (which would just oscillate the charger). Every degraded rung carries more margin than the live one, because it knows less: the live rung keeps `reserveA` below the fuse, the historical rung adds a further 1 A on top of the worst case, the static rung uses `nightMarginA` / `daytimeFraction`.
 
-Because of this, **smart mode works with no balancer, no tariff, and no vehicle** — each is an enhancement, not a requirement.
+Because of this, **smart mode works with no balancer, no tariff, and no vehicle** — each is an enhancement, not a requirement. The design behind the ladders — the goal, who owns what, the fuse rule, the only legitimate 0 A cases, a case matrix and worked scenarios — is [docs/degradation.md](degradation.md).
 
 ### `mqttBridge`
 
@@ -148,6 +150,8 @@ balancers:
 
 The balancer is a **pure splitter**: each tick it divides the circuit's already-resolved current budget across the loadpoints sharing it (fast-mode first, then an equal split of the remainder, with a 1 A hysteresis that only ever holds a lower value — it never allocates above the budget — and the 6 A IEC floor). It holds **no meter and no timers** — the meter is a separate `meterReader` (the SSoT for live current _and_ its staleness), and the current-degradation ladder runs once per circuit in the control loop. When the meter's `health()` goes `degraded`/`unavailable` the whole circuit steps down the ladder (live-meter → historical-worstcase → static-tod); `nightMarginA`/`daytimeFraction` (falling back to the global `smartCharging.*`) size that bottom static rung. The `mqtt-circuit` type name is kept for config back-compat.
 
+A balancer that is configured but missing at runtime (failed to start, unknown type) is not a prerequisite for charging: its loadpoints take an equal split of the resolved circuit budget — fast first, then smart, 6 A floor — applied by the control loop itself, and the balancer reports `unavailable` (see [docs/degradation.md](degradation.md)).
+
 > **Migration.** The old self-contained meter fields — `meterTopicPrefix`, `safeStaticCurrentA`, `meterStaleAfterSec`, `intervalSec` — are deprecated (a boot WARNING fires if any is set) and otherwise ignored. Move the meter onto a `meterReaders[]` entry: replace `meterTopicPrefix: house` with a `type: mqtt-phase` reader (`topicPrefix: house`) and point the balancer's `meterReader:` at it. Replace the flat `safeStaticCurrentA` with `nightMarginA`/`daytimeFraction`; the control cadence is now the global `smartCharging.controlIntervalSec`.
 
 ### `vehicles[]`
@@ -168,6 +172,8 @@ vehicles:
 **What it exposes:** State of Charge (%), estimated range, the target SoC set in the car, the car's own plugged-in state (a cross-check of the OCPP status), and whether remote climate/preconditioning is running.
 
 **Polling is demand-driven — the module owns no timer.** The lifecycle refreshes a vehicle **only when its charger reports connected** (strictly per-car), on two cadences while plugged in: once on connect (to anchor SoC/range), then `smartCharging.vehiclePollIntervalSec` (default 15 min) while actively drawing current, and the faster `vehicleIdlePollIntervalSec` (default 10 min) while connected-but-idle **during the day window** — so remote climate/plug changes are caught promptly. Outside the day window the idle rate falls back to the 15-min cadence, and it is **never polled while unplugged** — polling MySkoda too often can wake and slowly drain a parked car, and hammering the account risks a server-side lockout. Between polls, SoC is estimated by carrying the last real reading forward by delivered energy — at the efficiency **observed this session** (measured from two real readings) when available, else `chargingEfficiency` — so a mid-session API dropout still tracks accurately. A `429`/`430` rate-limit response is surfaced as a distinct error; retries follow the lifecycle's per-vehicle backoff.
+
+The cached reading is served with its `fetchedAt` age, and the module's health reflects recent failures (`degraded` after one failed poll, `unavailable` after three or a dead login). A car that has been away is not at its last reading: the design deducts an assumed consumption for the time away (design — not yet in code, see ROADMAP and [docs/degradation.md](degradation.md)); today a car with no successful poll this plug-in plans on the kWh target or the duty cycle, never on the old reading.
 
 **Finding the VIN:** it's on the MySkoda app vehicle page, the physical car (windscreen / door pillar), or the registration document. It must be the full 17 characters, uppercase.
 
@@ -206,7 +212,7 @@ meterReaders:
 - `republishPrefix: house` reproduces the exact MQTT topic layout of the Python `pulse_bridge.py` sidecar (`house/power_w`, `house/i1_a`, …) for Home Assistant or Node-RED dashboards. Remove this field to disable the sidecar behaviour — OSC still consumes the meter in-process via the `meterReader:` link.
 - Health: `ok` while frames arrive within `staleAfterSec`; `degraded` if stale (last known values still returned); `unavailable` until the first frame after boot.
 
-The `meterReader: <name>` field on `balancers[]` is how a circuit gets its live current: it names the `meterReaders[]` entry to read, in-process (no MQTT round-trip through OSC). A balancer with no `meterReader` is a blind circuit — it skips the live rung and runs on the historical/static-tod fallbacks.
+The `meterReader: <name>` field on `balancers[]` is how a circuit gets its live current: it names the `meterReaders[]` entry to read, in-process (no MQTT round-trip through OSC). A balancer with no `meterReader` is a blind circuit — it skips the live rung and runs on the historical/static-tod fallbacks. For a circuit without any meter the static time-of-day rung is its normal state, not a fault.
 
 ### `chargers[]`
 
