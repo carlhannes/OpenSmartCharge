@@ -4,11 +4,13 @@ All notable changes to OpenSmartCharge are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] — 2026-10-27
 
 A cleanup pass against the project's own principles (single source of truth, lean, evergreen docs),
-driven by a full audit of core, SDK, modules, server, UI, scripts and docs. Control-loop behaviour is
-unchanged except where a user-facing bug is listed under Fixed.
+driven by a full audit of core, SDK, modules, server, UI, scripts and docs, followed by the
+correctness fixes it surfaced. Control-loop behaviour is unchanged except where a user-facing bug is
+listed under Fixed. The minor bump marks the two SDK removals under Removed — pre-1.0, but a contract
+change for plugin authors.
 
 ### Fixed
 
@@ -169,5 +171,6 @@ about settings honesty and editability — the charging control loop is unchange
 - A fully live onboarding wizard, with "import a backup" at the welcome step.
 - Real config backup/restore (export/import an `osc.yaml`) and a graceful `POST /api/system/restart`.
 
+[0.3.0]: https://github.com/carlhannes/OpenSmartCharge/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/carlhannes/OpenSmartCharge/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/carlhannes/OpenSmartCharge/releases/tag/v0.2.1
